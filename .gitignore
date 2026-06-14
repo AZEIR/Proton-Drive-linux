@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# Temp/Scratch
+scratch/
+.idea/
+.vscode/
+
+# Ignore compiled binaries from release directories
+sdk/js/cli/release/
+sdk/js/cli/dist/
+sdk/js/cli/*.sqlite
+sdk/js/cli/*.json

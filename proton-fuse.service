@@ -1,0 +1,38 @@
+[Unit]
+Description=Proton Drive File-On-Demand FUSE Client
+Documentation=https://proton.me/drive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The binary launches the FUSE daemon and blocks until shutdown
+ExecStart=%h/Code/drive-project/sdk/js/cli/release/proton-fuse \
+    --mount-point %h/ProtonDrive \
+    --port 8085
+ExecStop=/bin/fusermount3 -u %h/ProtonDrive
+# Allow fallback unmount
+ExecStop=-/bin/fusermount -u %h/ProtonDrive
+
+# Environment
+Environment=PROTON_SYNC_MODE=fod
+Environment=PROTON_MOUNT_POINT=%h/ProtonDrive
+Environment=PROTON_SYNC_PORT=8085
+
+# Restart policy: always restart except on explicit stop
+Restart=on-failure
+RestartSec=10s
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Allow FUSE access
+# Note: /dev/fuse must be accessible; 'allowOther' option needs user_allow_other in /etc/fuse.conf
+SupplementaryGroups=fuse
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
