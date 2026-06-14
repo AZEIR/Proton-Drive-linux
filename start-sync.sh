@@ -8,7 +8,13 @@ LEGACY_BINARY="${SCRIPT_DIR}/sdk/js/cli/release/proton-sync"
 
 PIDFILE="${HOME}/.config/proton-drive-sync/daemon.pid"
 LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-fuse-daemon.log"
-MOUNT_POINT="${PROTON_MOUNT_POINT:-${HOME}/P-Drive}"
+# Parse optional custom mount path from CLI argument $2
+CUSTOM_PATH="$2"
+if [ -n "$CUSTOM_PATH" ]; then
+    MOUNT_POINT=$(realpath "$CUSTOM_PATH")
+else
+    MOUNT_POINT="${PROTON_MOUNT_POINT:-${HOME}/P-Drive}"
+fi
 PORT="${PROTON_SYNC_PORT:-8085}"
 
 # Fall back to legacy binary if FOD binary not built yet

@@ -37,13 +37,13 @@ case "$1" in
         "$CLI_BINARY" auth login
         ;;
     start)
-        "$SYNC_SCRIPT" start
+        "$SYNC_SCRIPT" start "$2"
         ;;
     stop)
         "$SYNC_SCRIPT" stop
         ;;
     restart)
-        "$SYNC_SCRIPT" restart
+        "$SYNC_SCRIPT" restart "$2"
         ;;
     status)
         "$SYNC_SCRIPT" status
@@ -84,8 +84,14 @@ case "$1" in
         ;;
     sync-once)
         PORT="${PROTON_SYNC_PORT:-8085}"
+        CUSTOM_PATH="$2"
+        if [ -n "$CUSTOM_PATH" ]; then
+            TARGET_PATH=$(realpath "$CUSTOM_PATH")
+        else
+            TARGET_PATH="${MOUNT_POINT}"
+        fi
         echo "Running one-time synchronization pass..."
-        PROTON_SYNC_ONCE=true PROTON_MOUNT_POINT="${MOUNT_POINT}" PROTON_SYNC_PORT="${PORT}" PROTON_SYNC_MODE="full" "$CLI_BINARY"
+        PROTON_SYNC_ONCE=true PROTON_MOUNT_POINT="${TARGET_PATH}" PROTON_SYNC_PORT="${PORT}" PROTON_SYNC_MODE="full" "$CLI_BINARY"
         ;;
     build)
         echo "Building proton-fuse binary..."
