@@ -27,6 +27,7 @@ export class SyncEngine extends EventEmitter {
     private wasRootDeleted: boolean = false;
     private recentDeletions: { timestamp: number; path: string; nodeUid: string }[] = [];
     private bulkDeletionWarning: boolean = false;
+    private isBulkDeletionConfirmed: boolean = false;
     private isOffline: boolean = false;
     private checkConnectionInterval: any = null;
     private concurrencyLimit: number = 3;
@@ -236,6 +237,7 @@ export class SyncEngine extends EventEmitter {
             this.db.log('system', 'system', 'failed', `Full sync failed: ${error.message || error}`);
         } finally {
             this.isScanning = false;
+            this.isBulkDeletionConfirmed = false;
             this.emit('statusChanged');
         }
     }
@@ -564,6 +566,39 @@ export class SyncEngine extends EventEmitter {
         }
 
         const allPaths = new Set([...localFiles.keys(), ...remoteFiles.keys()]);
+
+        // Safeguard against accidental mass remote deletions (e.g. unmounted drive or cleared folder)
+        const plannedRemoteDeletes: { timestamp: number; path: string; nodeUid: string }[] = [];
+        for (const relPath of allPaths) {
+            const local = localFiles.get(relPath);
+            const remote = remoteFiles.get(relPath);
+            const mapped = this.db.getMapping(relPath);
+            if (!local && remote && mapped) {
+                plannedRemoteDeletes.push({ timestamp: Date.now(), path: relPath, nodeUid: mapped.node_uid });
+            }
+        }
+
+        const mappedCount = this.db.getAllMappings().length;
+        const localFilesCount = localFiles.size;
+
+        const isDiskEmptyWipe = localFilesCount <= 1 && mappedCount > 5 && plannedRemoteDeletes.length > 0;
+        const isBulkDelete = plannedRemoteDeletes.length >= 10 && plannedRemoteDeletes.length > (mappedCount * 0.3);
+
+        if (!this.isBulkDeletionConfirmed && (isDiskEmptyWipe || isBulkDelete)) {
+            this.logger.warn(`Startup bulk deletion safeguard triggered! plannedDeletes=${plannedRemoteDeletes.length}, mappedCount=${mappedCount}`);
+            this.recentDeletions = plannedRemoteDeletes;
+            this.bulkDeletionWarning = true;
+            this.isPaused = true;
+            this.db.setConfig('is_sync_paused', '1');
+            
+            const msg = isDiskEmptyWipe
+                ? `Local sync folder is empty but has ${mappedCount} tracked files. Sync paused to protect remote cloud files from accidental wipe.`
+                : `Accidental deletion safeguard: ${plannedRemoteDeletes.length} remote files are scheduled to be deleted. Sync paused.`;
+            
+            this.db.log('system', 'system', 'failed', msg);
+            this.emit('statusChanged');
+            return; // Abort reconciliation to prevent trashing remote files
+        }
         
         const directoryPaths: string[] = [];
         const filePaths: string[] = [];
@@ -1336,6 +1371,7 @@ export class SyncEngine extends EventEmitter {
 
     async confirmBulkDeletions(): Promise<void> {
         this.logger.info("User confirmed bulk deletions. Resuming sync.");
+        this.isBulkDeletionConfirmed = true;
         this.bulkDeletionWarning = false;
         this.recentDeletions = [];
         await this.resume();
