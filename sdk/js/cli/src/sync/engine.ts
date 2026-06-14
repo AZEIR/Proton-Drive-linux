@@ -1051,8 +1051,8 @@ export class SyncEngine extends EventEmitter {
             } catch (err) {
                 this.logger.error(`Failed to rename local path from ${oldRelPath} to ${localPath}:`, err);
             } finally {
-                this.ignoredLocalChanges.delete(oldLocalPath);
-                this.ignoredLocalChanges.delete(localPath);
+                this.ignorePathTemporarily(oldLocalPath, 2500);
+                this.ignorePathTemporarily(localPath, 2500);
             }
 
             // Update database mappings for parent folder/file
@@ -1102,7 +1102,7 @@ export class SyncEngine extends EventEmitter {
                     if (!existsSync(localPath)) {
                         mkdirSync(localPath, { recursive: true });
                     }
-                    this.ignoredLocalChanges.delete(localPath);
+                    this.ignorePathTemporarily(localPath, 2500);
 
                     const remoteMtime = node.folder?.claimedModificationTime
                         ? new Date(node.folder.claimedModificationTime).getTime()
@@ -1134,7 +1134,7 @@ export class SyncEngine extends EventEmitter {
                 if (!existsSync(parentLocalPath)) {
                     mkdirSync(parentLocalPath, { recursive: true });
                 }
-                this.ignoredLocalChanges.delete(parentLocalPath);
+                this.ignorePathTemporarily(parentLocalPath, 2500);
 
                 const tmpPath = `${localPath}.tmp-${Date.now()}`;
                 
@@ -1189,7 +1189,7 @@ export class SyncEngine extends EventEmitter {
                     : revision.creationTime.getTime();
                 
                 utimesSync(localPath, new Date(), new Date(remoteMtime));
-                this.ignoredLocalChanges.delete(localPath);
+                this.ignorePathTemporarily(localPath, 2500);
 
                 // Fetch local stat to verify size/mtime mapping
                 const localStat = statSync(localPath);
@@ -1242,8 +1242,8 @@ export class SyncEngine extends EventEmitter {
         this.ignoredLocalChanges.add(conflictAbsPath);
         await Bun.write(conflictAbsPath, Bun.file(localPath));
         await unlink(localPath);
-        this.ignoredLocalChanges.delete(localPath);
-        this.ignoredLocalChanges.delete(conflictAbsPath);
+        this.ignorePathTemporarily(localPath, 2500);
+        this.ignorePathTemporarily(conflictAbsPath, 2500);
 
         // Upload the renamed conflict copy as a new file
         await this.syncLocalToRemote(conflictRelPath, false);
@@ -1344,7 +1344,7 @@ export class SyncEngine extends EventEmitter {
             this.db.log(relativePath, 'delete_local', 'failed', `Local delete error: ${err.message || err}`);
             throw err;
         } finally {
-            this.ignoredLocalChanges.delete(localPath);
+            this.ignorePathTemporarily(localPath, 2500);
         }
     }
 
@@ -1462,5 +1462,12 @@ export class SyncEngine extends EventEmitter {
                 this.logger.debug('Connection check failed, still offline.');
             }
         }, 15000);
+    }
+
+    private ignorePathTemporarily(absolutePath: string, durationMs = 2500) {
+        this.ignoredLocalChanges.add(absolutePath);
+        setTimeout(() => {
+            this.ignoredLocalChanges.delete(absolutePath);
+        }, durationMs);
     }
 }
