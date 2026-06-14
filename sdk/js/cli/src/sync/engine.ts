@@ -40,7 +40,12 @@ export class SyncEngine extends EventEmitter {
         this.auth = auth;
         this.logger = logger;
 
-        // Load config
+        // Load config with environment variable override
+        const envPath = process.env.PROTON_MOUNT_POINT;
+        if (envPath) {
+            this.db.setConfig('local_sync_path', path.resolve(envPath));
+        }
+
         const defaultPath = path.join(homedir(), 'P-Drive');
         this.localSyncRoot = path.resolve(this.db.getConfig('local_sync_path', defaultPath));
         this.isPaused = this.db.getConfig('is_sync_paused', '0') === '1';
