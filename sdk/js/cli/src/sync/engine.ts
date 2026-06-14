@@ -92,6 +92,34 @@ export class SyncEngine extends EventEmitter {
         }));
     }
 
+    async syncOnce(): Promise<void> {
+        if (!this.auth.isLoggedIn()) return;
+        
+        // Ensure local sync directory exists
+        if (!existsSync(this.localSyncRoot)) {
+            this.wasRootDeleted = true;
+            mkdirSync(this.localSyncRoot, { recursive: true });
+        } else {
+            this.wasRootDeleted = false;
+        }
+
+        this.logger.info(`Running one-time Sync Engine run at ${this.localSyncRoot}`);
+        this.db.log('system', 'system', 'syncing', `Running one-time sync pass at ${this.localSyncRoot}`);
+
+        try {
+            // Get Proton Drive remote root folder
+            const rootFolder = await this.sdk.getMyFilesRootFolder();
+            this.remoteRootUid = rootFolder.uid;
+
+            // Perform full reconciliation
+            await this.forceSync();
+        } catch (error: any) {
+            this.logger.error('One-time sync failed:', error);
+            this.db.log('system', 'system', 'failed', `One-time sync failed: ${error.message || error}`);
+            throw error;
+        }
+    }
+
     async start(): Promise<void> {
         if (this.watcher || !this.auth.isLoggedIn()) return; // Already started or not authenticated
         this.isStarted = true;

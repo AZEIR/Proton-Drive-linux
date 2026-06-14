@@ -35,9 +35,23 @@ export async function runSync(port: number = 8085) {
     if (!session.auth.isLoggedIn()) {
         logger.error('User is not logged in! Please run auth login first.');
         db.log('system', 'system', 'failed', 'Authentication required. Open the dashboard or run login to connect.');
-    } else {
-        await engine.start();
+        process.exit(1);
     }
+
+    if (process.env.PROTON_SYNC_ONCE === 'true') {
+        try {
+            await engine.syncOnce();
+            logger.info('One-time sync complete.');
+        } catch (err) {
+            logger.error('One-time sync failed:', err);
+        } finally {
+            db.close();
+            await session.dispose();
+            process.exit(0);
+        }
+    }
+
+    await engine.start();
 
     // Start Dashboard
     const server = startDashboard(db, engine, session, port);

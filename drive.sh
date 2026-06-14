@@ -24,6 +24,7 @@ show_help() {
     echo "  ui      - Open the Web Dashboard in your browser"
     echo "  mount   - Show current mount point"
     echo "  reset   - Clear local sync database & inode cache"
+    echo "  sync-once - Run a single complete synchronization pass and exit"
     echo ""
     echo "Legacy Full-Sync Mode:"
     echo "  PROTON_SYNC_MODE=full ./drive.sh start"
@@ -80,6 +81,11 @@ case "$1" in
         rm -f "${HOME}/.config/proton-drive-sync/sync_state.db"
         rm -rf "${HOME}/.local/share/proton-drive-fod"
         echo "Done. Start fresh with: ./drive.sh start"
+        ;;
+    sync-once)
+        PORT="${PROTON_SYNC_PORT:-8085}"
+        echo "Running one-time synchronization pass..."
+        PROTON_SYNC_ONCE=true PROTON_MOUNT_POINT="${MOUNT_POINT}" PROTON_SYNC_PORT="${PORT}" PROTON_SYNC_MODE="full" "$CLI_BINARY"
         ;;
     build)
         echo "Building proton-fuse binary..."
