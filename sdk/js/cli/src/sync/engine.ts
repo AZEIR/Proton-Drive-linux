@@ -666,15 +666,26 @@ export class SyncEngine extends EventEmitter {
                         ? new Date(remote.activeRevision.value.claimedModificationTime).getTime()
                         : remote.modificationTime.getTime();
 
-                    if (Math.abs(local.mtime - remoteMtime) < 2000) {
-                        // Times match closely, assume synced
+                    const remoteSha1 = (remote.type !== NodeType.Folder && remote.activeRevision?.ok && remote.activeRevision.value.claimedDigests?.sha1) || '';
+                    const localSha1 = remote.type !== NodeType.Folder ? await getSha1(this.resolveLocalPath(relPath)) : '';
+                    const isContentIdentical = remote.type !== NodeType.Folder && remoteSha1 && localSha1 === remoteSha1;
+
+                    if (Math.abs(local.mtime - remoteMtime) < 2000 || isContentIdentical) {
+                        if (isContentIdentical && Math.abs(local.mtime - remoteMtime) >= 2000) {
+                            this.logger.info(`Aligning file modification time for identical content: ${relPath}`);
+                            try {
+                                utimesSync(this.resolveLocalPath(relPath), new Date(), new Date(remoteMtime));
+                                local.mtime = remoteMtime;
+                            } catch (err) {}
+                        }
+                        // Times match closely or content is identical, assume synced
                         this.db.setMapping({
                             local_path: relPath,
                             node_uid: remote.uid,
                             is_dir: remote.type === NodeType.Folder ? 1 : 0,
                             size: local.size,
                             mtime: local.mtime,
-                            sha1: remote.type === NodeType.Folder ? '' : await getSha1(this.resolveLocalPath(relPath)),
+                            sha1: remote.type === NodeType.Folder ? '' : localSha1,
                             remote_revision_uid: remote.activeRevision?.ok ? remote.activeRevision.value.uid : '',
                             remote_mtime: remoteMtime,
                         });
@@ -960,6 +971,19 @@ export class SyncEngine extends EventEmitter {
                 };
 
                 const mapped = this.db.getMapping(relativePath);
+                if (mapped && size === mapped.size && sha1 === mapped.sha1) {
+                    this.logger.info(`Skipping duplicate upload for ${relativePath} - content is unchanged.`);
+                    if (mtime !== mapped.mtime) {
+                        this.db.setMapping({
+                            ...mapped,
+                            mtime,
+                            remote_mtime: mtime
+                        });
+                    }
+                    this.activeTransfers.delete(relativePath);
+                    this.emit('statusChanged');
+                    return;
+                }
 
                 // Set file upload details
                 this.activeTransfers.set(relativePath, { type: 'upload', size, transferred: 0 });
