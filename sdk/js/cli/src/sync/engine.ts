@@ -36,6 +36,8 @@ export class SyncEngine extends EventEmitter {
     private cachedLocalFileCount: number = 0;
     private livenessInterval: any = null;
     private activeFolderCreations: Map<string, Promise<string>> = new Map();
+    private activeDownloads: Map<string, { abort: () => Promise<void> }> = new Map();
+    private activeUploads: Map<string, { abort: () => Promise<void> }> = new Map();
 
 
     constructor(db: SyncDatabase, sdk: ProtonDriveClient, auth: any, logger: any) {
@@ -179,6 +181,20 @@ export class SyncEngine extends EventEmitter {
         this.logger.info('Stopping Sync Engine');
         this.isStarted = false;
         
+        // Abort all active downloads
+        for (const [relPath, dl] of this.activeDownloads.entries()) {
+            this.logger.info(`Aborting active download for ${relPath}`);
+            await dl.abort().catch(() => {});
+        }
+        this.activeDownloads.clear();
+
+        // Abort all active uploads
+        for (const [relPath, ul] of this.activeUploads.entries()) {
+            this.logger.info(`Aborting active upload for ${relPath}`);
+            await ul.abort().catch(() => {});
+        }
+        this.activeUploads.clear();
+
         if (this.checkConnectionInterval) {
             clearInterval(this.checkConnectionInterval);
             this.checkConnectionInterval = null;
@@ -1071,12 +1087,24 @@ export class SyncEngine extends EventEmitter {
                     }
                 };
 
+                const stream = file.stream();
+                this.activeUploads.set(relativePath, {
+                    abort: async () => {
+                        try {
+                            await stream.cancel();
+                        } catch (e) {}
+                    }
+                });
+
                 const { nodeUid, nodeRevisionUid } = await this.runWithRetry(async () => {
+                    if (this.isPaused || !this.isStarted) {
+                        throw new Error('Sync paused or stopped');
+                    }
                     let uploadController;
                     if (mapped) {
                         this.logger.info(`Uploading file revision for ${relativePath} (${mapped.node_uid})`);
                         const uploader = await this.sdk.getFileRevisionUploader(mapped.node_uid, metadata);
-                        uploadController = await uploader.uploadFromStream(file.stream(), [], progressCallback);
+                        uploadController = await uploader.uploadFromStream(stream, [], progressCallback);
                     } else {
                         // Upload new file: ensure remote parent directory exists first
                         const parts = relativePath.split('/');
@@ -1086,7 +1114,7 @@ export class SyncEngine extends EventEmitter {
 
                         this.logger.info(`Uploading new file ${fileName} under parent ${parentUid}`);
                         const uploader = await this.sdk.getFileUploader(parentUid, fileName, metadata);
-                        uploadController = await uploader.uploadFromStream(file.stream(), [], progressCallback);
+                        uploadController = await uploader.uploadFromStream(stream, [], progressCallback);
                     }
 
                     return await uploadController.completion();
@@ -1118,6 +1146,7 @@ export class SyncEngine extends EventEmitter {
             this.db.log(relativePath, 'upload', 'failed', `Upload error: ${err.message || err}`);
             throw err;
         } finally {
+            this.activeUploads.delete(relativePath);
             this.activeTransfers.delete(relativePath);
             this.emit('statusChanged');
         }
@@ -1238,9 +1267,20 @@ export class SyncEngine extends EventEmitter {
                 const writableStream = {
                     getWriter: () => writer,
                     close: async () => { await writer.end(); },
-                    abort: async () => { await writer.end(); await unlink(tmpPath).catch(() => {}); },
+                    abort: async () => { 
+                        try {
+                            await writer.end(); 
+                        } catch(e) {}
+                        await unlink(tmpPath).catch(() => {}); 
+                    },
                     locked: false,
                 };
+
+                this.activeDownloads.set(relativePath, {
+                    abort: async () => {
+                        await writableStream.abort();
+                    }
+                });
 
                 const size = revision.claimedSize ?? 0;
                 this.activeTransfers.set(relativePath, { type: 'download', size, transferred: 0 });
@@ -1256,6 +1296,9 @@ export class SyncEngine extends EventEmitter {
 
                 try {
                     await this.runWithRetry(async () => {
+                        if (this.isPaused || !this.isStarted) {
+                            throw new Error('Sync paused or stopped');
+                        }
                         const downloader = await this.sdk.getFileDownloader(node);
                         const downloadController = downloader.downloadToStream(writableStream as any, progressCallback);
                         await downloadController.completion();
@@ -1265,6 +1308,7 @@ export class SyncEngine extends EventEmitter {
                     await writableStream.abort();
                     throw downloadErr;
                 } finally {
+                    this.activeDownloads.delete(relativePath);
                     this.ignoredLocalChanges.delete(tmpPath);
                 }
 
@@ -1303,6 +1347,7 @@ export class SyncEngine extends EventEmitter {
             this.db.log(relativePath, 'download', 'failed', `Download error: ${err.message || err}`);
             throw err;
         } finally {
+            this.activeDownloads.delete(relativePath);
             this.activeTransfers.delete(relativePath);
             this.emit('statusChanged');
         }
