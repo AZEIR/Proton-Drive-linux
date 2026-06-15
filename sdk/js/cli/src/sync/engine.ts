@@ -649,6 +649,10 @@ export class SyncEngine extends EventEmitter {
         directoryPaths.sort((a, b) => a.split('/').length - b.split('/').length);
         this.logger.info(`Reconciling ${directoryPaths.length} directories sequentially...`);
         for (const relPath of directoryPaths) {
+            if (this.isPaused || !this.isStarted) {
+                this.logger.info('Sync paused or stopped during directory reconciliation');
+                return;
+            }
             await this.reconcilePath(relPath, localFiles.get(relPath), remoteFiles.get(relPath), mappingsCache.get(relPath));
         }
 
@@ -657,6 +661,9 @@ export class SyncEngine extends EventEmitter {
         const queue = [...filePaths];
         const workers = Array.from({ length: Math.min(this.concurrencyLimit, queue.length) }, async () => {
             while (queue.length > 0) {
+                if (this.isPaused || !this.isStarted) {
+                    break;
+                }
                 const relPath = queue.shift();
                 if (relPath !== undefined) {
                     await this.reconcilePath(relPath, localFiles.get(relPath), remoteFiles.get(relPath), mappingsCache.get(relPath));
@@ -664,6 +671,11 @@ export class SyncEngine extends EventEmitter {
             }
         });
         await Promise.all(workers);
+
+        if (this.isPaused || !this.isStarted) {
+            this.logger.info('Sync paused or stopped during file reconciliation. Skipping mapping cleanup.');
+            return;
+        }
 
         // Clean up orphaned DB mappings using the in-memory cache (no extra DB scan)
         for (const [mPath] of mappingsCache) {
