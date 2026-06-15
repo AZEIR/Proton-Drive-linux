@@ -319,33 +319,48 @@ export class SyncEngine extends EventEmitter {
 
     // Recursively scan remote Proton folder
     private async scanRemoteDir(folderUid: string, relativePath: string, result: Map<string, NodeEntity>): Promise<void> {
-        const childrenUids: string[] = [];
-        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(folderUid)) {
-            childrenUids.push(uid);
-        }
+        // Fetch all children UIDs with retry
+        const childrenUids = await this.runWithRetry(async () => {
+            const uids: string[] = [];
+            for await (const uid of this.sdk.iterateFolderChildrenNodeUids(folderUid)) {
+                uids.push(uid);
+            }
+            return uids;
+        });
 
-        // Fetch children in chunks of 50 to optimize network calls
+        // Fetch children in chunks of 50 with retry to optimize network calls
+        const childFolders: { uid: string; relPath: string }[] = [];
         const chunkSize = 50;
         for (let i = 0; i < childrenUids.length; i += chunkSize) {
             const chunk = childrenUids.slice(i, i + chunkSize);
-            for await (const node of this.sdk.iterateNodes(chunk)) {
-                if ('missingUid' in node) continue; // Skip missing nodes
-                if (node.trashTime) continue; // Skip trashed nodes
-                
-                const name = node.name.ok ? node.name.value : 'degraded_name';
-                const relPath = relativePath ? `${relativePath}/${name}` : name;
-                
-                result.set(relPath, node);
-                this.remoteScanCount++;
+            const chunkFolders = await this.runWithRetry(async () => {
+                const folders: { uid: string; relPath: string }[] = [];
+                for await (const node of this.sdk.iterateNodes(chunk)) {
+                    if ('missingUid' in node) continue; // Skip missing nodes
+                    if (node.trashTime) continue; // Skip trashed nodes
+                    
+                    const name = node.name.ok ? node.name.value : 'degraded_name';
+                    const relPath = relativePath ? `${relativePath}/${name}` : name;
+                    
+                    result.set(relPath, node);
+                    this.remoteScanCount++;
 
-                if (this.remoteScanCount % 20 === 0) {
-                    this.db.log('system', 'system', 'syncing', `Remote scan: discovered ${this.remoteScanCount} cloud files...`);
-                }
+                    if (this.remoteScanCount % 20 === 0) {
+                        this.db.log('system', 'system', 'syncing', `Remote scan: discovered ${this.remoteScanCount} cloud files...`);
+                    }
 
-                if (node.type === NodeType.Folder) {
-                    await this.scanRemoteDir(node.uid, relPath, result);
+                    if (node.type === NodeType.Folder) {
+                        folders.push({ uid: node.uid, relPath });
+                    }
                 }
-            }
+                return folders;
+            });
+            childFolders.push(...chunkFolders);
+        }
+
+        // Recursively scan child folders
+        for (const folder of childFolders) {
+            await this.scanRemoteDir(folder.uid, folder.relPath, result);
         }
     }
 
