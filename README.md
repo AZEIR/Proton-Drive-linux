@@ -86,3 +86,9 @@ Tauri allows building tiny, exceptionally fast desktop apps by using the system'
 
 ### 2. Electron / NeutralinoJS Alternative
 - Spawns a Chromium-based shell loading the local web interface directly in a desktop window frame, supporting native notifications on sync completions.
+
+---
+
+## Disclaimer
+
+This is an unofficial, community-led client project. It is not affiliated with, sponsored by, or endorsed by Proton AG. All trademarks and product names are the property of their respective owners.
