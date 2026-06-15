@@ -18,32 +18,37 @@ It runs a background synchronization daemon that keeps a local directory in sync
 ## Getting Started
 
 ### 1. Initial Authentication
-Authenticate your Proton account using the symlinked official CLI helper in the project root:
+Authenticate your Proton account:
 ```bash
-./proton-drive auth login
+./drive.sh login
 ```
-*This will open a browser window to securely authenticate and store session keys in your OS keyring (libsecret/GNOME Keyring).*
+*This will launch Proton Drive authentication in your browser to securely store session keys in your OS keyring.*
 
 ### 2. Run the Sync Daemon
-Control the background synchronization service using the helper control script:
+Control the background synchronization service:
 - **Start the sync daemon**:
   ```bash
-  ./start-sync.sh start
+  ./drive.sh start
   ```
 - **Check the daemon status**:
   ```bash
-  ./start-sync.sh status
+  ./drive.sh status
   ```
 - **Stop the daemon**:
   ```bash
-  ./start-sync.sh stop
+  ./drive.sh stop
   ```
 
 ### 3. Open the Dashboard UI
-Access the premium interface in any browser:
-👉 **[http://localhost:3000](http://localhost:3000)**
+Access the premium interface:
+👉 **[http://localhost:8085](http://localhost:8085)**
 
-From the UI, you can monitor quota usage, pause/resume sync, force a manual sync, and configure a custom folder path (e.g., if you already use `~/ProtonDrive` for rclone and want `~/ProtonDrive-sync` instead).
+You can also launch it directly from the CLI:
+```bash
+./drive.sh ui
+```
+
+From the UI, you can monitor quota usage, pause/resume sync, force a manual sync, and configure custom folder paths.
 
 ---
 
