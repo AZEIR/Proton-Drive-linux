@@ -25,6 +25,7 @@ export interface SyncLog {
 
 export class SyncDatabase {
     private db: Database;
+    private _logWriteCount: number = 0;
 
     /**
      * @param dbPath  Optional absolute path to the SQLite database file.
@@ -145,12 +146,14 @@ export class SyncDatabase {
             VALUES (?, ?, ?, ?, ?)
         `).run(Date.now(), filePath, direction, status, message);
 
-        // Keep logs table clean, prune to latest 1000 rows
-        this.db.run(`
-            DELETE FROM sync_logs WHERE id NOT IN (
-                SELECT id FROM sync_logs ORDER BY id DESC LIMIT 1000
-            )
-        `);
+        // Prune lazily every 100 writes using an index-friendly range delete (O(1) via PK B-tree)
+        this._logWriteCount++;
+        if (this._logWriteCount % 100 === 0) {
+            this.db.run(`
+                DELETE FROM sync_logs
+                WHERE id < (SELECT MAX(id) FROM sync_logs) - 1000
+            `);
+        }
     }
 
     getRecentLogs(limit: number = 50): SyncLog[] {

@@ -220,24 +220,28 @@ function getHtmlContent(isFodMode: boolean = false): string {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Proton Drive - Desktop Sync</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-body: #0d0c15;
-            --bg-sidebar: #13121f;
-            --bg-card: #1b1a29;
-            --border-color: #262438;
+            --bg-body: #0b0a12;
+            --bg-sidebar: #0f0e1a;
+            --bg-card: rgba(22, 21, 38, 0.65);
+            --bg-card-hover: rgba(29, 27, 48, 0.85);
+            --border-color: rgba(255, 255, 255, 0.06);
+            --border-color-glow: rgba(108, 71, 255, 0.25);
             --primary: #6c47ff;
+            --primary-gradient: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
             --primary-hover: #8060ff;
-            --primary-glow: rgba(108, 71, 255, 0.25);
+            --primary-glow: rgba(108, 71, 255, 0.2);
             --success: #10b981;
+            --success-glow: rgba(16, 185, 129, 0.2);
             --warning: #f59e0b;
             --danger: #ef4444;
             --text-main: #f3f3f5;
             --text-muted: #8f8da8;
-            --sidebar-active: rgba(108, 71, 255, 0.08);
-            --sidebar-hover: rgba(255, 255, 255, 0.03);
-            --card-hover: #212032;
+            --sidebar-active: rgba(108, 71, 255, 0.12);
+            --sidebar-hover: rgba(255, 255, 255, 0.04);
+            --shadow-premium: 0 8px 32px 0 rgba(0, 0, 0, 0.35);
         }
 
         * {
@@ -260,6 +264,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             display: flex;
             width: 100%;
             height: 100vh;
+            position: relative;
         }
 
         /* Sidebar Styling */
@@ -271,6 +276,8 @@ function getHtmlContent(isFodMode: boolean = false): string {
             flex-direction: column;
             padding: 1.5rem 1rem;
             flex-shrink: 0;
+            z-index: 10;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .sidebar-header {
@@ -289,6 +296,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         .brand-name {
+            font-family: 'Outfit', sans-serif;
             font-size: 1.25rem;
             font-weight: 700;
             letter-spacing: -0.5px;
@@ -296,13 +304,15 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         .sub-brand {
-            font-size: 0.8rem;
-            font-weight: 500;
-            background: rgba(108, 71, 255, 0.15);
-            color: #a78bfa;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--primary-gradient);
+            color: #ffffff;
             padding: 2px 6px;
             border-radius: 4px;
-            margin-left: 4px;
+            margin-left: 6px;
+            box-shadow: 0 2px 6px var(--primary-glow);
         }
 
         .sidebar-menu {
@@ -330,7 +340,10 @@ function getHtmlContent(isFodMode: boolean = false): string {
         .menu-item svg {
             width: 20px;
             height: 20px;
-            fill: currentColor;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            transition: stroke 0.2s;
         }
 
         .menu-item:hover {
@@ -351,18 +364,19 @@ function getHtmlContent(isFodMode: boolean = false): string {
             padding-top: 1.5rem;
             display: flex;
             flex-direction: column;
-            gap: 1.5rem;
+            gap: 1.2rem;
         }
 
         .storage-widget {
-            background: rgba(255, 255, 255, 0.01);
+            background: rgba(255, 255, 255, 0.02);
             border: 1px solid var(--border-color);
-            padding: 1rem;
+            padding: 1.1rem;
             border-radius: 12px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.15);
         }
 
         .storage-title {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: var(--text-muted);
             font-weight: 600;
             text-transform: uppercase;
@@ -372,7 +386,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         .storage-bar-bg {
             height: 8px;
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.04);
             border-radius: 9999px;
             overflow: hidden;
             margin-bottom: 8px;
@@ -380,11 +394,19 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         .storage-bar-fill {
             height: 100%;
-            background: var(--primary);
+            background: var(--primary-gradient);
             border-radius: 9999px;
             width: 0%;
-            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 0 8px var(--primary-glow);
+            transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 0 10px rgba(108, 71, 255, 0.4);
+            background-size: 200% 200%;
+            animation: gradient-shift 5s ease infinite;
+        }
+
+        @keyframes gradient-shift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
         }
 
         .storage-details {
@@ -418,13 +440,14 @@ function getHtmlContent(isFodMode: boolean = false): string {
             width: 36px;
             height: 36px;
             border-radius: 50%;
-            background: var(--primary);
+            background: var(--primary-gradient);
             color: #ffffff;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 600;
             font-size: 1.1rem;
+            box-shadow: 0 2px 8px var(--primary-glow);
         }
 
         .user-details {
@@ -455,6 +478,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             flex-direction: column;
             height: 100vh;
             background: var(--bg-body);
+            width: calc(100% - 280px);
         }
 
         /* Top Bar */
@@ -465,15 +489,18 @@ function getHtmlContent(isFodMode: boolean = false): string {
             align-items: center;
             justify-content: space-between;
             padding: 0 2rem;
-            background: rgba(13, 12, 21, 0.5);
-            backdrop-filter: blur(10px);
-            z-index: 10;
+            background: rgba(11, 10, 18, 0.5);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            z-index: 9;
         }
 
         .section-title {
-            font-size: 1.3rem;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.4rem;
             font-weight: 600;
             color: #ffffff;
+            letter-spacing: -0.3px;
         }
 
         .status-badge {
@@ -482,12 +509,13 @@ function getHtmlContent(isFodMode: boolean = false): string {
             gap: 8px;
             padding: 0.5rem 1rem;
             border-radius: 9999px;
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             border: 1px solid var(--border-color);
             background: rgba(255, 255, 255, 0.02);
+            transition: all 0.3s;
         }
 
         .status-badge .dot {
@@ -497,24 +525,82 @@ function getHtmlContent(isFodMode: boolean = false): string {
             background: var(--text-muted);
         }
 
-        /* Status colors */
-        .status-synced { color: var(--success); border-color: rgba(16, 185, 129, 0.3); background: rgba(16, 185, 129, 0.05); }
-        .status-synced .dot { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        /* Status colors and glowing animations */
+        .status-synced {
+            color: var(--success);
+            border-color: rgba(16, 185, 129, 0.25);
+            background: rgba(16, 185, 129, 0.06);
+        }
+        .status-synced .dot {
+            background: var(--success);
+            animation: pulse-glow-success 2.5s infinite;
+        }
 
-        .status-syncing { color: var(--primary); border-color: rgba(108, 71, 255, 0.3); background: rgba(108, 71, 255, 0.05); }
-        .status-syncing .dot { background: var(--primary); box-shadow: 0 0 8px var(--primary); animation: blink 1.2s infinite alternate; }
+        @keyframes pulse-glow-success {
+            0% { box-shadow: 0 0 2px rgba(16, 185, 129, 0.4); }
+            50% { box-shadow: 0 0 10px rgba(16, 185, 129, 0.8); }
+            100% { box-shadow: 0 0 2px rgba(16, 185, 129, 0.4); }
+        }
 
-        .status-scanning { color: var(--warning); border-color: rgba(245, 158, 11, 0.3); background: rgba(245, 158, 11, 0.05); }
-        .status-scanning .dot { background: var(--warning); box-shadow: 0 0 8px var(--warning); animation: blink 1.2s infinite alternate; }
+        .status-syncing {
+            color: #a78bfa;
+            border-color: rgba(108, 71, 255, 0.25);
+            background: rgba(108, 71, 255, 0.06);
+        }
+        .status-syncing .dot {
+            background: var(--primary);
+            animation: blink 1.2s infinite alternate, pulse-glow-primary 1.5s infinite;
+        }
 
-        .status-paused { color: var(--text-muted); border-color: var(--border-color); }
-        .status-paused .dot { background: var(--text-muted); }
+        @keyframes pulse-glow-primary {
+            0% { box-shadow: 0 0 2px rgba(108, 71, 255, 0.4); }
+            50% { box-shadow: 0 0 12px rgba(108, 71, 255, 0.8); }
+            100% { box-shadow: 0 0 2px rgba(108, 71, 255, 0.4); }
+        }
 
-        .status-offline { color: var(--warning); border-color: rgba(245, 158, 11, 0.3); background: rgba(245, 158, 11, 0.05); }
-        .status-offline .dot { background: var(--warning); box-shadow: 0 0 8px var(--warning); animation: blink 1.2s infinite alternate; }
+        .status-scanning {
+            color: var(--warning);
+            border-color: rgba(245, 158, 11, 0.25);
+            background: rgba(245, 158, 11, 0.06);
+        }
+        .status-scanning .dot {
+            background: var(--warning);
+            animation: blink 1.2s infinite alternate, pulse-glow-warning 1.5s infinite;
+        }
 
-        .status-error { color: var(--danger); border-color: rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.05); }
-        .status-error .dot { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+        @keyframes pulse-glow-warning {
+            0% { box-shadow: 0 0 2px rgba(245, 158, 11, 0.4); }
+            50% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.8); }
+            100% { box-shadow: 0 0 2px rgba(245, 158, 11, 0.4); }
+        }
+
+        .status-paused {
+            color: var(--text-muted);
+            border-color: var(--border-color);
+        }
+        .status-paused .dot {
+            background: var(--text-muted);
+        }
+
+        .status-offline {
+            color: var(--warning);
+            border-color: rgba(245, 158, 11, 0.25);
+            background: rgba(245, 158, 11, 0.06);
+        }
+        .status-offline .dot {
+            background: var(--warning);
+            animation: blink 1.2s infinite alternate;
+        }
+
+        .status-error {
+            color: var(--danger);
+            border-color: rgba(239, 68, 68, 0.25);
+            background: rgba(239, 68, 68, 0.06);
+        }
+        .status-error .dot {
+            background: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
+        }
 
         @keyframes blink {
             0% { opacity: 0.4; }
@@ -531,7 +617,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
         /* Tab Panels */
         .tab-pane {
             display: none;
-            animation: fadeIn 0.25s ease-out;
+            animation: fadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .tab-pane.active {
@@ -539,32 +625,44 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(5px); }
+            from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
-        /* Card System */
+        /* Card System (Glassmorphism) */
         .card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
-            border-radius: 14px;
+            border-radius: 16px;
             padding: 1.5rem;
             margin-bottom: 1.5rem;
-            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
-            transition: border-color 0.2s ease;
+            box-shadow: var(--shadow-premium);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .card:hover {
-            border-color: rgba(108, 71, 255, 0.15);
+            border-color: rgba(108, 71, 255, 0.2);
+            box-shadow: 0 12px 40px rgba(108, 71, 255, 0.06);
+            transform: translateY(-2px);
         }
 
         .card h2 {
+            font-family: 'Outfit', sans-serif;
             font-size: 1.15rem;
             font-weight: 600;
             color: #ffffff;
             margin-bottom: 1.2rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.04);
             padding-bottom: 0.6rem;
+        }
+
+        /* Dashboard Grid Layout (Desktop 2-columns) */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
         }
 
         /* Hero Status Card */
@@ -574,7 +672,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             justify-content: space-between;
             gap: 2rem;
             padding: 2rem;
-            background: radial-gradient(circle at 10% 10%, rgba(108, 71, 255, 0.1), transparent), var(--bg-card);
+            background: radial-gradient(circle at 10% 10%, rgba(108, 71, 255, 0.12), transparent), var(--bg-card);
         }
 
         .card-hero-content {
@@ -593,6 +691,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
         }
 
         .hero-icon {
@@ -607,7 +706,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
         .hero-icon.muted { color: var(--text-muted); }
 
         .rotating {
-            animation: rotate 2s linear infinite;
+            animation: rotate 2.2s linear infinite;
         }
 
         @keyframes rotate {
@@ -620,26 +719,29 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         @keyframes pulse-grow {
-            0% { transform: scale(0.95); opacity: 0.8; }
-            100% { transform: scale(1.05); opacity: 1; }
+            0% { transform: scale(0.94); opacity: 0.85; }
+            100% { transform: scale(1.06); opacity: 1; }
         }
 
         .status-info h2 {
+            font-family: 'Outfit', sans-serif;
             font-size: 1.4rem;
             font-weight: 600;
-            border: none;
-            padding: 0;
+            border: none !important;
+            padding: 0 !important;
             margin-bottom: 6px;
         }
 
         .status-info p {
-            font-size: 0.95rem;
+            font-size: 0.92rem;
             color: var(--text-muted);
+            line-height: 1.4;
         }
 
         .card-hero-actions {
             display: flex;
             gap: 10px;
+            flex-wrap: wrap;
         }
 
         /* Buttons styling */
@@ -647,20 +749,20 @@ function getHtmlContent(isFodMode: boolean = false): string {
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid var(--border-color);
             border-radius: 8px;
-            padding: 0.7rem 1.2rem;
+            padding: 0.65rem 1.2rem;
             color: var(--text-main);
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.88rem;
             cursor: pointer;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
-            transition: all 0.2s ease;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .btn:hover {
-            background: rgba(255, 255, 255, 0.06);
+            background: rgba(255, 255, 255, 0.07);
             border-color: rgba(255, 255, 255, 0.15);
             transform: translateY(-1px);
         }
@@ -669,16 +771,24 @@ function getHtmlContent(isFodMode: boolean = false): string {
             transform: translateY(0);
         }
 
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
         .btn-primary {
-            background: var(--primary);
+            background: var(--primary-gradient);
             border: none;
             color: #ffffff;
+            box-shadow: 0 4px 12px var(--primary-glow);
         }
 
         .btn-primary:hover {
-            background: var(--primary-hover);
-            box-shadow: 0 0 12px var(--primary-glow);
-            border-color: transparent;
+            background: linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%);
+            box-shadow: 0 4px 16px rgba(108, 71, 255, 0.35);
         }
 
         .btn-danger {
@@ -691,10 +801,10 @@ function getHtmlContent(isFodMode: boolean = false): string {
             background: var(--danger);
             border-color: var(--danger);
             color: #ffffff;
-            box-shadow: 0 0 12px rgba(239, 68, 68, 0.25);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
         }
 
-        /* Active Transfers Panel (Windows-style) */
+        /* Active Transfers Panel (Animated stripes) */
         .transfers-list {
             list-style: none;
             display: flex;
@@ -703,29 +813,36 @@ function getHtmlContent(isFodMode: boolean = false): string {
             max-height: 350px;
             overflow-y: auto;
             padding-right: 4px;
+            min-width: 0;
         }
 
         .transfer-item {
-            background: rgba(255, 255, 255, 0.02);
+            background: rgba(255, 255, 255, 0.01);
             padding: 1rem;
             border-radius: 10px;
             border: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
             gap: 8px;
+            min-width: 0;
+            box-sizing: border-box;
+            width: 100%;
         }
 
         .transfer-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 12px;
+            min-width: 0;
         }
 
         .transfer-name-wrapper {
             display: flex;
             align-items: center;
             gap: 8px;
-            max-width: 70%;
+            flex: 1;
+            min-width: 0;
         }
 
         .transfer-type-icon {
@@ -738,7 +855,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
         .download-color { color: #34d399; }
 
         .transfer-name {
-            font-size: 0.9rem;
+            font-size: 0.88rem;
             font-weight: 500;
             color: #ffffff;
             white-space: nowrap;
@@ -747,9 +864,11 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         .transfer-meta {
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             color: var(--text-muted);
             font-weight: 500;
+            white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .transfer-bar-bg {
@@ -764,14 +883,32 @@ function getHtmlContent(isFodMode: boolean = false): string {
             border-radius: 9999px;
             width: 0%;
             transition: width 0.3s ease;
+            position: relative;
+            background-size: 30px 30px;
+            background-image: linear-gradient(
+                45deg,
+                rgba(255, 255, 255, 0.15) 25%,
+                transparent 25%,
+                transparent 50%,
+                rgba(255, 255, 255, 0.15) 50%,
+                rgba(255, 255, 255, 0.15) 75%,
+                transparent 75%,
+                transparent
+            );
+            animation: progress-bar-stripes 1s linear infinite;
+        }
+
+        @keyframes progress-bar-stripes {
+            0% { background-position: 0 0; }
+            100% { background-position: 30px 0; }
         }
 
         .upload-bar {
-            background: linear-gradient(90deg, #8b5cf6, #d946ef);
+            background-color: #8b5cf6;
         }
 
         .download-bar {
-            background: linear-gradient(90deg, #10b981, #06b6d4);
+            background-color: #10b981;
         }
 
         /* Settings configuration page */
@@ -788,16 +925,8 @@ function getHtmlContent(isFodMode: boolean = false): string {
             gap: 2rem;
             background: rgba(255, 255, 255, 0.01);
             padding: 1.2rem;
-            border-radius: 10px;
+            border-radius: 12px;
             border: 1px solid rgba(255, 255, 255, 0.02);
-        }
-
-        @media (max-width: 768px) {
-            .setting-row {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 1rem;
-            }
         }
 
         .setting-info {
@@ -845,9 +974,10 @@ function getHtmlContent(isFodMode: boolean = false): string {
         /* Activity Table Styling */
         .logs-table-wrapper {
             overflow-x: auto;
-            border-radius: 10px;
+            border-radius: 12px;
             border: 1px solid var(--border-color);
             background: rgba(0, 0, 0, 0.15);
+            box-shadow: inset 0 2px 8px rgba(0,0,0,0.2);
         }
 
         table {
@@ -859,23 +989,28 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         th {
             background: rgba(255, 255, 255, 0.01);
-            padding: 0.9rem 1.2rem;
+            padding: 1rem 1.2rem;
             color: var(--text-muted);
             font-weight: 600;
             border-bottom: 1px solid var(--border-color);
             text-transform: uppercase;
             font-size: 0.72rem;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.8px;
+            font-family: 'Outfit', sans-serif;
         }
 
         td {
-            padding: 0.9rem 1.2rem;
+            padding: 1rem 1.2rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.02);
             color: #e2e8f0;
         }
 
         tr:last-child td {
             border-bottom: none;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.01);
         }
 
         .log-direction {
@@ -886,9 +1021,9 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         .log-status {
             font-weight: 600;
-            font-size: 0.78rem;
-            padding: 2px 6px;
-            border-radius: 4px;
+            font-size: 0.75rem;
+            padding: 3px 8px;
+            border-radius: 6px;
             display: inline-block;
         }
 
@@ -915,7 +1050,169 @@ function getHtmlContent(isFodMode: boolean = false): string {
             margin-top: 2px;
         }
 
-        /* Custom scrollbar for premium feel */
+        /* Search & Filter bar for logs & cache */
+        .card-header-flex {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 1.2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            padding-bottom: 0.6rem;
+        }
+
+        .filter-search-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .search-box {
+            position: relative;
+            display: flex;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0 0.75rem;
+            width: 220px;
+            transition: all 0.2s;
+        }
+
+        .search-box:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 6px var(--primary-glow);
+            background: rgba(0, 0, 0, 0.35);
+        }
+
+        .search-icon {
+            width: 14px;
+            height: 14px;
+            color: var(--text-muted);
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+
+        .search-box input {
+            background: none;
+            border: none;
+            outline: none;
+            padding: 0.5rem 0;
+            color: var(--text-main);
+            font-size: 0.82rem;
+            width: 100%;
+        }
+
+        .filter-pills {
+            display: flex;
+            gap: 6px;
+        }
+
+        .filter-pill {
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 0.35rem 0.85rem;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-pill:hover {
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-main);
+        }
+
+        .filter-pill.active {
+            background: var(--primary-gradient);
+            color: #ffffff;
+            border-color: transparent;
+            box-shadow: 0 2px 8px var(--primary-glow);
+        }
+
+        /* Empty state styling */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            gap: 8px;
+            color: var(--text-muted);
+            padding: 2.5rem 1rem;
+        }
+
+        .empty-icon {
+            width: 44px;
+            height: 44px;
+            color: rgba(255, 255, 255, 0.12);
+            margin-bottom: 6px;
+        }
+
+        .empty-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .empty-desc {
+            font-size: 0.82rem;
+            max-width: 320px;
+            line-height: 1.4;
+        }
+
+        /* Hamburger menu button */
+        .menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: var(--text-main);
+            cursor: pointer;
+            padding: 8px;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: background-color 0.2s;
+        }
+
+        .menu-toggle:hover {
+            background: rgba(255,255,255,0.05);
+        }
+
+        .menu-toggle svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        /* Mobile sidebar drawer overlay overlay */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            z-index: 90;
+            animation: fadeOverlay 0.2s ease-out;
+        }
+
+        @keyframes fadeOverlay {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .sidebar-overlay.active {
+            display: block;
+        }
+
+        /* Custom scrollbar */
         ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
@@ -926,18 +1223,18 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         ::-webkit-scrollbar-thumb {
-            background: #2a293f;
+            background: #232136;
             border-radius: 9999px;
         }
 
         ::-webkit-scrollbar-thumb:hover {
-            background: #3e3d5c;
+            background: #353252;
         }
 
         /* Bulk Deletion Warning Card */
         .card-warning {
             background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(239, 68, 68, 0.1)) !important;
-            border-color: rgba(245, 158, 11, 0.4) !important;
+            border-color: rgba(245, 158, 11, 0.35) !important;
             display: flex;
             flex-direction: column;
             gap: 1.2rem;
@@ -969,7 +1266,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         .warning-text-wrapper p {
             font-size: 0.92rem;
-            color: #fbcfe8;
+            color: #ffedd5;
             line-height: 1.4;
         }
 
@@ -986,7 +1283,167 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         .btn-success:hover {
             background: #059669;
-            box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        /* ── RESPONSIVE MEDIA QUERIES ────────────────────────────────────── */
+
+        @media (max-width: 1024px) {
+            .sidebar {
+                position: fixed;
+                top: 0;
+                left: 0;
+                height: 100vh;
+                transform: translateX(-100%);
+                z-index: 100;
+                box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+            }
+            
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                width: 100%;
+            }
+
+            .menu-toggle {
+                display: flex;
+            }
+
+            .topbar {
+                padding: 0 1.5rem;
+            }
+
+            .content-container {
+                padding: 1.5rem;
+            }
+        }
+
+        @media (min-width: 1200px) {
+            .dashboard-grid {
+                grid-template-columns: 2fr 1.1fr;
+            }
+            .dashboard-main-col {
+                display: flex;
+                flex-direction: column;
+            }
+            .dashboard-side-col {
+                display: flex;
+                flex-direction: column;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .setting-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 1.2rem;
+                padding: 1rem;
+            }
+
+            .setting-input-group {
+                max-width: 100%;
+            }
+
+            .card-header-flex {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+
+            .filter-search-container {
+                width: 100%;
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .search-box {
+                width: 100%;
+            }
+
+            .filter-pills {
+                width: 100%;
+                overflow-x: auto;
+                padding-bottom: 4px;
+            }
+
+            .filter-pill {
+                white-space: nowrap;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .topbar {
+                height: 60px;
+                padding: 0 1rem;
+            }
+
+            .section-title {
+                font-size: 1.15rem;
+            }
+
+            .status-badge {
+                padding: 0.4rem 0.75rem;
+                font-size: 0.7rem;
+            }
+
+            .content-container {
+                padding: 1rem;
+            }
+
+            .card {
+                padding: 1rem;
+                border-radius: 12px;
+            }
+
+            .card-hero {
+                padding: 1rem;
+            }
+
+            .status-icon-wrapper {
+                width: 48px;
+                height: 48px;
+            }
+
+            .hero-icon {
+                width: 24px;
+                height: 24px;
+            }
+
+            .status-info h2 {
+                font-size: 1.15rem;
+            }
+
+            .status-info p {
+                font-size: 0.85rem;
+            }
+
+            .warning-banner-content {
+                gap: 0.75rem;
+            }
+
+            .warning-banner-icon {
+                width: 28px;
+                height: 28px;
+            }
+
+            .warning-text-wrapper h3 {
+                font-size: 1rem;
+            }
+
+            .warning-text-wrapper p {
+                font-size: 0.85rem;
+            }
+
+            .warning-actions {
+                flex-direction: column;
+                width: 100%;
+            }
+
+            .warning-actions .btn {
+                width: 100%;
+            }
         }
     </style>
 </head>
@@ -1023,6 +1480,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                     </svg>
                     Settings
+                </div>
                 <div class="menu-item" id="cacheMenuItem" onclick="showTab('cache')" style="display:none;">
                     <!-- Cloud icon -->
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1060,7 +1518,16 @@ function getHtmlContent(isFodMode: boolean = false): string {
         <main class="main-content">
             <!-- Topbar showing title & global status badge -->
             <header class="topbar">
-                <h1 class="section-title" id="pageTitle">Sync Dashboard</h1>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <button class="menu-toggle" id="sidebarToggle" onclick="toggleSidebar()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </button>
+                    <h1 class="section-title" id="pageTitle">Sync Dashboard</h1>
+                </div>
                 <div class="topbar-actions">
                     <div id="statusBadge" class="status-badge status-synced">
                         <span class="dot"></span>
@@ -1092,14 +1559,14 @@ function getHtmlContent(isFodMode: boolean = false): string {
                         </div>
                     </div>
 
-                <!-- FOD Mode Hero Card (hidden by default, shown when mode=fod) -->
+                    <!-- FOD Mode Hero Card (hidden by default, shown when mode=fod) -->
                     <div id="fodHeroCard" class="card" style="display:none; background: radial-gradient(circle at 10% 10%, rgba(16,185,129,0.08), transparent), var(--bg-card);">
-                        <div style="display:flex;align-items:center;gap:1rem;">
+                        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
                             <div style="width:52px;height:52px;border-radius:50%;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                 <svg style="width:28px;height:28px;color:#10b981;" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
                             </div>
                             <div>
-                                <h2 style="font-size:1.1rem;font-weight:700;color:#fff;margin:0 0 4px;">File On Demand — FUSE Mode</h2>
+                                <h2 style="font-size:1.1rem;font-weight:700;color:#fff;margin:0 0 4px;border:none;padding:0;">File On Demand — FUSE Mode</h2>
                                 <p style="font-size:0.88rem;color:var(--text-muted);margin:0;">Mount point: <code id="mountPointDisplay" style="color:#a78bfa;font-size:0.85rem;">~/P-Drive</code></p>
                             </div>
                             <div style="margin-left:auto;display:flex;gap:8px;">
@@ -1108,51 +1575,77 @@ function getHtmlContent(isFodMode: boolean = false): string {
                         </div>
                     </div>
 
-                    <!-- Hero Synced Status Card -->
-                    <div class="card card-hero">
-                        <div class="card-hero-content">
-                            <div class="status-icon-wrapper" id="syncStatusIcon">
-                                <svg class="hero-icon success" viewBox="0 0 24 24" fill="currentColor">
-                                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                                </svg>
+                    <!-- Dashboard Grid Layout -->
+                    <div class="dashboard-grid">
+                        <div class="dashboard-main-col">
+                            <!-- Hero Synced Status Card -->
+                            <div class="card card-hero">
+                                <div class="card-hero-content">
+                                    <div class="status-icon-wrapper" id="syncStatusIcon">
+                                        <svg class="hero-icon success" viewBox="0 0 24 24" fill="currentColor">
+                                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                                        </svg>
+                                    </div>
+                                    <div class="status-info">
+                                        <h2 id="syncStateTitle">Your files are up to date</h2>
+                                        <p id="syncStateDesc">Proton Drive is actively monitoring your sync folder.</p>
+                                    </div>
+                                </div>
+                                <div class="card-hero-actions">
+                                    <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
+                                    <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
+                                    <button class="btn" onclick="openFolder()">Open Folder</button>
+                                </div>
                             </div>
-                            <div class="status-info">
-                                <h2 id="syncStateTitle">Your files are up to date</h2>
-                                <p id="syncStateDesc">Proton Drive is actively monitoring your sync folder.</p>
+
+                            <!-- Activity History Card -->
+                            <div class="card">
+                                <div class="card-header-flex">
+                                    <h2>Recent Activity Log</h2>
+                                    <div class="filter-search-container">
+                                        <div class="search-box">
+                                            <!-- Search icon -->
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon">
+                                                <circle cx="11" cy="11" r="8"></circle>
+                                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                            </svg>
+                                            <input type="text" id="logSearchInput" placeholder="Search logs..." oninput="filterLogs()">
+                                        </div>
+                                        <div class="filter-pills" id="logFilterPills">
+                                            <button class="filter-pill active" onclick="setLogFilter('all')">All</button>
+                                            <button class="filter-pill" onclick="setLogFilter('uploads')">Uploads</button>
+                                            <button class="filter-pill" onclick="setLogFilter('downloads')">Downloads</button>
+                                            <button class="filter-pill" onclick="setLogFilter('system')">System</button>
+                                            <button class="filter-pill" onclick="setLogFilter('failed')">Errors</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="logs-table-wrapper">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Time</th>
+                                                <th>Operation</th>
+                                                <th>Status</th>
+                                                <th>File / Details</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="logsBody">
+                                            <!-- Populated dynamically via JS -->
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
-                        <div class="card-hero-actions">
-                            <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
-                            <button class="btn" onclick="forceSync()">Sync Now</button>
-                            <button class="btn" onclick="openFolder()">Open Local Folder</button>
-                        </div>
-                    </div>
 
-                    <!-- Active Transfers Card -->
-                    <div id="transfersCard" class="card" style="display: none;">
-                        <h2>Active Transfers</h2>
-                        <ul id="transfersList" class="transfers-list">
-                            <!-- Populated dynamically via JS -->
-                        </ul>
-                    </div>
-
-                    <!-- Activity History Card -->
-                    <div class="card" style="margin-top: 1.5rem;">
-                        <h2>Recent Activity Log</h2>
-                        <div class="logs-table-wrapper">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Time</th>
-                                        <th>Operation</th>
-                                        <th>Status</th>
-                                        <th>File / Details</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="logsBody">
+                        <div class="dashboard-side-col" id="dashboardSideCol">
+                            <!-- Active Transfers Card -->
+                            <div id="transfersCard" class="card" style="display: none;">
+                                <h2>Active Transfers</h2>
+                                <ul id="transfersList" class="transfers-list">
                                     <!-- Populated dynamically via JS -->
-                                </tbody>
-                            </table>
+                                </ul>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1160,16 +1653,33 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 <!-- Tab Pane: Cache -->
                 <div id="tab-cache" class="tab-pane">
                     <div class="card" style="margin-bottom:1rem;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.2rem;">
+                        <div class="card-header-flex">
                             <div>
-                                <h2 style="margin-bottom:4px;">Local Cache</h2>
+                                <h2 style="margin-bottom:4px; border:none; padding:0;">Local Cache</h2>
                                 <p style="font-size:0.85rem;color:var(--text-muted);margin:0;">Files downloaded to your device. Click Evict to free space; click Pin to pre-download.</p>
                             </div>
-                            <div style="text-align:right;">
+                            <div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
                                 <div id="cacheSizeDisplay" style="font-size:0.85rem;color:var(--text-muted);">Loading…</div>
-                                <button class="btn btn-danger" style="margin-top:6px;font-size:0.8rem;padding:0.4rem 0.8rem;" onclick="evictAll()">Free All Space</button>
+                                <button class="btn btn-danger" style="font-size:0.8rem;padding:0.4rem 0.8rem;" onclick="evictAll()">Free All Space</button>
                             </div>
                         </div>
+
+                        <!-- Cache Filters -->
+                        <div class="filter-search-container" style="margin-bottom: 1.2rem;">
+                            <div class="search-box">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                <input type="text" id="cacheSearchInput" placeholder="Search cache..." oninput="filterCache()">
+                            </div>
+                            <div class="filter-pills" id="cacheFilterPills">
+                                <button class="filter-pill active" onclick="setCacheFilter('all')">All</button>
+                                <button class="filter-pill" onclick="setCacheFilter('local')">Local Only</button>
+                                <button class="filter-pill" onclick="setCacheFilter('stub')">Stubs Only</button>
+                            </div>
+                        </div>
+
                         <div class="logs-table-wrapper">
                             <table>
                                 <thead>
@@ -1226,7 +1736,22 @@ function getHtmlContent(isFodMode: boolean = false): string {
         // Injected by server
         const FOD_MODE = ${isFodMode ? 'true' : 'false'};
 
+        // Local UI State for Search/Filters
+        let logSearchQuery = '';
+        let logFilterCategory = 'all';
+        let cachedLogs = [];
+
+        let cacheSearchQuery = '';
+        let cacheFilterStatus = 'all';
+        let cachedCacheFiles = [];
+
         function init() {
+            // Create sidebar overlay for mobile
+            const overlay = document.createElement('div');
+            overlay.className = 'sidebar-overlay';
+            overlay.onclick = toggleSidebar;
+            document.body.appendChild(overlay);
+
             if (FOD_MODE) {
                 document.getElementById('modeLabel').innerText = 'FOD';
                 document.getElementById('cacheMenuItem').style.display = 'flex';
@@ -1239,6 +1764,13 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 fetchCachedFiles();
                 setInterval(fetchCachedFiles, 5000);
             }
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            const overlay = document.querySelector('.sidebar-overlay');
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('active');
         }
 
         function showTab(tabId) {
@@ -1265,6 +1797,14 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 'cache':     'Local Cache',
             };
             document.getElementById('pageTitle').innerText = titles[tabId] || tabId;
+
+            // Close mobile sidebar drawer if open
+            const sidebar = document.querySelector('.sidebar');
+            const overlay = document.querySelector('.sidebar-overlay');
+            if (sidebar.classList.contains('open')) {
+                sidebar.classList.remove('open');
+                overlay.classList.remove('active');
+            }
         }
 
         function formatBytes(bytes) {
@@ -1273,6 +1813,138 @@ function getHtmlContent(isFodMode: boolean = false): string {
             const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // Logs filter & rendering
+        function setLogFilter(category) {
+            logFilterCategory = category;
+            document.querySelectorAll('#logFilterPills .filter-pill').forEach(btn => {
+                const text = btn.innerText.trim().toLowerCase();
+                if (text === category.toLowerCase() || (category === 'failed' && text === 'errors')) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+            renderLogs();
+        }
+
+        function filterLogs() {
+            logSearchQuery = document.getElementById('logSearchInput').value.trim().toLowerCase();
+            renderLogs();
+        }
+
+        function renderLogs() {
+            const body = document.getElementById('logsBody');
+            if (!cachedLogs || cachedLogs.length === 0) {
+                body.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg><span class="empty-title">No recent sync activity</span><span class="empty-desc">Proton Drive is scanning your files. Activity logs will appear here as changes are detected.</span></div></td></tr>';
+                return;
+            }
+
+            const filtered = cachedLogs.filter(l => {
+                const path = l.file_path || '';
+                const msg = l.message || '';
+                const matchesSearch = !logSearchQuery || path.toLowerCase().includes(logSearchQuery) || msg.toLowerCase().includes(logSearchQuery);
+                
+                let matchesCategory = true;
+                const dir = l.direction.toLowerCase();
+                if (logFilterCategory === 'uploads') {
+                    matchesCategory = dir.startsWith('up') || dir === 'upload';
+                } else if (logFilterCategory === 'downloads') {
+                    matchesCategory = dir.startsWith('down') || dir === 'download';
+                } else if (logFilterCategory === 'system') {
+                    matchesCategory = dir === 'system';
+                } else if (logFilterCategory === 'failed') {
+                    matchesCategory = l.status === 'failed';
+                }
+
+                return matchesSearch && matchesCategory;
+            });
+
+            if (filtered.length === 0) {
+                body.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span class="empty-title">No matches found</span><span class="empty-desc">Try adjusting your search query or filters.</span></div></td></tr>';
+                return;
+            }
+
+            body.innerHTML = filtered.map(l => {
+                const time       = new Date(l.timestamp).toLocaleString();
+                const action     = l.direction.replace('_', ' ');
+                const statusClass= 'status-' + l.status;
+                const path       = l.file_path;
+                const msg        = l.message ? \`<span class="log-message">\${l.message}</span>\` : '';
+                return \`<tr>
+                    <td class="time-col">\${time}</td>
+                    <td class="log-direction" style="color: \${l.direction.startsWith('up') ? '#a78bfa' : '#34d399'}">\${action}</td>
+                    <td><span class="log-status \${statusClass}">\${l.status}</span></td>
+                    <td><strong class="file-path-text">\${path}</strong>\${msg}</td>
+                </tr>\`;
+            }).join('');
+        }
+
+        // Cache filter & rendering
+        function setCacheFilter(status) {
+            cacheFilterStatus = status;
+            document.querySelectorAll('#cacheFilterPills .filter-pill').forEach(btn => {
+                const text = btn.innerText.trim().toLowerCase();
+                if (text === status.toLowerCase() || (status === 'local' && text.includes('local')) || (status === 'stub' && text.includes('stub'))) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+            renderCache();
+        }
+
+        function filterCache() {
+            cacheSearchQuery = document.getElementById('cacheSearchInput').value.trim().toLowerCase();
+            renderCache();
+        }
+
+        function renderCache() {
+            const body = document.getElementById('cacheBody');
+            if (!cachedCacheFiles || cachedCacheFiles.length === 0) {
+                body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;"><div class="empty-state"><svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg><span class="empty-title">No files cached locally</span><span class="empty-desc">Access files in your mount folder to see them in local cache.</span></div></td></tr>';
+                return;
+            }
+
+            const filtered = cachedCacheFiles.filter(f => {
+                const name = f.local_path || f.name || '';
+                const matchesSearch = !cacheSearchQuery || name.toLowerCase().includes(cacheSearchQuery);
+
+                let matchesStatus = true;
+                if (cacheFilterStatus === 'local') {
+                    matchesStatus = f.is_local;
+                } else if (cacheFilterStatus === 'stub') {
+                    matchesStatus = !f.is_local;
+                }
+
+                return matchesSearch && matchesStatus;
+            });
+
+            if (filtered.length === 0) {
+                body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;"><div class="empty-state"><svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span class="empty-title">No matches found</span><span class="empty-desc">Try adjusting your search query or filters.</span></div></td></tr>';
+                return;
+            }
+
+            body.innerHTML = filtered.map(f => {
+                const name    = f.local_path || f.name;
+                const size    = formatBytes(f.size || 0);
+                const isLocal = f.is_local;
+                const uid     = f.node_uid;
+                const status  = isLocal
+                    ? \`<span class="log-status status-completed">&#8226; Local</span>\`
+                    : \`<span class="log-status" style="color:#8f8da8;background:rgba(255,255,255,0.04);">&#8226; Stub</span>\`;
+                const actions = uid ? \`
+                    \${isLocal ? \`<button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="evictFile('\${uid}')">Evict</button>\` : ''}
+                    \${!isLocal ? \`<button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="pinFile('\${uid}')">Pin</button>\` : ''}
+                \` : '';
+                return \`<tr>
+                    <td><strong class="file-path-text" title="\${name}">\${name}</strong></td>
+                    <td style="color:var(--text-muted);">\text{size}</td>
+                    <td>\${status}</td>
+                    <td style="display:flex;gap:6px;">\${actions}</td>
+                </tr>\`;
+            }).join('');
         }
 
         async function fetchStatus() {
@@ -1402,6 +2074,14 @@ function getHtmlContent(isFodMode: boolean = false): string {
                         btn.className = isPaused ? 'btn btn-primary' : 'btn btn-secondary';
                         btn.innerText  = isPaused ? 'Resume Sync' : 'Pause Sync';
                     }
+                    const syncBtn = document.getElementById('syncNowBtn');
+                    if (syncBtn) {
+                        if (isPaused) {
+                            syncBtn.setAttribute('disabled', 'true');
+                        } else {
+                            syncBtn.removeAttribute('disabled');
+                        }
+                    }
                 }
 
             } catch (err) {
@@ -1424,25 +2104,8 @@ function getHtmlContent(isFodMode: boolean = false): string {
         async function fetchLogs() {
             try {
                 const res  = await fetch('/api/logs');
-                const logs = await res.json();
-                const body = document.getElementById('logsBody');
-                if (logs.length === 0) {
-                    body.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;">No recent sync activity</td></tr>';
-                    return;
-                }
-                body.innerHTML = logs.map(l => {
-                    const time       = new Date(l.timestamp).toLocaleString();
-                    const action     = l.direction.replace('_', ' ');
-                    const statusClass= 'status-' + l.status;
-                    const path       = l.file_path;
-                    const msg        = l.message ? \`<span class="log-message">\${l.message}</span>\` : '';
-                    return \`<tr>
-                        <td class="time-col">\${time}</td>
-                        <td class="log-direction" style="color: \${l.direction.startsWith('up') ? '#a78bfa' : '#34d399'}">\${action}</td>
-                        <td><span class="log-status \${statusClass}">\${l.status}</span></td>
-                        <td><strong class="file-path-text">\${path}</strong>\${msg}</td>
-                    </tr>\`;
-                }).join('');
+                cachedLogs = await res.json();
+                renderLogs();
             } catch (err) {
                 console.error('Failed to fetch logs:', err);
             }
@@ -1453,37 +2116,14 @@ function getHtmlContent(isFodMode: boolean = false): string {
             try {
                 const res  = await fetch('/api/cached-files');
                 const data = await res.json();
-                const body = document.getElementById('cacheBody');
                 const statsEl = document.getElementById('cacheSizeDisplay');
 
                 if (data.stats) {
                     statsEl.innerText = \`\${data.stats.totalFiles} files cached — \${formatBytes(data.stats.totalBytes)} used on disk\`;
                 }
 
-                if (!data.files || data.files.length === 0) {
-                    body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;">No files cached locally</td></tr>';
-                    return;
-                }
-
-                body.innerHTML = data.files.map(f => {
-                    const name    = f.local_path || f.name;
-                    const size    = formatBytes(f.size || 0);
-                    const isLocal = f.is_local;
-                    const uid     = f.node_uid;
-                    const status  = isLocal
-                        ? \`<span class="log-status status-completed">&#8226; Local</span>\`
-                        : \`<span class="log-status" style="color:#8f8da8;background:rgba(255,255,255,0.04);">&#8226; Stub</span>\`;
-                    const actions = uid ? \`
-                        \${isLocal ? \`<button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="evictFile('\${uid}')">Evict</button>\` : ''}
-                        \${!isLocal ? \`<button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="pinFile('\${uid}')">Pin</button>\` : ''}
-                    \` : '';
-                    return \`<tr>
-                        <td><strong class="file-path-text" title="\${name}">\${name}</strong></td>
-                        <td style="color:var(--text-muted);">\${size}</td>
-                        <td>\${status}</td>
-                        <td style="display:flex;gap:6px;">\${actions}</td>
-                    </tr>\`;
-                }).join('');
+                cachedCacheFiles = data.files || [];
+                renderCache();
             } catch (err) {
                 console.error('Failed to fetch cached files:', err);
             }
