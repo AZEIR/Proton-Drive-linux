@@ -371,8 +371,8 @@ function getHtmlContent(isFodMode: boolean = false): string {
         :root {
             --bg-body: #0b0a12;
             --bg-sidebar: #0f0e1a;
-            --bg-card: rgba(22, 21, 38, 0.65);
-            --bg-card-hover: rgba(29, 27, 48, 0.85);
+            --bg-card: #151324;
+            --bg-card-hover: #1e1b33;
             --border-color: rgba(255, 255, 255, 0.06);
             --border-color-glow: rgba(108, 71, 255, 0.25);
             --primary: #6c47ff;
@@ -635,9 +635,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             align-items: center;
             justify-content: space-between;
             padding: 0 2rem;
-            background: rgba(11, 10, 18, 0.5);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
+            background: var(--bg-body);
             z-index: 9;
         }
 
@@ -783,8 +781,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             padding: 1.5rem;
             margin-bottom: 1.5rem;
             box-shadow: var(--shadow-premium);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
+            /* Removed expensive backdrop-filter to prevent scroll lag in Linux WebKit */
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
