@@ -62,7 +62,8 @@ jobs:
       - name: Build Desktop Application
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
-          LD_EXCLUDE_LIBS: "libwayland-client.so.0;libwayland-server.so.0;libwayland-egl.so.1"
+          LD_EXCLUDE_LIBS: "libwayland-client.so.0;libwayland-server.so.0;libwayland-egl.so.1;libEGL.so.1;libgbm.so.1;libGLESv2.so.2"
+          EXCLUDE_LIBS: "libwayland-client.so.0;libwayland-server.so.0;libwayland-egl.so.1;libEGL.so.1;libgbm.so.1;libGLESv2.so.2"
         run: bun run tauri build
 
       - name: Upload AppImage Package
