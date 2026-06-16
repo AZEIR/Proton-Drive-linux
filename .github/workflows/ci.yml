@@ -34,7 +34,6 @@ jobs:
         run: bun install
 
       - name: Build Sync and FUSE Daemons
-        working-directory: ./sdk/js/cli
         run: |
           bun run build:fuse
           bun run build:sync

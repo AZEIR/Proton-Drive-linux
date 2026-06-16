@@ -2,7 +2,9 @@
   "name": "proton-drive-desktop-root",
   "private": true,
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:fuse": "bun --cwd sdk/js/cli run build:fuse",
+    "build:sync": "bun --cwd sdk/js/cli run build:sync"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
