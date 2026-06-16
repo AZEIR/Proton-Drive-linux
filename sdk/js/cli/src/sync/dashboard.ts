@@ -387,7 +387,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             --text-muted: #8f8da8;
             --sidebar-active: rgba(108, 71, 255, 0.12);
             --sidebar-hover: rgba(255, 255, 255, 0.04);
-            --shadow-premium: 0 8px 32px 0 rgba(0, 0, 0, 0.35);
+            --shadow-premium: 0 4px 16px 0 rgba(0, 0, 0, 0.25);
         }
 
         * {
@@ -730,6 +730,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             flex-grow: 1;
             padding: 2rem;
             overflow-y: auto;
+            will-change: scroll-position;
         }
 
         /* Tab Panels */
@@ -1323,23 +1324,10 @@ function getHtmlContent(isFodMode: boolean = false): string {
             display: block;
         }
 
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: var(--bg-sidebar);
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #232136;
-            border-radius: 9999px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: #353252;
+        /* Custom scrollbar styling using modern standard properties for maximum WebKitGTK performance */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #232136 var(--bg-sidebar);
         }
 
         /* Bulk Deletion Warning Card */
