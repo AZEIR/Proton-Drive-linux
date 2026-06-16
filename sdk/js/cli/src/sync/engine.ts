@@ -1119,6 +1119,13 @@ export class SyncEngine extends EventEmitter {
                 const fileStat = existsSync(absolutePath) ? await stat(absolutePath).catch(() => null) : null;
                 const size = fileStat && !isDir ? fileStat.size : 0;
 
+                let addSha1 = '';
+                if (!isDir && fileStat) {
+                    try {
+                        addSha1 = await getSha1(absolutePath);
+                    } catch (e) {}
+                }
+
                 for (const [oldPath, pending] of this.pendingLocalDeletes.entries()) {
                     if (pending.isDir === isDir) {
                         const oldName = path.basename(oldPath);
@@ -1129,9 +1136,11 @@ export class SyncEngine extends EventEmitter {
                                 break;
                             }
                         } else {
-                            if (oldName === newName) {
-                                const oldMapped = this.db.getMapping(oldPath);
-                                if (oldMapped && oldMapped.size === size) {
+                            const oldMapped = this.db.getMapping(oldPath);
+                            if (oldMapped) {
+                                const isSameNameMove = oldName === newName && oldMapped.size === size;
+                                const isRenameOrHashMove = addSha1 && oldMapped.sha1 === addSha1;
+                                if (isSameNameMove || isRenameOrHashMove) {
                                     matchedOldPath = oldPath;
                                     matchedNodeUid = pending.nodeUid;
                                     break;
@@ -1258,6 +1267,24 @@ export class SyncEngine extends EventEmitter {
                         if (pending) {
                             this.pendingLocalDeletes.delete(relativePath);
                             if (!this.activeReconciles.has(relativePath)) {
+                                // Optimization: check if any parent directory of this path is also pending deletion
+                                let ancestorPending = false;
+                                const parts = relativePath.split('/');
+                                let current = '';
+                                for (let i = 0; i < parts.length - 1; i++) {
+                                    current = current ? `${current}/${parts[i]}` : parts[i];
+                                    if (this.pendingLocalDeletes.has(current)) {
+                                        ancestorPending = true;
+                                        break;
+                                    }
+                                }
+
+                                if (ancestorPending) {
+                                    // Parent directory is also being deleted, so we just clean up the local mapping
+                                    this.db.deleteMapping(relativePath);
+                                    return;
+                                }
+
                                 await this.deleteRemoteNode(pending.nodeUid, relativePath);
                             }
                         }
@@ -1853,8 +1880,10 @@ export class SyncEngine extends EventEmitter {
         });
     }
 
-    // Trash node remotely
     private async deleteRemoteNode(nodeUid: string, relativePath: string): Promise<void> {
+        const mapped = this.db.getMapping(relativePath);
+        const isDir = mapped ? mapped.is_dir === 1 : false;
+
         this.db.log(relativePath, 'delete_remote', 'syncing', 'Deleting file from cloud');
         try {
             await this.runWithRetry(async () => {
@@ -1863,6 +1892,17 @@ export class SyncEngine extends EventEmitter {
                 }
             });
             this.db.deleteMapping(relativePath);
+            
+            // If it is a directory, recursively delete child mappings in the database
+            if (isDir) {
+                const allMappings = this.db.getAllMappings();
+                for (const m of allMappings) {
+                    if (m.local_path.startsWith(`${relativePath}/`)) {
+                        this.db.deleteMapping(m.local_path);
+                    }
+                }
+            }
+
             this.db.log(relativePath, 'delete_remote', 'completed', 'Cloud file moved to trash');
         } catch (err: any) {
             this.logger.error(`Failed to delete remote node ${nodeUid}:`, err);

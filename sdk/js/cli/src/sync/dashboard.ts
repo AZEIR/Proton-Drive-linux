@@ -88,7 +88,8 @@ export function startDashboard(
             }
 
             if (url.pathname === '/api/logs') {
-                const logs = db.getRecentLogs(50);
+                const limit = parseInt(url.searchParams.get('limit') || '500', 10) || 500;
+                const logs = db.getRecentLogs(limit);
                 return Response.json(logs);
             }
 
@@ -1010,9 +1011,10 @@ function getHtmlContent(isFodMode: boolean = false): string {
             box-shadow: 0 0 6px var(--primary-glow);
         }
 
-        /* Activity Table Styling */
         .logs-table-wrapper {
             overflow-x: auto;
+            max-height: 550px;
+            overflow-y: auto;
             border-radius: 12px;
             border: 1px solid var(--border-color);
             background: rgba(0, 0, 0, 0.15);
@@ -1979,150 +1981,152 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 \` : '';
                 return \`<tr>
                     <td><strong class="file-path-text" title="\${name}">\${name}</strong></td>
-                    <td style="color:var(--text-muted);">\text{size}</td>
+                    <td style="color:var(--text-muted);">\${size}</td>
                     <td>\${status}</td>
                     <td style="display:flex;gap:6px;">\${actions}</td>
                 </tr>\`;
             }).join('');
         }
 
+        function renderStatus(data) {
+            // Status badge in topbar & Dashboard Hero
+            const badge = document.getElementById('statusBadge');
+            const text = document.getElementById('statusText');
+            badge.className = 'status-badge status-' + data.status;
+            text.innerText = data.status.replace('_', ' ');
+
+            // FOD mode — show mount point in hero card
+            if (FOD_MODE && data.mountPoint) {
+                const mp = document.getElementById('mountPointDisplay');
+                if (mp) mp.innerText = data.mountPoint;
+            }
+
+            // Update status description and icon in hero card
+            const heroTitle = document.getElementById('syncStateTitle');
+            const heroDesc  = document.getElementById('syncStateDesc');
+            const heroIcon  = document.getElementById('syncStatusIcon');
+
+            // Bulk deletion warning card visibility (legacy full-sync only)
+            const warningCard = document.getElementById('bulkDeletionWarningCard');
+            const warningDesc = document.getElementById('bulkDeletionWarningDesc');
+            if (data.status === 'bulk_deletion_warning') {
+                warningCard.style.display = 'block';
+                if (data.bulkDeletionCount > 0) {
+                    warningDesc.innerText = \`The sync engine detected that \${data.bulkDeletionCount} local files were deleted. Synchronization has been paused to protect your remote files in the cloud from being deleted.\`;
+                } else {
+                    warningDesc.innerText = \`The sync engine detected that your local sync folder was emptied. Synchronization has been paused to protect your remote files in the cloud from being deleted.\`;
+                }
+            } else {
+                warningCard.style.display = 'none';
+            }
+
+            if (data.status === 'synced') {
+                heroTitle.innerText = FOD_MODE ? 'FUSE filesystem mounted' : 'Your files are up to date';
+                heroDesc.innerText  = FOD_MODE ? 'Files are served on-demand. Accessing a file downloads it transparently.' : 'Proton Drive is actively monitoring your sync folder.';
+                heroIcon.innerHTML  = \`<svg class="hero-icon success" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>\`;
+            } else if (data.status === 'bulk_deletion_warning') {
+                heroTitle.innerText = 'Sync Paused - Deletion Warning';
+                heroDesc.innerText  = 'A large number of local deletions was intercepted. Confirm or cancel them to resume sync.';
+                heroIcon.innerHTML  = \`<svg class="hero-icon danger pulse" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>\`;
+            } else if (data.status === 'syncing') {
+                heroTitle.innerText = 'Syncing your changes...';
+                heroDesc.innerText  = 'Uploading/downloading files to keep your drive in sync.';
+                heroIcon.innerHTML  = \`<svg class="hero-icon primary rotating" viewBox="0 0 24 24" fill="currentColor"><path d="M19 8l-4 4h3c0 3.31-2.69 6-6 6-1.01 0-1.97-.25-2.8-.7l-1.46 1.46C8.97 19.54 10.43 20 12 20c4.42 0 8-3.58 8-8h3l-4-4zM6 12c0-3.31 2.69-6 6-6 1.01 0 1.97.25 2.8.7l1.46-1.46C15.03 4.46 13.57 4 12 4c-4.42 0-8 3.58-8 8H1l4 4 4-4H6z"/></svg>\`;
+            } else if (data.status === 'scanning') {
+                heroTitle.innerText = 'Scanning repositories...';
+                heroDesc.innerText  = 'Checking local and cloud directories for changes.';
+                heroIcon.innerHTML  = \`<svg class="hero-icon warning pulse" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>\`;
+            } else if (data.status === 'offline') {
+                heroTitle.innerText = 'Sync Offline';
+                heroDesc.innerText  = 'Connection to Proton servers lost. Sync will resume automatically when online.';
+                heroIcon.innerHTML  = \`<svg class="hero-icon warning pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.5"></path><path d="M5 12.5a10.94 10.94 0 0 1 2.28-1.44"></path><path d="M8.66 8.66A6.96 6.96 0 0 1 12 7.5a6.96 6.96 0 0 1 3.34 1.16"></path><path d="M12 18.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"></path><path d="M10.12 13.12a2.97 2.97 0 0 1 3.76 0"></path></svg>\`;
+            } else if (data.status === 'paused') {
+                heroTitle.innerText = 'Sync is paused';
+                heroDesc.innerText  = 'Synchronization is paused. Changes will not be synced.';
+                heroIcon.innerHTML  = \`<svg class="hero-icon muted" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>\`;
+            } else {
+                heroTitle.innerText = 'Authentication required';
+                heroDesc.innerText  = 'Please sign in to Proton Drive via CLI to enable sync.';
+                heroIcon.innerHTML  = \`<svg class="hero-icon danger" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>\`;
+            }
+
+            // Sync path input field (full-sync mode only)
+            const pathInput = document.getElementById('syncPath');
+            if (pathInput && document.activeElement !== pathInput) {
+                pathInput.value = data.localSyncRoot || data.mountPoint || '';
+            }
+
+            // User Profile Email and Status
+            document.getElementById('userEmail').innerText = data.email;
+            const userStatus = document.getElementById('userStatus');
+            if (data.email && data.email !== 'Not Logged In') {
+                document.getElementById('avatarLetter').innerText = data.email[0].toUpperCase();
+                userStatus.innerText = 'Connected';
+                userStatus.style.color = 'var(--success)';
+            } else {
+                document.getElementById('avatarLetter').innerText = '?';
+                userStatus.innerText = 'Disconnected';
+                userStatus.style.color = 'var(--danger)';
+            }
+
+            // Active transfers section
+            const transfersCard = document.getElementById('transfersCard');
+            const transfersList = document.getElementById('transfersList');
+            if (data.activeTransfers && data.activeTransfers.length > 0) {
+                transfersCard.style.display = 'block';
+                transfersList.innerHTML = data.activeTransfers.map(t => {
+                    const name = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
+                    const isUpload = t.type === 'upload';
+                    const iconSvg = isUpload
+                        ? \`<svg class="transfer-type-icon upload-color" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zm0-10h4v6h6v-6h4l-7-7-7 7z"/></svg>\`
+                        : \`<svg class="transfer-type-icon download-color" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>\`;
+
+                    const percent = t.percent || 0;
+                    const progressText = t.size > 0
+                        ? \`\${formatBytes(t.transferred)} / \${formatBytes(t.size)} (\${percent}%)\`
+                        : \`\${isUpload ? 'Uploading' : 'Downloading'}…\`;
+
+                    return \`<li class="transfer-item">
+                        <div class="transfer-header">
+                            <span class="transfer-name-wrapper">
+                                \${iconSvg}
+                                <span class="transfer-name" title="\${t.filePath || t.localPath || ''}">\${name}</span>
+                            </span>
+                            <span class="transfer-meta">\${progressText}</span>
+                        </div>
+                        <div class="transfer-bar-bg">
+                            <div class="transfer-bar-fill \${isUpload ? 'upload-bar' : 'download-bar'}" style="width: \${percent}%"></div>
+                        </div>
+                    </li>\`;
+                }).join('');
+            } else {
+                transfersCard.style.display = 'none';
+            }
+
+            // Update pause button state (full-sync only)
+            if (!FOD_MODE) {
+                isPaused = data.isPaused;
+                const btn = document.getElementById('btnPause');
+                if (btn) {
+                    btn.className = isPaused ? 'btn btn-primary' : 'btn btn-secondary';
+                    btn.innerText  = isPaused ? 'Resume Sync' : 'Pause Sync';
+                }
+                const syncBtn = document.getElementById('syncNowBtn');
+                if (syncBtn) {
+                    if (isPaused) {
+                        syncBtn.setAttribute('disabled', 'true');
+                    } else {
+                        syncBtn.removeAttribute('disabled');
+                    }
+                }
+            }
+        }
+
         async function fetchStatus() {
             try {
                 const res = await fetch('/api/status');
                 const data = await res.json();
-
-                // Status badge in topbar & Dashboard Hero
-                const badge = document.getElementById('statusBadge');
-                const text = document.getElementById('statusText');
-                badge.className = 'status-badge status-' + data.status;
-                text.innerText = data.status.replace('_', ' ');
-
-                // FOD mode — show mount point in hero card
-                if (FOD_MODE && data.mountPoint) {
-                    const mp = document.getElementById('mountPointDisplay');
-                    if (mp) mp.innerText = data.mountPoint;
-                }
-
-                // Update status description and icon in hero card
-                const heroTitle = document.getElementById('syncStateTitle');
-                const heroDesc  = document.getElementById('syncStateDesc');
-                const heroIcon  = document.getElementById('syncStatusIcon');
-
-                // Bulk deletion warning card visibility (legacy full-sync only)
-                const warningCard = document.getElementById('bulkDeletionWarningCard');
-                const warningDesc = document.getElementById('bulkDeletionWarningDesc');
-                if (data.status === 'bulk_deletion_warning') {
-                    warningCard.style.display = 'block';
-                    if (data.bulkDeletionCount > 0) {
-                        warningDesc.innerText = \`The sync engine detected that \${data.bulkDeletionCount} local files were deleted. Synchronization has been paused to protect your remote files in the cloud from being deleted.\`;
-                    } else {
-                        warningDesc.innerText = \`The sync engine detected that your local sync folder was emptied. Synchronization has been paused to protect your remote files in the cloud from being deleted.\`;
-                    }
-                } else {
-                    warningCard.style.display = 'none';
-                }
-
-                if (data.status === 'synced') {
-                    heroTitle.innerText = FOD_MODE ? 'FUSE filesystem mounted' : 'Your files are up to date';
-                    heroDesc.innerText  = FOD_MODE ? 'Files are served on-demand. Accessing a file downloads it transparently.' : 'Proton Drive is actively monitoring your sync folder.';
-                    heroIcon.innerHTML  = \`<svg class="hero-icon success" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>\`;
-                } else if (data.status === 'bulk_deletion_warning') {
-                    heroTitle.innerText = 'Sync Paused - Deletion Warning';
-                    heroDesc.innerText  = 'A large number of local deletions was intercepted. Confirm or cancel them to resume sync.';
-                    heroIcon.innerHTML  = \`<svg class="hero-icon danger pulse" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>\`;
-                } else if (data.status === 'syncing') {
-                    heroTitle.innerText = 'Syncing your changes...';
-                    heroDesc.innerText  = 'Uploading/downloading files to keep your drive in sync.';
-                    heroIcon.innerHTML  = \`<svg class="hero-icon primary rotating" viewBox="0 0 24 24" fill="currentColor"><path d="M19 8l-4 4h3c0 3.31-2.69 6-6 6-1.01 0-1.97-.25-2.8-.7l-1.46 1.46C8.97 19.54 10.43 20 12 20c4.42 0 8-3.58 8-8h3l-4-4zM6 12c0-3.31 2.69-6 6-6 1.01 0 1.97.25 2.8.7l1.46-1.46C15.03 4.46 13.57 4 12 4c-4.42 0-8 3.58-8 8H1l4 4 4-4H6z"/></svg>\`;
-                } else if (data.status === 'scanning') {
-                    heroTitle.innerText = 'Scanning repositories...';
-                    heroDesc.innerText  = 'Checking local and cloud directories for changes.';
-                    heroIcon.innerHTML  = \`<svg class="hero-icon warning pulse" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>\`;
-                } else if (data.status === 'offline') {
-                    heroTitle.innerText = 'Sync Offline';
-                    heroDesc.innerText  = 'Connection to Proton servers lost. Sync will resume automatically when online.';
-                    heroIcon.innerHTML  = \`<svg class="hero-icon warning pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.5"></path><path d="M5 12.5a10.94 10.94 0 0 1 2.28-1.44"></path><path d="M8.66 8.66A6.96 6.96 0 0 1 12 7.5a6.96 6.96 0 0 1 3.34 1.16"></path><path d="M12 18.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"></path><path d="M10.12 13.12a2.97 2.97 0 0 1 3.76 0"></path></svg>\`;
-                } else if (data.status === 'paused') {
-                    heroTitle.innerText = 'Sync is paused';
-                    heroDesc.innerText  = 'Synchronization is paused. Changes will not be synced.';
-                    heroIcon.innerHTML  = \`<svg class="hero-icon muted" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>\`;
-                } else {
-                    heroTitle.innerText = 'Authentication required';
-                    heroDesc.innerText  = 'Please sign in to Proton Drive via CLI to enable sync.';
-                    heroIcon.innerHTML  = \`<svg class="hero-icon danger" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>\`;
-                }
-
-                // Sync path input field (full-sync mode only)
-                const pathInput = document.getElementById('syncPath');
-                if (pathInput && document.activeElement !== pathInput) {
-                    pathInput.value = data.localSyncRoot || data.mountPoint || '';
-                }
-
-                // User Profile Email and Status
-                document.getElementById('userEmail').innerText = data.email;
-                const userStatus = document.getElementById('userStatus');
-                if (data.email && data.email !== 'Not Logged In') {
-                    document.getElementById('avatarLetter').innerText = data.email[0].toUpperCase();
-                    userStatus.innerText = 'Connected';
-                    userStatus.style.color = 'var(--success)';
-                } else {
-                    document.getElementById('avatarLetter').innerText = '?';
-                    userStatus.innerText = 'Disconnected';
-                    userStatus.style.color = 'var(--danger)';
-                }
-
-                // Active transfers section
-                const transfersCard = document.getElementById('transfersCard');
-                const transfersList = document.getElementById('transfersList');
-                if (data.activeTransfers && data.activeTransfers.length > 0) {
-                    transfersCard.style.display = 'block';
-                    transfersList.innerHTML = data.activeTransfers.map(t => {
-                        const name = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
-                        const isUpload = t.type === 'upload';
-                        const iconSvg = isUpload
-                            ? \`<svg class="transfer-type-icon upload-color" viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zm0-10h4v6h6v-6h4l-7-7-7 7z"/></svg>\`
-                            : \`<svg class="transfer-type-icon download-color" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>\`;
-
-                        const percent = t.percent || 0;
-                        const progressText = t.size > 0
-                            ? \`\${formatBytes(t.transferred)} / \${formatBytes(t.size)} (\${percent}%)\`
-                            : \`\${isUpload ? 'Uploading' : 'Downloading'}…\`;
-
-                        return \`<li class="transfer-item">
-                            <div class="transfer-header">
-                                <span class="transfer-name-wrapper">
-                                    \${iconSvg}
-                                    <span class="transfer-name" title="\${t.filePath || t.localPath || ''}">\${name}</span>
-                                </span>
-                                <span class="transfer-meta">\${progressText}</span>
-                            </div>
-                            <div class="transfer-bar-bg">
-                                <div class="transfer-bar-fill \${isUpload ? 'upload-bar' : 'download-bar'}" style="width: \${percent}%"></div>
-                            </div>
-                        </li>\`;
-                    }).join('');
-                } else {
-                    transfersCard.style.display = 'none';
-                }
-
-                // Update pause button state (full-sync only)
-                if (!FOD_MODE) {
-                    isPaused = data.isPaused;
-                    const btn = document.getElementById('btnPause');
-                    if (btn) {
-                        btn.className = isPaused ? 'btn btn-primary' : 'btn btn-secondary';
-                        btn.innerText  = isPaused ? 'Resume Sync' : 'Pause Sync';
-                    }
-                    const syncBtn = document.getElementById('syncNowBtn');
-                    if (syncBtn) {
-                        if (isPaused) {
-                            syncBtn.setAttribute('disabled', 'true');
-                        } else {
-                            syncBtn.removeAttribute('disabled');
-                        }
-                    }
-                }
-
+                renderStatus(data);
             } catch (err) {
                 console.error('Failed to fetch status:', err);
             }
