@@ -5,6 +5,7 @@ import { Credentials } from './credentials';
 import { PlaintextFileSessionStore } from './fileCredentialsStore';
 import type { CredentialsStore } from './interface';
 import { SecretsSessionStore } from './secretCredentialsStore';
+import { FallbackCredentialsStore } from './fallbackCredentialsStore';
 
 export type { Credentials } from './credentials';
 
@@ -17,5 +18,10 @@ function createAuthSessionStore(config: Config, logger: Logger): CredentialsStor
     if (config.unsafeSecrets) {
         return new PlaintextFileSessionStore(config.appDir, logger);
     }
-    return new SecretsSessionStore(logger);
+    return new FallbackCredentialsStore(
+        new SecretsSessionStore(logger),
+        new PlaintextFileSessionStore(config.appDir, logger),
+        logger,
+    );
 }
+

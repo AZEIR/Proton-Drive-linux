@@ -545,14 +545,6 @@ function getHtmlContent(isFodMode: boolean = false): string {
             width: 0%;
             transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
             box-shadow: 0 0 10px rgba(108, 71, 255, 0.4);
-            background-size: 200% 200%;
-            animation: gradient-shift 5s ease infinite;
-        }
-
-        @keyframes gradient-shift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
         }
 
         .storage-details {
@@ -670,6 +662,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         /* Status colors and glowing animations */
+        /* Status colors and styling */
         .status-synced {
             color: var(--success);
             border-color: rgba(16, 185, 129, 0.25);
@@ -677,13 +670,6 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
         .status-synced .dot {
             background: var(--success);
-            animation: pulse-glow-success 2.5s infinite;
-        }
-
-        @keyframes pulse-glow-success {
-            0% { box-shadow: 0 0 2px rgba(16, 185, 129, 0.4); }
-            50% { box-shadow: 0 0 10px rgba(16, 185, 129, 0.8); }
-            100% { box-shadow: 0 0 2px rgba(16, 185, 129, 0.4); }
         }
 
         .status-syncing {
@@ -693,13 +679,6 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
         .status-syncing .dot {
             background: var(--primary);
-            animation: blink 1.2s infinite alternate, pulse-glow-primary 1.5s infinite;
-        }
-
-        @keyframes pulse-glow-primary {
-            0% { box-shadow: 0 0 2px rgba(108, 71, 255, 0.4); }
-            50% { box-shadow: 0 0 12px rgba(108, 71, 255, 0.8); }
-            100% { box-shadow: 0 0 2px rgba(108, 71, 255, 0.4); }
         }
 
         .status-scanning {
@@ -709,13 +688,6 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
         .status-scanning .dot {
             background: var(--warning);
-            animation: blink 1.2s infinite alternate, pulse-glow-warning 1.5s infinite;
-        }
-
-        @keyframes pulse-glow-warning {
-            0% { box-shadow: 0 0 2px rgba(245, 158, 11, 0.4); }
-            50% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.8); }
-            100% { box-shadow: 0 0 2px rgba(245, 158, 11, 0.4); }
         }
 
         .status-paused {
@@ -733,7 +705,6 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
         .status-offline .dot {
             background: var(--warning);
-            animation: blink 1.2s infinite alternate;
         }
 
         .status-error {
@@ -743,12 +714,15 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
         .status-error .dot {
             background: var(--danger);
-            box-shadow: 0 0 8px var(--danger);
         }
 
-        @keyframes blink {
-            0% { opacity: 0.4; }
-            100% { opacity: 1; }
+        .status-auth_required {
+            color: var(--danger);
+            border-color: rgba(239, 68, 68, 0.25);
+            background: rgba(239, 68, 68, 0.06);
+        }
+        .status-auth_required .dot {
+            background: var(--danger);
         }
 
         /* Content Scroll Container */
@@ -781,14 +755,12 @@ function getHtmlContent(isFodMode: boolean = false): string {
             padding: 1.5rem;
             margin-bottom: 1.5rem;
             box-shadow: var(--shadow-premium);
-            /* Removed expensive backdrop-filter to prevent scroll lag in Linux WebKit */
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
         }
 
         .card:hover {
-            border-color: rgba(108, 71, 255, 0.2);
-            box-shadow: 0 12px 40px rgba(108, 71, 255, 0.06);
-            transform: translateY(-2px);
+            border-color: rgba(108, 71, 255, 0.3);
+            box-shadow: 0 8px 24px rgba(108, 71, 255, 0.08);
         }
 
         .card h2 {
@@ -858,12 +830,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         .pulse {
-            animation: pulse-grow 2s infinite alternate;
-        }
-
-        @keyframes pulse-grow {
-            0% { transform: scale(0.94); opacity: 0.85; }
-            100% { transform: scale(1.06); opacity: 1; }
+            /* Pulse animation removed to prevent layout & rendering lag */
         }
 
         .status-info h2 {
