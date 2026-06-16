@@ -2,6 +2,7 @@ import { exec } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
+import { openBrowserUrl } from '../cli/openBrowserUrl';
 
 export interface FodHooks {
     isFuseMode:   boolean;
@@ -22,6 +23,7 @@ export function startDashboard(
     fod?: FodHooks,
 ) {
     const logger = session.logger;
+    let isAuthenticating = false;
 
     const server = Bun.serve({
         port,
@@ -54,6 +56,7 @@ export function startDashboard(
                         isPaused:        false,
                         bulkDeletionCount: 0,
                         email,
+                        isAuthenticating,
                     });
                 }
 
@@ -65,7 +68,55 @@ export function startDashboard(
                     isPaused:          engine!.getStatus() === 'paused',
                     bulkDeletionCount: engine!.getBulkDeletionCount(),
                     email,
+                    isAuthenticating,
                 });
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/login') {
+                if (session.auth.isLoggedIn()) {
+                    return Response.json({ ok: false, error: 'Already logged in' }, { status: 400 });
+                }
+                if (isAuthenticating) {
+                    return Response.json({ ok: false, error: 'Authentication already in progress' }, { status: 400 });
+                }
+
+                isAuthenticating = true;
+                db.log('system', 'system', 'syncing', 'Starting web-based login process');
+                if (engine) {
+                    engine.emit('statusChanged');
+                }
+
+                try {
+                    const signInUrlPromise = new Promise<string>((resolve, reject) => {
+                        session.auth.authViaWeb((signInUrl: string) => {
+                            resolve(signInUrl);
+                            openBrowserUrl(signInUrl);
+                        }).then(async () => {
+                            isAuthenticating = false;
+                            db.log('system', 'system', 'completed', 'Authentication successful. Starting sync engine...');
+                            if (engine) {
+                                await engine.start();
+                                engine.emit('statusChanged');
+                            }
+                        }).catch((err: any) => {
+                            isAuthenticating = false;
+                            db.log('system', 'system', 'failed', `Authentication failed: ${err.message || err}`);
+                            logger.error('Web authentication failed:', err);
+                            if (engine) {
+                                engine.emit('statusChanged');
+                            }
+                        });
+                    });
+
+                    const signInUrl = await signInUrlPromise;
+                    return Response.json({ ok: true, signInUrl });
+                } catch (err: any) {
+                    isAuthenticating = false;
+                    if (engine) {
+                        engine.emit('statusChanged');
+                    }
+                    return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
+                }
             }
 
             if (url.pathname === '/api/quota') {
@@ -204,7 +255,7 @@ export function startDashboard(
                                 const status = engine!.getStatus();
                                 const transfers = engine!.getActiveTransfers();
                                 const bulkCount = engine!.getBulkDeletionCount();
-                                const payload = JSON.stringify({ status, activeTransfers: transfers, bulkDeletionCount: bulkCount });
+                                const payload = JSON.stringify({ status, activeTransfers: transfers, bulkDeletionCount: bulkCount, isAuthenticating });
                                 controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
                             } catch {
                                 // Client disconnected
@@ -1633,9 +1684,14 @@ function getHtmlContent(isFodMode: boolean = false): string {
                                     </div>
                                 </div>
                                 <div class="card-hero-actions">
-                                    <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
-                                    <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
-                                    <button class="btn" onclick="openFolder()">Open Folder</button>
+                                    <div id="syncActions" style="display: flex; gap: 8px;">
+                                        <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
+                                        <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
+                                        <button class="btn" onclick="openFolder()">Open Folder</button>
+                                    </div>
+                                    <div id="authActions" style="display: none; gap: 8px;">
+                                        <button id="btnLogin" class="btn btn-primary" onclick="login()">Login to Proton Drive</button>
+                                    </div>
                                 </div>
                             </div>
 
@@ -2046,8 +2102,34 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 heroIcon.innerHTML  = \`<svg class="hero-icon muted" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>\`;
             } else {
                 heroTitle.innerText = 'Authentication required';
-                heroDesc.innerText  = 'Please sign in to Proton Drive via CLI to enable sync.';
+                heroDesc.innerText  = 'Please sign in to Proton Drive to enable sync.';
                 heroIcon.innerHTML  = \`<svg class="hero-icon danger" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>\`;
+            }
+
+            // Toggle sync/auth action controls visibility
+            const syncActions = document.getElementById('syncActions');
+            const authActions = document.getElementById('authActions');
+            if (syncActions && authActions) {
+                if (data.status === 'auth_required') {
+                    syncActions.style.display = 'none';
+                    authActions.style.display = 'flex';
+                } else {
+                    syncActions.style.display = 'flex';
+                    authActions.style.display = 'none';
+                }
+            }
+
+            const btn = document.getElementById('btnLogin');
+            if (btn) {
+                if (data.isAuthenticating) {
+                    btn.innerText = 'Waiting for Authentication...';
+                    btn.disabled = true;
+                    isLoggingIn = true;
+                } else {
+                    btn.innerText = 'Login to Proton Drive';
+                    btn.disabled = false;
+                    isLoggingIn = false;
+                }
             }
 
             // Sync path input field (full-sync mode only)
@@ -2256,8 +2338,45 @@ function getHtmlContent(isFodMode: boolean = false): string {
         async function logout() {
             if (confirm('Are you sure you want to log out from Proton Drive?')) {
                 await fetch('/api/logout', { method: 'POST' });
-                alert('Logged out. Please run login from the terminal to reconnect.');
+                alert('Logged out successfully.');
                 location.reload();
+            }
+        }
+
+        let isLoggingIn = false;
+        async function login() {
+            if (isLoggingIn) return;
+            isLoggingIn = true;
+            
+            const btn = document.getElementById('btnLogin');
+            if (btn) {
+                btn.innerText = 'Opening Browser...';
+                btn.disabled = true;
+            }
+
+            try {
+                const res = await fetch('/api/login', { method: 'POST' });
+                const result = await res.json();
+                if (result.ok) {
+                    if (btn) {
+                        btn.innerText = 'Waiting for Authentication...';
+                    }
+                    alert('Proton Drive login page has been opened in your browser. Please sign in there, and this dashboard will automatically update once done.');
+                } else {
+                    alert('Failed to start login: ' + (result.error || 'Unknown error'));
+                    if (btn) {
+                        btn.innerText = 'Login to Proton Drive';
+                        btn.disabled = false;
+                    }
+                    isLoggingIn = false;
+                }
+            } catch (err) {
+                alert('Network error trying to start login: ' + err.message);
+                if (btn) {
+                    btn.innerText = 'Login to Proton Drive';
+                    btn.disabled = false;
+                }
+                isLoggingIn = false;
             }
         }
 

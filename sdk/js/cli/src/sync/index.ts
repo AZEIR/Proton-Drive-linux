@@ -31,14 +31,11 @@ export async function runSync(port: number = 8085) {
     const db = new SyncDatabase();
     const engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
 
-    // Start sync engine if logged in
-    if (!session.auth.isLoggedIn()) {
-        logger.error('User is not logged in! Please run auth login first.');
-        db.log('system', 'system', 'failed', 'Authentication required. Open the dashboard or run login to connect.');
-        process.exit(1);
-    }
-
     if (process.env.PROTON_SYNC_ONCE === 'true') {
+        if (!session.auth.isLoggedIn()) {
+            logger.error('User is not logged in! One-time sync requires authentication.');
+            process.exit(1);
+        }
         try {
             await engine.syncOnce();
             logger.info('One-time sync complete.');
@@ -51,7 +48,12 @@ export async function runSync(port: number = 8085) {
         }
     }
 
-    await engine.start();
+    if (session.auth.isLoggedIn()) {
+        await engine.start();
+    } else {
+        logger.warn('User is not logged in. Starting daemon dashboard for authentication...');
+        db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
+    }
 
     // Start Dashboard
     const server = startDashboard(db, engine, session, port);
