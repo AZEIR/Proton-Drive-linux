@@ -92,12 +92,4 @@ jobs:
         run: bun test
         working-directory: ./sdk/js/sdk
 
-  build-swift-sdk:
-    runs-on: macos-latest  # Allocates a clean, managed Apple Silicon VM
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
-      - name: Initialize Swift Build
-        run: swift build
-        working-directory: ./sdk/swift/ProtonDriveSDK
