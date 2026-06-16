@@ -39,8 +39,18 @@ jobs:
 
       - name: Build Sync and FUSE Daemons
         run: |
-          bun run compile:fuse
-          bun run compile:sync
+          echo "=== Building FUSE Daemon ==="
+          bun run compile:fuse > compile_fuse.log 2>&1 || {
+            err_msg=$(cat compile_fuse.log | head -n 100 | python3 -c "import sys; print(sys.stdin.read().replace('\n', '%0A'))")
+            echo "::error::FUSE Compilation Failed:%0A$err_msg"
+            exit 1
+          }
+          echo "=== Building Sync Daemon ==="
+          bun run compile:sync > compile_sync.log 2>&1 || {
+            err_msg=$(cat compile_sync.log | head -n 100 | python3 -c "import sys; print(sys.stdin.read().replace('\n', '%0A'))")
+            echo "::error::Sync Compilation Failed:%0A$err_msg"
+            exit 1
+          }
 
       - name: Diagnostic - Find Daemons
         run: |
