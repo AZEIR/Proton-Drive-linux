@@ -730,7 +730,8 @@ function getHtmlContent(isFodMode: boolean = false): string {
             flex-grow: 1;
             padding: 2rem;
             overflow-y: auto;
-            will-change: scroll-position;
+            will-change: transform;
+            -webkit-overflow-scrolling: touch;
         }
 
         /* Tab Panels */
@@ -756,12 +757,11 @@ function getHtmlContent(isFodMode: boolean = false): string {
             padding: 1.5rem;
             margin-bottom: 1.5rem;
             box-shadow: var(--shadow-premium);
-            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+            transition: border-color 0.15s ease;
         }
 
         .card:hover {
-            border-color: rgba(108, 71, 255, 0.3);
-            box-shadow: 0 8px 24px rgba(108, 71, 255, 0.08);
+            border-color: rgba(108, 71, 255, 0.35);
         }
 
         .card h2 {
@@ -823,6 +823,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         .rotating {
             animation: rotate 2.2s linear infinite;
+            will-change: transform;
         }
 
         @keyframes rotate {
@@ -993,25 +994,8 @@ function getHtmlContent(isFodMode: boolean = false): string {
             height: 100%;
             border-radius: 9999px;
             width: 0%;
-            transition: width 0.3s ease;
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
-            background-size: 30px 30px;
-            background-image: linear-gradient(
-                45deg,
-                rgba(255, 255, 255, 0.15) 25%,
-                transparent 25%,
-                transparent 50%,
-                rgba(255, 255, 255, 0.15) 50%,
-                rgba(255, 255, 255, 0.15) 75%,
-                transparent 75%,
-                transparent
-            );
-            animation: progress-bar-stripes 1s linear infinite;
-        }
-
-        @keyframes progress-bar-stripes {
-            0% { background-position: 0 0; }
-            100% { background-position: 30px 0; }
         }
 
         .upload-bar {

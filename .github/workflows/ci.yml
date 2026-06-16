@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-tauri:
-    runs-on: ubuntu-latest  # Allocates a clean, managed Ubuntu VM
+    runs-on: ubuntu-22.04  # Standard stable runner that compiles with maximum system compatibility
     permissions:
       contents: write
     steps:
@@ -62,8 +62,7 @@ jobs:
       - name: Build Desktop Application
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
-          LD_EXCLUDE_LIBS: "libwayland-client.so.0;libwayland-server.so.0;libwayland-egl.so.1;libEGL.so.1;libgbm.so.1;libGLESv2.so.2"
-          EXCLUDE_LIBS: "libwayland-client.so.0;libwayland-server.so.0;libwayland-egl.so.1;libEGL.so.1;libgbm.so.1;libGLESv2.so.2"
+          NO_STRIP: 1
         run: bun run tauri build
 
       - name: Upload Desktop Packages
