@@ -23,6 +23,10 @@ export class Database {
         try {
             this.run('PRAGMA journal_mode = WAL');
             this.run('PRAGMA busy_timeout = 5000');
+            // WAL mode does not need FULL sync — NORMAL is crash-safe and ~2x faster
+            this.run('PRAGMA synchronous = NORMAL');
+            // 8 MB page cache (negative value = KiB units), reduces repeated block reads
+            this.run('PRAGMA cache_size = -8000');
         } catch (err) {
             // Ignore errors (e.g. if database is read-only)
         }

@@ -1,12 +1,13 @@
-import { DriveEvent, DriveEventType, NodeEntity, NodeType, ProtonDriveClient } from '@protontech/drive-sdk';
+import { DriveEvent, DriveEventType, NodeEntity, NodeType, ProtonDriveClient, SDKEvent } from '@protontech/drive-sdk';
 import chokidar from 'chokidar';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, utimesSync } from 'node:fs';
 import { mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getSha1 } from '../commands/fileSystem/digest';
 import { SyncDatabase, SyncMapping } from './db';
+import { IgnoreMatcher, PROTONIGNORE_FILENAME } from './ignore';
 
 export class SyncEngine extends EventEmitter {
     private db: SyncDatabase;
@@ -33,11 +34,17 @@ export class SyncEngine extends EventEmitter {
     private concurrencyLimit: number = 3;
     private activeReconciles: Set<string> = new Set();
     private offlineMonitorPromise: Promise<void> | null = null;
+    private unsubscribeOffline: (() => void)[] = [];
     private cachedLocalFileCount: number = 0;
+    /** In-memory count of DB mappings — avoids full table scan on every unlink event. */
+    private cachedMappingCount: number = 0;
     private livenessInterval: any = null;
     private activeFolderCreations: Map<string, Promise<string>> = new Map();
     private activeDownloads: Map<string, { abort: () => Promise<void> }> = new Map();
     private activeUploads: Map<string, { abort: () => Promise<void> }> = new Map();
+    private pendingLocalDeletes: Map<string, { timestamp: number; isDir: boolean; nodeUid: string }> = new Map();
+    /** Ignore matcher — enforces built-in defaults and user .protonignore rules. */
+    private ignoreMatcher!: IgnoreMatcher;
 
 
     constructor(db: SyncDatabase, sdk: ProtonDriveClient, auth: any, logger: any) {
@@ -56,6 +63,7 @@ export class SyncEngine extends EventEmitter {
         const defaultPath = path.join(homedir(), 'P-Drive');
         this.localSyncRoot = path.resolve(this.db.getConfig('local_sync_path', defaultPath));
         this.isPaused = this.db.getConfig('is_sync_paused', '0') === '1';
+        this.ignoreMatcher = new IgnoreMatcher(this.localSyncRoot);
     }
 
     getLocalSyncRoot(): string {
@@ -74,6 +82,8 @@ export class SyncEngine extends EventEmitter {
 
         this.localSyncRoot = resolvedPath;
         this.db.setConfig('local_sync_path', resolvedPath);
+        // Rebuild ignore rules for the new sync root
+        this.ignoreMatcher = new IgnoreMatcher(resolvedPath);
 
         // Reset database mappings (since we changed sync folders)
         this.db.clearMappings();
@@ -166,6 +176,20 @@ export class SyncEngine extends EventEmitter {
             // Subscribe to remote events
             await this.subscribeToRemoteEvents(rootFolder.treeEventScopeId);
 
+            // Listen to SDK online/offline state change events
+            this.unsubscribeOffline.push(
+                this.sdk.onMessage(SDKEvent.TransfersPaused, () => {
+                    this.logger.warn('[offline-listener] SDK detected connection loss (transfers paused).');
+                    this.startOfflineMonitor();
+                })
+            );
+            this.unsubscribeOffline.push(
+                this.sdk.onMessage(SDKEvent.TransfersResumed, () => {
+                    this.logger.info('[offline-listener] SDK detected connection recovery (transfers resumed).');
+                    this.handleOnlineEvent();
+                })
+            );
+
             // Start a liveness monitor to detect sleep/resume and stale connections
             this.startLivenessMonitor();
         } catch (error: any) {
@@ -204,6 +228,14 @@ export class SyncEngine extends EventEmitter {
             this.livenessInterval = null;
         }
         this.isOffline = false;
+
+        // Unsubscribe from offline listeners
+        for (const unsub of this.unsubscribeOffline) {
+            try {
+                unsub();
+            } catch (err) {}
+        }
+        this.unsubscribeOffline = [];
         
         if (this.watcher) {
             await this.watcher.close();
@@ -266,6 +298,7 @@ export class SyncEngine extends EventEmitter {
             await this.reconcile(localFiles, remoteFiles);
             
             this.db.log('system', 'system', 'completed', 'Full synchronization complete');
+            this.db.checkpoint();
         } catch (error: any) {
             this.logger.error('Full sync reconciliation failed:', error);
             this.db.log('system', 'system', 'failed', `Full sync failed: ${error.message || error}`);
@@ -279,9 +312,97 @@ export class SyncEngine extends EventEmitter {
     // Fast startup reconciliation using local scan and event logs
     // Performs full scan and reconciliation on startup
     async startupSync(): Promise<void> {
-        this.logger.info('Performing startup full repository scan and reconciliation.');
         await this.cleanupTempFiles(this.localSyncRoot);
-        await this.forceSync();
+        const mappingsCount = this.db.getAllMappings().length;
+        if (mappingsCount === 0) {
+            this.logger.info('Performing initial full repository scan and reconciliation.');
+            await this.forceSync();
+        } else {
+            this.logger.info('Performing fast startup repository scan and reconciliation.');
+            await this.fastSync();
+        }
+    }
+
+    async fastSync(): Promise<void> {
+        if (this.isScanning) return;
+        this.isScanning = true;
+        this.emit('statusChanged');
+        this.db.log('system', 'system', 'syncing', 'Starting fast startup reconciliation');
+        this.localScanCount = 0;
+
+        try {
+            this.logger.info('Scanning local directory...');
+            this.db.log('system', 'system', 'syncing', 'Scanning local filesystem...');
+            const localFiles = await this.scanLocalDir(this.localSyncRoot);
+            this.cachedLocalFileCount = localFiles.size;
+            this.db.log('system', 'system', 'syncing', `Local scan complete. Discovered ${localFiles.size} items.`);
+
+            this.logger.info('Performing fast reconciliation of local changes...');
+            this.db.log('system', 'system', 'syncing', 'Comparing local changes against database mappings...');
+
+            const mappingsArr = this.db.getAllMappings();
+            const mappingsCache = new Map<string, SyncMapping>(mappingsArr.map(m => [m.local_path, m]));
+
+            // 1. Identify local additions and modifications
+            const pendingUploads: { path: string; isDir: boolean }[] = [];
+            for (const [relPath, local] of localFiles) {
+                const mapped = mappingsCache.get(relPath);
+                if (!mapped) {
+                    pendingUploads.push({ path: relPath, isDir: local.isDir });
+                } else {
+                    const isDir = local.isDir;
+                    const size = isDir ? 0 : local.size;
+                    const localChanged = size !== mapped.size || Math.abs(local.mtime - mapped.mtime) > 2000;
+                    if (localChanged) {
+                        pendingUploads.push({ path: relPath, isDir });
+                    }
+                }
+            }
+
+            // 2. Identify local deletions
+            const pendingDeletes: SyncMapping[] = [];
+            for (const mapped of mappingsArr) {
+                if (!localFiles.has(mapped.local_path)) {
+                    pendingDeletes.push(mapped);
+                }
+            }
+
+            // 3. Process deletions first
+            for (const mapped of pendingDeletes) {
+                if (this.isPaused || !this.isStarted) break;
+                await this.deleteRemoteNode(mapped.node_uid, mapped.local_path);
+            }
+
+            // 4. Process uploads (folders first, then files in parallel)
+            const foldersToUpload = pendingUploads.filter(u => u.isDir).sort((a, b) => a.path.split('/').length - b.path.split('/').length);
+            const filesToUpload = pendingUploads.filter(u => !u.isDir);
+
+            for (const folder of foldersToUpload) {
+                if (this.isPaused || !this.isStarted) break;
+                await this.syncLocalToRemote(folder.path, true);
+            }
+
+            const queue = [...filesToUpload];
+            const workers = Array.from({ length: Math.min(this.concurrencyLimit, queue.length) }, async () => {
+                while (queue.length > 0) {
+                    if (this.isPaused || !this.isStarted) break;
+                    const item = queue.shift();
+                    if (item) {
+                        await this.syncLocalToRemote(item.path, false);
+                    }
+                }
+            });
+            await Promise.all(workers);
+
+            this.db.log('system', 'system', 'completed', 'Fast startup reconciliation complete');
+            this.db.checkpoint();
+        } catch (error: any) {
+            this.logger.error('Fast sync failed:', error);
+            this.db.log('system', 'system', 'failed', `Fast sync failed: ${error.message || error}`);
+        } finally {
+            this.isScanning = false;
+            this.emit('statusChanged');
+        }
     }
 
     // Recursively scan local files (async — does not block the event loop on large directories)
@@ -308,6 +429,12 @@ export class SyncEngine extends EventEmitter {
                 const st = await stat(absPath);
                 const isDir = st.isDirectory();
 
+                // Skip ignored paths early — avoids traversing node_modules etc.
+                if (this.ignoreMatcher.shouldIgnore(relPath, isDir)) {
+                    this.logger.debug(`[ignore] Skipping ignored path: ${relPath}`);
+                    return;
+                }
+
                 results.set(relPath, {
                     size: isDir ? 0 : st.size,
                     mtime: st.mtimeMs,
@@ -315,8 +442,9 @@ export class SyncEngine extends EventEmitter {
                 });
 
                 this.localScanCount++;
-                if (this.localScanCount % 50 === 0) {
-                    this.db.log('system', 'system', 'syncing', `Local scan: discovered ${this.localScanCount} files...`);
+                // Log progress every 500 files — reducing DB writes from ~2000 to ~200 for large repos
+                if (this.localScanCount % 500 === 0) {
+                    this.logger.info(`Local scan: discovered ${this.localScanCount} files...`);
                 }
 
                 if (isDir) {
@@ -361,8 +489,9 @@ export class SyncEngine extends EventEmitter {
                     result.set(relPath, node);
                     this.remoteScanCount++;
 
-                    if (this.remoteScanCount % 20 === 0) {
-                        this.db.log('system', 'system', 'syncing', `Remote scan: discovered ${this.remoteScanCount} cloud files...`);
+                    // Log progress every 200 nodes — avoids hammering DB during deep remote scans
+                    if (this.remoteScanCount % 200 === 0) {
+                        this.logger.info(`Remote scan: discovered ${this.remoteScanCount} cloud files...`);
                     }
 
                     if (node.type === NodeType.Folder) {
@@ -388,15 +517,19 @@ export class SyncEngine extends EventEmitter {
         // Load all DB mappings once and build in-memory caches — eliminates O(n²) table scans
         const mappingsArr = this.db.getAllMappings();
         const mappingsCache = new Map<string, SyncMapping>(mappingsArr.map(m => [m.local_path, m]));
+        // Keep the cached count in sync with the DB for use in hot watcher paths
+        this.cachedMappingCount = mappingsArr.length;
 
         // Helpers that keep the DB and in-memory cache in sync
         const cacheSet = (m: SyncMapping) => {
             this.db.setMapping(m);
             mappingsCache.set(m.local_path, m);
+            this.cachedMappingCount = mappingsCache.size;
         };
         const cacheDel = (p: string) => {
             this.db.deleteMapping(p);
             mappingsCache.delete(p);
+            this.cachedMappingCount = mappingsCache.size;
         };
 
         // Pre-reconciliation check: Detect remote renames/moves of folders and files
@@ -822,7 +955,16 @@ export class SyncEngine extends EventEmitter {
         if (this.watcher) return;
 
         this.watcher = chokidar.watch(this.localSyncRoot, {
-            ignored: /(^|[/\\])\../, // ignore dotfiles
+            // Ignore dotfiles and any path matched by the IgnoreMatcher
+            ignored: (absolutePath: string, stats?: import('node:fs').Stats) => {
+                const basename = path.basename(absolutePath);
+                // Always ignore dotfiles (fast path)
+                if (basename.startsWith('.') && basename !== PROTONIGNORE_FILENAME) return true;
+                const relPath = path.relative(this.localSyncRoot, absolutePath);
+                if (!relPath || relPath.startsWith('..')) return false;
+                const isDir = stats ? stats.isDirectory() : false;
+                return this.ignoreMatcher.shouldIgnore(relPath, isDir);
+            },
             persistent: true,
             ignoreInitial: true,
             awaitWriteFinish: {
@@ -836,7 +978,24 @@ export class SyncEngine extends EventEmitter {
             .on('change', (filePath: string) => this.handleLocalChange(filePath, 'change', false))
             .on('unlink', (filePath: string) => this.handleLocalChange(filePath, 'unlink', false))
             .on('addDir', (dirPath: string) => this.handleLocalChange(dirPath, 'add', true))
-            .on('unlinkDir', (dirPath: string) => this.handleLocalChange(dirPath, 'unlink', true));
+            .on('unlinkDir', (dirPath: string) => this.handleLocalChange(dirPath, 'unlink', true))
+            .on('error', (error: any) => {
+                const msg = (error?.message || '').toLowerCase();
+                // ENOSPC means the Linux inotify watch limit has been exceeded
+                if (error?.code === 'ENOSPC' || msg.includes('enospc') || msg.includes('no space left')) {
+                    this.logger.error(
+                        '[inotify] File watcher hit the system inotify limit (ENOSPC). ' +
+                        'New local file changes may be missed. ' +
+                        'To fix, run: echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p'
+                    );
+                    this.db.log('system', 'system', 'failed',
+                        'Watcher hit inotify limit (ENOSPC). New local changes may not be detected. ' +
+                        'Fix: sudo sysctl -w fs.inotify.max_user_watches=524288'
+                    );
+                } else {
+                    this.logger.error('[watcher] Error:', error);
+                }
+            });
     }
 
     private async handleLocalChange(absolutePath: string, type: 'add' | 'change' | 'unlink', isDir: boolean) {
@@ -861,6 +1020,14 @@ export class SyncEngine extends EventEmitter {
 
         const relativePath = path.relative(this.localSyncRoot, absolutePath);
         
+        // Reload ignore rules when the user edits .protonignore
+        if (path.basename(absolutePath) === PROTONIGNORE_FILENAME && (type === 'add' || type === 'change')) {
+            this.ignoreMatcher.reload();
+            this.logger.info('[ignore] .protonignore updated — ignore rules reloaded');
+            this.db.log('system', 'system', 'completed', '.protonignore rules reloaded');
+            return;
+        }
+
         // Skip changes triggered by downloading files
         if (this.ignoredLocalChanges.has(absolutePath)) {
             this.logger.debug(`Ignoring self-triggered change at ${relativePath}`);
@@ -871,7 +1038,109 @@ export class SyncEngine extends EventEmitter {
 
         try {
             if (type === 'add' || type === 'change') {
-                // Skip if a reconcile is already processing this path (prevents double-upload)
+                // Check if this is a moved folder or file from pending deletes
+                let matchedOldPath: string | null = null;
+                let matchedNodeUid: string | null = null;
+
+                const newName = path.basename(relativePath);
+                // Use async stat to avoid blocking the event loop during watcher callbacks
+                const fileStat = existsSync(absolutePath) ? await stat(absolutePath).catch(() => null) : null;
+                const size = fileStat && !isDir ? fileStat.size : 0;
+
+                for (const [oldPath, pending] of this.pendingLocalDeletes.entries()) {
+                    if (pending.isDir === isDir) {
+                        const oldName = path.basename(oldPath);
+                        if (isDir) {
+                            if (oldName === newName) {
+                                matchedOldPath = oldPath;
+                                matchedNodeUid = pending.nodeUid;
+                                break;
+                            }
+                        } else {
+                            if (oldName === newName) {
+                                const oldMapped = this.db.getMapping(oldPath);
+                                if (oldMapped && oldMapped.size === size) {
+                                    matchedOldPath = oldPath;
+                                    matchedNodeUid = pending.nodeUid;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (matchedOldPath && matchedNodeUid) {
+                    this.logger.info(`Detected watcher local rename/move: ${matchedOldPath} -> ${relativePath}`);
+                    this.db.log(relativePath, 'rename_remote', 'syncing', `Moving remote node from ${matchedOldPath}`);
+
+                    // Remove from pending deletes
+                    this.pendingLocalDeletes.delete(matchedOldPath);
+
+                    try {
+                        // A. Handle remote move/rename
+                        const oldParent = path.dirname(matchedOldPath);
+                        const newParent = path.dirname(relativePath);
+                        if (oldParent !== newParent) {
+                            const newParentUid = newParent === '.' ? this.remoteRootUid : await this.ensureRemoteParentFolder(newParent);
+                            await this.runWithRetry(async () => {
+                                for await (const result of this.sdk.moveNodes([matchedNodeUid!], newParentUid)) {
+                                    if (!result.ok) throw result.error;
+                                }
+                            });
+                        }
+
+                        const oldName = path.basename(matchedOldPath);
+                        if (oldName !== newName) {
+                            await this.runWithRetry(async () => {
+                                await this.sdk.renameNode(matchedNodeUid!, newName);
+                            });
+                        }
+
+                        // B. Update DB mapping
+                        const oldMapped = this.db.getMapping(matchedOldPath);
+                        this.db.deleteMapping(matchedOldPath);
+
+                        const folderMtime = stat ? stat.mtimeMs : Date.now();
+                        this.db.setMapping({
+                            local_path: relativePath,
+                            node_uid: matchedNodeUid,
+                            is_dir: isDir ? 1 : 0,
+                            size: isDir ? 0 : (oldMapped?.size ?? size),
+                            mtime: folderMtime,
+                            sha1: isDir ? '' : (oldMapped?.sha1 ?? ''),
+                            remote_revision_uid: isDir ? '' : (oldMapped?.remote_revision_uid ?? ''),
+                            remote_mtime: isDir ? folderMtime : (oldMapped?.remote_mtime ?? folderMtime),
+                        });
+
+                        // C. If directory, recursively rename child mappings in DB
+                        if (isDir) {
+                            const allMappings = this.db.getAllMappings();
+                            for (const m of allMappings) {
+                                if (m.local_path.startsWith(`${matchedOldPath}/`)) {
+                                    const suffix = m.local_path.slice(matchedOldPath.length);
+                                    const newChildPath = `${relativePath}${suffix}`;
+                                    
+                                    this.db.deleteMapping(m.local_path);
+                                    this.db.setMapping({
+                                        ...m,
+                                        local_path: newChildPath
+                                    });
+
+                                    // Cancel any pending delete for child files
+                                    this.pendingLocalDeletes.delete(m.local_path);
+                                    this.ignorePathTemporarily(this.resolveLocalPath(newChildPath), 3000);
+                                }
+                            }
+                        }
+
+                        this.db.log(relativePath, 'rename_remote', 'completed', 'Moved/renamed remote node successfully');
+                        return;
+                    } catch (err: any) {
+                        this.logger.error(`Failed to handle rename/move in watcher:`, err);
+                    }
+                }
+
+                // Standard upload fallback
                 if (this.activeReconciles.has(relativePath)) {
                     this.logger.debug(`Watcher skipping upload for ${relativePath} — reconcile already in progress`);
                 } else {
@@ -880,13 +1149,12 @@ export class SyncEngine extends EventEmitter {
             } else if (type === 'unlink') {
                 const mapped = this.db.getMapping(relativePath);
                 if (mapped) {
-                    // Check 1: Empty folder safeguard — use cached count to avoid blocking scan
+                    // Check 1: Empty folder safeguard — use in-memory counts to avoid table scans
                     const localFilesCount = this.cachedLocalFileCount;
-                    const mappedCount = this.db.getAllMappings().length;
+                    const mappedCount = this.cachedMappingCount;
                     const isEmptyWipe = localFilesCount <= 1 && mappedCount > 5;
 
                     // Check 2: Sliding window rate limit (10 deletions in 15 seconds)
-                    // Decrement cached count and evict stale entries from front (O(1) amortized)
                     this.cachedLocalFileCount = Math.max(0, this.cachedLocalFileCount - 1);
                     this.recentDeletions.push({ timestamp: Date.now(), path: relativePath, nodeUid: mapped.node_uid });
                     const cutoff = Date.now() - 15000;
@@ -908,10 +1176,18 @@ export class SyncEngine extends EventEmitter {
                         return;
                     }
 
-                    // Skip if a reconcile is already processing this path
-                    if (!this.activeReconciles.has(relativePath)) {
-                        await this.deleteRemoteNode(mapped.node_uid, relativePath);
-                    }
+                    // Add to pending deletes and wait 200ms to allow rename/move matching
+                    this.cachedMappingCount = Math.max(0, this.cachedMappingCount - 1);
+                    this.pendingLocalDeletes.set(relativePath, { timestamp: Date.now(), isDir, nodeUid: mapped.node_uid });
+                    setTimeout(async () => {
+                        const pending = this.pendingLocalDeletes.get(relativePath);
+                        if (pending) {
+                            this.pendingLocalDeletes.delete(relativePath);
+                            if (!this.activeReconciles.has(relativePath)) {
+                                await this.deleteRemoteNode(pending.nodeUid, relativePath);
+                            }
+                        }
+                    }, 200);
                 }
             }
             this.emit('statusChanged');
@@ -1451,16 +1727,25 @@ export class SyncEngine extends EventEmitter {
                                 }
                             }
 
+                            // Try to get actual local filesystem mtime if it exists
+                            let folderMtime = Date.now();
+                            try {
+                                const localFolderAbsPath = this.resolveLocalPath(prefix);
+                                if (existsSync(localFolderAbsPath)) {
+                                    folderMtime = statSync(localFolderAbsPath).mtimeMs;
+                                }
+                            } catch (e) {}
+
                             // Map folder in db
                             this.db.setMapping({
                                 local_path: prefix,
                                 node_uid: nodeUid,
                                 is_dir: 1,
                                 size: 0,
-                                mtime: Date.now(),
+                                mtime: folderMtime,
                                 sha1: '',
                                 remote_revision_uid: '',
-                                remote_mtime: Date.now(),
+                                remote_mtime: folderMtime,
                             });
 
                             return nodeUid;
@@ -1526,23 +1811,7 @@ export class SyncEngine extends EventEmitter {
         return path.join(this.localSyncRoot, relativePath);
     }
 
-    private countLocalFiles(dir: string): number {
-        if (!existsSync(dir)) return 0;
-        let count = 0;
-        try {
-            const entries = readdirSync(dir, { withFileTypes: true });
-            for (const entry of entries) {
-                if (entry.name.startsWith('.')) continue; // ignore hidden files/folders
-                count++;
-                if (entry.isDirectory()) {
-                    count += this.countLocalFiles(path.join(dir, entry.name));
-                }
-            }
-        } catch (err) {
-            this.logger.warn(`Failed to count files in ${dir}:`, err);
-        }
-        return count;
-    }
+
 
     getBulkDeletionCount(): number {
         return this.recentDeletions.length;
@@ -1622,27 +1891,26 @@ export class SyncEngine extends EventEmitter {
         while (true) {
             await new Promise<void>(resolve => setTimeout(resolve, 15000));
             if (!this.isStarted) return; // Engine was stopped while offline
+            if (!this.isOffline) return; // Already marked online by listener event
             try {
                 this.logger.debug('Checking connection state...');
                 await this.sdk.getMyFilesRootFolder();
-                this.logger.info('Connection restored!');
-                this.db.log('system', 'system', 'completed', 'Network connection restored. Resuming synchronization.');
-
-                this.isOffline = false;
-                this.emit('statusChanged');
-
-                // Trigger a full sync to reconcile any changes missed while offline
-                if (!this.isScanning) {
-                    this.forceSync().catch((err) => {
-                        if (this.isStarted) this.logger.error('Post-offline force sync failed:', err);
-                    });
-                }
+                this.handleOnlineEvent();
                 return;
             } catch {
                 // Still offline — loop again
                 this.logger.debug('Connection check failed, still offline.');
             }
         }
+    }
+
+    private handleOnlineEvent(): void {
+        if (!this.isStarted || !this.isOffline) return;
+        this.logger.info('Connection restored!');
+        this.db.log('system', 'system', 'completed', 'Network connection restored. Resuming synchronization.');
+
+        this.isOffline = false;
+        this.emit('statusChanged');
     }
 
     private ignorePathTemporarily(absolutePath: string, durationMs = 2500) {

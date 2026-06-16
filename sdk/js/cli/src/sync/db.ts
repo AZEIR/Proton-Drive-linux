@@ -146,18 +146,32 @@ export class SyncDatabase {
             VALUES (?, ?, ?, ?, ?)
         `).run(Date.now(), filePath, direction, status, message);
 
-        // Prune lazily every 100 writes using an index-friendly range delete (O(1) via PK B-tree)
+        // Prune lazily every 100 writes using an index-friendly range delete (O(1) via PK B-tree),
+        // then checkpoint the WAL to prevent unbounded WAL file growth.
         this._logWriteCount++;
         if (this._logWriteCount % 100 === 0) {
             this.db.run(`
                 DELETE FROM sync_logs
                 WHERE id < (SELECT MAX(id) FROM sync_logs) - 1000
             `);
+            this.checkpoint();
         }
     }
 
     getRecentLogs(limit: number = 50): SyncLog[] {
         return this.db.prepare('SELECT * FROM sync_logs ORDER BY id DESC LIMIT ?').all(limit) as SyncLog[];
+    }
+
+    /**
+     * Compact the WAL file back into the main database.
+     * Safe to call at any time — PASSIVE mode never blocks readers or writers.
+     */
+    checkpoint(): void {
+        try {
+            this.db.run('PRAGMA wal_checkpoint(PASSIVE)');
+        } catch (err) {
+            // Ignore — e.g. read-only database
+        }
     }
 
     close() {

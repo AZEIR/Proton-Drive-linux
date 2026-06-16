@@ -189,6 +189,45 @@ export function startDashboard(
                 }
             }
 
+            // SSE PUSH STREAM — replaces client-side 1s polling for status updates
+            if (url.pathname === '/api/events') {
+                if (!engine) {
+                    return new Response('Engine not available', { status: 503 });
+                }
+                let cleanup: (() => void) | null = null;
+                const stream = new ReadableStream({
+                    start(controller) {
+                        const encoder = new TextEncoder();
+                        const send = () => {
+                            try {
+                                const status = engine!.getStatus();
+                                const transfers = engine!.getActiveTransfers();
+                                const bulkCount = engine!.getBulkDeletionCount();
+                                const payload = JSON.stringify({ status, activeTransfers: transfers, bulkDeletionCount: bulkCount });
+                                controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+                            } catch {
+                                // Client disconnected
+                            }
+                        };
+                        // Send immediately on connect, then on every change
+                        send();
+                        engine!.on('statusChanged', send);
+                        cleanup = () => engine!.off('statusChanged', send);
+                    },
+                    cancel() {
+                        if (cleanup) cleanup();
+                    },
+                });
+                return new Response(stream, {
+                    headers: {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                        'X-Accel-Buffering': 'no',
+                    },
+                });
+            }
+
             // HTML FRONTEND PAGE
             if (url.pathname === '/' || url.pathname === '/index.html') {
                 const isFod = fod?.isFuseMode ?? false;
@@ -2224,7 +2263,21 @@ function getHtmlContent(isFodMode: boolean = false): string {
         fetchQuota();
         fetchLogs();
 
-        setInterval(fetchStatus, 1000);
+        // Use SSE push stream for real-time status instead of 1s polling.
+        // The server emits an event on every engine statusChanged — zero CPU overhead when idle.
+        const evtSource = new EventSource('/api/events');
+        evtSource.onmessage = (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.status !== undefined) renderStatus(data);
+            } catch {}
+        };
+        evtSource.onerror = () => {
+            // SSE disconnected (e.g. server restarted) — fall back to polling until reconnected
+            setTimeout(fetchStatus, 3000);
+        };
+
+        // Logs and quota remain poll-based (not event-driven)
         setInterval(fetchLogs, 2000);
         setInterval(fetchQuota, 30000);
     </script>
