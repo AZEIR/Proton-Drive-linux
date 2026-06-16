@@ -1961,10 +1961,12 @@ function getHtmlContent(isFodMode: boolean = false): string {
         let logSearchQuery = '';
         let logFilterCategory = 'all';
         let cachedLogs = [];
+        let lastLogsJson = '';
 
         let cacheSearchQuery = '';
         let cacheFilterStatus = 'all';
         let cachedCacheFiles = [];
+        let lastCacheJson = '';
 
         function init() {
             // Create sidebar overlay for mobile
@@ -2354,8 +2356,13 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         async function fetchLogs() {
             try {
-                const res  = await fetch('/api/logs');
-                cachedLogs = await res.json();
+                const res  = await fetch('/api/logs?limit=50');
+                const rawText = await res.text();
+                if (rawText === lastLogsJson) {
+                    return;
+                }
+                lastLogsJson = rawText;
+                cachedLogs = JSON.parse(rawText);
                 renderLogs();
             } catch (err) {
                 console.error('Failed to fetch logs:', err);
@@ -2366,11 +2373,16 @@ function getHtmlContent(isFodMode: boolean = false): string {
             if (!FOD_MODE) return;
             try {
                 const res  = await fetch('/api/cached-files');
-                const data = await res.json();
+                const rawText = await res.text();
+                if (rawText === lastCacheJson) {
+                    return;
+                }
+                lastCacheJson = rawText;
+                const data = JSON.parse(rawText);
                 const statsEl = document.getElementById('cacheSizeDisplay');
 
                 if (data.stats) {
-                    statsEl.innerText = \`\${data.stats.totalFiles} files cached — \${formatBytes(data.stats.totalBytes)} used on disk\`;
+                    statsEl.innerText = \`\\\${data.stats.totalFiles} files cached — \\\${formatBytes(data.stats.totalBytes)} used on disk\`;
                 }
 
                 cachedCacheFiles = data.files || [];
