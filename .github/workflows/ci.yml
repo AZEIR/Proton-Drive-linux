@@ -75,6 +75,14 @@ jobs:
             exit 1
           }
 
+      - name: Upload Desktop App Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: proton-drive-desktop-linux
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+
   test-js-sdk:
     runs-on: ubuntu-latest
     steps:
