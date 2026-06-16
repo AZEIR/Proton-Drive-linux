@@ -102,6 +102,10 @@ pub fn run() {
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
+        // Disable WebKit sandbox to prevent Bubblewrap crashes inside AppImages on distros like Fedora
+        if std::env::var("WEBKIT_FORCE_SANDBOX").is_err() {
+            std::env::set_var("WEBKIT_FORCE_SANDBOX", "0");
+        }
     }
 
     tauri::Builder::default()
