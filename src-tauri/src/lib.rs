@@ -111,6 +111,17 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle();
 
+            // Check if "--hidden" or "--background" was passed in arguments
+            let args: Vec<String> = std::env::args().collect();
+            let start_hidden = args.iter().any(|arg| arg == "--hidden" || arg == "--background");
+
+            if !start_hidden {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+
             // 1. Spawn the background Sync / FUSE daemon
             match start_daemon(app_handle) {
                 Ok(child) => {
@@ -220,6 +231,13 @@ pub fn run() {
                         }
                         Err(_) => "offline".to_string(),
                     };
+
+                    if status == "auth_required" && current_status != "auth_required" {
+                        if let Some(win) = app_handle_clone.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
 
                     if status == current_status {
                         continue;

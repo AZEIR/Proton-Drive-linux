@@ -15,6 +15,7 @@
         "height": 520,
         "resizable": true,
         "fullscreen": false,
+        "visible": false,
         "label": "main",
         "url": "index.html"
       }
