@@ -31,6 +31,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "../sdk/js/cli/release/proton-fuse",
+      "../sdk/js/cli/release/proton-sync"
     ]
   }
 }

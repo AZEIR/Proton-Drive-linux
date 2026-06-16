@@ -40,15 +40,18 @@ fn which_node() -> Option<String> {
 }
 
 fn start_daemon(app: &AppHandle) -> Result<Child, String> {
+    let sync_mode = std::env::var("PROTON_SYNC_MODE").unwrap_or_else(|_| "full".to_string());
+    let binary_name = if sync_mode == "full" { "proton-sync" } else { "proton-fuse" };
+
     // Check local developer path first
-    let dev_path = "/home/azeir/Code/drive-project/sdk/js/cli/release/proton-fuse";
-    let bin_path = if std::fs::metadata(dev_path).is_ok() {
-        dev_path.to_string()
+    let dev_path = format!("/home/azeir/Code/drive-project/sdk/js/cli/release/{}", binary_name);
+    let bin_path = if std::fs::metadata(&dev_path).is_ok() {
+        dev_path
     } else {
         // Packed application resource path fallback
         app.path()
             .resource_dir()
-            .map(|p| p.join("sdk/js/cli/release/proton-fuse").to_string_lossy().into_owned())
+            .map(|p| p.join(binary_name).to_string_lossy().into_owned())
             .map_err(|e| e.to_string())?
     };
 
@@ -57,8 +60,6 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
     let node_bin = which_node().ok_or_else(|| "Neither 'node' nor 'bun' found on system PATH.".to_string())?;
     println!("[Tauri] Using Node binary: {}", node_bin);
 
-    // Read environment options similar to start-sync.sh
-    let sync_mode = std::env::var("PROTON_SYNC_MODE").unwrap_or_else(|_| "full".to_string());
     let sync_port = std::env::var("PROTON_SYNC_PORT").unwrap_or_else(|_| "8085".to_string());
     let mount_point = std::env::var("PROTON_MOUNT_POINT")
         .unwrap_or_else(|_| format!("{}/P-Drive", std::env::var("HOME").unwrap_or_default()));
