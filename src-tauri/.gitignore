@@ -1,0 +1,12 @@
+# Rust build output
+target/
+
+# Tauri configuration cache
+gen/
+*.d
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe

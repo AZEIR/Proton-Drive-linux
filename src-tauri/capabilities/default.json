@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for the Proton Drive Sync client",
+  "windows": ["main"],
+  "permissions": []
+}
