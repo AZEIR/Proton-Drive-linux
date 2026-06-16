@@ -122,7 +122,7 @@ pub fn run() {
             let default_tray_icon = tauri::image::Image::from_bytes(ICON_SYNCED).unwrap();
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(default_tray_icon)
-                .menu(tray_menu)
+                .menu(&tray_menu)
                 .tooltip("Proton Drive: Connecting...")
                 .on_menu_event(|app, event| {
                     match event.id.as_ref() {
