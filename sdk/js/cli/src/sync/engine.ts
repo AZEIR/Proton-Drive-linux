@@ -271,6 +271,36 @@ export class SyncEngine extends EventEmitter {
         this.isPaused = false;
         this.db.setConfig('is_sync_paused', '0');
         this.db.log('system', 'system', 'completed', 'Synchronization resumed');
+
+        // Process all pending deletions that were paused
+        const pendingDeletes = Array.from(this.pendingLocalDeletes.entries());
+        this.pendingLocalDeletes.clear();
+        for (const [relPath, pending] of pendingDeletes) {
+            try {
+                // Check if any ancestor is also in the list of pending deletes
+                let ancestorPending = false;
+                const parts = relPath.split('/');
+                let current = '';
+                for (let i = 0; i < parts.length - 1; i++) {
+                    current = current ? `${current}/${parts[i]}` : parts[i];
+                    if (pendingDeletes.some(([p]) => p === current)) {
+                        ancestorPending = true;
+                        break;
+                    }
+                }
+
+                if (ancestorPending) {
+                    this.db.deleteMapping(relPath);
+                } else {
+                    if (!this.activeReconciles.has(relPath)) {
+                        await this.deleteRemoteNode(pending.nodeUid, relPath);
+                    }
+                }
+            } catch (err) {
+                this.logger.error(`Failed to execute confirmed deletion for ${relPath}:`, err);
+            }
+        }
+
         await this.start();
         this.emit('statusChanged');
     }
@@ -1060,7 +1090,9 @@ export class SyncEngine extends EventEmitter {
     }
 
     private async handleLocalChange(absolutePath: string, type: 'add' | 'change' | 'unlink', isDir: boolean) {
-        if (this.isPaused) return;
+        if (this.isPaused || this.bulkDeletionWarning) {
+            if (type !== 'unlink') return;
+        }
 
         // Safety guard: if the local sync root directory itself was deleted or does not exist,
         // do NOT propagate deletions to the remote. This prevents accidental deletion of remote files.
@@ -1232,59 +1264,64 @@ export class SyncEngine extends EventEmitter {
             } else if (type === 'unlink') {
                 const mapped = this.db.getMapping(relativePath);
                 if (mapped) {
-                    // Check 1: Empty folder safeguard — use in-memory counts to avoid table scans
-                    const localFilesCount = this.cachedLocalFileCount;
-                    const mappedCount = this.cachedMappingCount;
-                    const isEmptyWipe = localFilesCount <= 1 && mappedCount > 5;
-
-                    // Check 2: Sliding window rate limit (10 deletions in 15 seconds)
-                    this.cachedLocalFileCount = Math.max(0, this.cachedLocalFileCount - 1);
-                    this.recentDeletions.push({ timestamp: Date.now(), path: relativePath, nodeUid: mapped.node_uid });
-                    const cutoff = Date.now() - 15000;
-                    while (this.recentDeletions.length > 0 && this.recentDeletions[0].timestamp < cutoff) {
-                        this.recentDeletions.shift();
-                    }
-
-                    if (isEmptyWipe || this.recentDeletions.length >= 10) {
-                        this.logger.warn(`Bulk deletion safety warning triggered! isEmptyWipe=${isEmptyWipe}, deletionsCount=${this.recentDeletions.length}`);
-                        this.bulkDeletionWarning = true;
-                        await this.pause();
-                        
-                        const msg = isEmptyWipe 
-                            ? "Local sync folder was emptied. Synchronization paused to protect remote cloud files."
-                            : `Bulk deletion of ${this.recentDeletions.length} files detected. Synchronization paused.`;
-                        
-                        this.db.log('system', 'system', 'failed', msg);
-                        this.emit('statusChanged');
-                        return;
-                    }
-
-                    // Add to pending deletes and wait 200ms to allow rename/move matching
                     this.cachedMappingCount = Math.max(0, this.cachedMappingCount - 1);
+                    this.cachedLocalFileCount = Math.max(0, this.cachedLocalFileCount - 1);
                     this.pendingLocalDeletes.set(relativePath, { timestamp: Date.now(), isDir, nodeUid: mapped.node_uid });
+                    
                     setTimeout(async () => {
                         const pending = this.pendingLocalDeletes.get(relativePath);
                         if (pending) {
+                            // If bulk deletion warning or manual pause is active, keep it in pendingLocalDeletes
+                            if (this.isPaused || this.bulkDeletionWarning) {
+                                return;
+                            }
+
+                            // Optimization: check if any parent directory of this path is also pending deletion
+                            let ancestorPending = false;
+                            const parts = relativePath.split('/');
+                            let current = '';
+                            for (let i = 0; i < parts.length - 1; i++) {
+                                current = current ? `${current}/${parts[i]}` : parts[i];
+                                if (this.pendingLocalDeletes.has(current)) {
+                                    ancestorPending = true;
+                                    break;
+                                }
+                            }
+
+                            if (ancestorPending) {
+                                this.pendingLocalDeletes.delete(relativePath);
+                                this.db.deleteMapping(relativePath);
+                                return;
+                            }
+
+                            // Safeguard: Check if this deletion triggers bulk deletion warning
+                            const localFilesCount = this.cachedLocalFileCount;
+                            const mappedCount = this.cachedMappingCount;
+                            const isEmptyWipe = localFilesCount <= 1 && mappedCount > 5;
+
+                            this.recentDeletions.push({ timestamp: Date.now(), path: relativePath, nodeUid: pending.nodeUid });
+                            const cutoff = Date.now() - 15000;
+                            while (this.recentDeletions.length > 0 && this.recentDeletions[0].timestamp < cutoff) {
+                                this.recentDeletions.shift();
+                            }
+
+                            if (isEmptyWipe || this.recentDeletions.length >= 10) {
+                                this.logger.warn(`Bulk deletion safety warning triggered inside timer! isEmptyWipe=${isEmptyWipe}, deletionsCount=${this.recentDeletions.length}`);
+                                this.bulkDeletionWarning = true;
+                                await this.pause();
+
+                                const msg = isEmptyWipe 
+                                    ? "Local sync folder was emptied. Synchronization paused to protect remote cloud files."
+                                    : `Bulk deletion of ${this.recentDeletions.length} files detected. Synchronization paused.`;
+                                
+                                this.db.log('system', 'system', 'failed', msg);
+                                this.emit('statusChanged');
+                                return;
+                            }
+
+                            // Remove from pending and execute
                             this.pendingLocalDeletes.delete(relativePath);
                             if (!this.activeReconciles.has(relativePath)) {
-                                // Optimization: check if any parent directory of this path is also pending deletion
-                                let ancestorPending = false;
-                                const parts = relativePath.split('/');
-                                let current = '';
-                                for (let i = 0; i < parts.length - 1; i++) {
-                                    current = current ? `${current}/${parts[i]}` : parts[i];
-                                    if (this.pendingLocalDeletes.has(current)) {
-                                        ancestorPending = true;
-                                        break;
-                                    }
-                                }
-
-                                if (ancestorPending) {
-                                    // Parent directory is also being deleted, so we just clean up the local mapping
-                                    this.db.deleteMapping(relativePath);
-                                    return;
-                                }
-
                                 await this.deleteRemoteNode(pending.nodeUid, relativePath);
                             }
                         }
@@ -1949,6 +1986,36 @@ export class SyncEngine extends EventEmitter {
         this.isBulkDeletionConfirmed = true;
         this.bulkDeletionWarning = false;
         this.recentDeletions = [];
+
+        // Process all pending deletions that were paused
+        const pendingDeletes = Array.from(this.pendingLocalDeletes.entries());
+        this.pendingLocalDeletes.clear();
+        for (const [relPath, pending] of pendingDeletes) {
+            try {
+                // Check if any ancestor is also in the list of pending deletes
+                let ancestorPending = false;
+                const parts = relPath.split('/');
+                let current = '';
+                for (let i = 0; i < parts.length - 1; i++) {
+                    current = current ? `${current}/${parts[i]}` : parts[i];
+                    if (pendingDeletes.some(([p]) => p === current)) {
+                        ancestorPending = true;
+                        break;
+                    }
+                }
+
+                if (ancestorPending) {
+                    this.db.deleteMapping(relPath);
+                } else {
+                    if (!this.activeReconciles.has(relPath)) {
+                        await this.deleteRemoteNode(pending.nodeUid, relPath);
+                    }
+                }
+            } catch (err) {
+                this.logger.error(`Failed to execute confirmed deletion for ${relPath}:`, err);
+            }
+        }
+
         await this.resume();
     }
 
