@@ -357,7 +357,16 @@ export class SyncEngine extends EventEmitter {
                     const size = isDir ? 0 : local.size;
                     const localChanged = size !== mapped.size || Math.abs(local.mtime - mapped.mtime) > 2000;
                     if (localChanged) {
-                        pendingUploads.push({ path: relPath, isDir });
+                        if (isDir) {
+                            // Directory metadata changed locally, update database mapping directly
+                            this.db.setMapping({
+                                ...mapped,
+                                mtime: local.mtime,
+                                remote_mtime: local.mtime,
+                            });
+                        } else {
+                            pendingUploads.push({ path: relPath, isDir });
+                        }
                     }
                 }
             }
@@ -890,6 +899,17 @@ export class SyncEngine extends EventEmitter {
         remote: NodeEntity | undefined,
         mapped: SyncMapping | undefined
     ): Promise<void> {
+        // Early check: if the path is ignored, clean up database mapping and skip reconciliation
+        const isDir = (local && local.isDir) || (remote && remote.type === NodeType.Folder) || (mapped && mapped.is_dir === 1);
+        if (this.ignoreMatcher.shouldIgnore(relPath, isDir)) {
+            if (mapped) {
+                this.logger.info(`Path ${relPath} is now ignored. Removing mapping.`);
+                this.db.deleteMapping(relPath);
+                this.cachedMappingCount = Math.max(0, this.cachedMappingCount - 1);
+            }
+            return;
+        }
+
         // Guard against concurrent reconcile of the same path (watcher event + forceSync collision)
         if (this.activeReconciles.has(relPath)) {
             this.logger.debug(`Skipping duplicate reconcile for ${relPath} — already in progress`);
@@ -947,7 +967,16 @@ export class SyncEngine extends EventEmitter {
                         await this.handleConflict(relPath, remote);
                     } else if (localChanged) {
                         // Upload local change
-                        await this.syncLocalToRemote(relPath, local.isDir);
+                        if (local.isDir) {
+                            // Directory metadata changed locally, update database mapping directly
+                            this.db.setMapping({
+                                ...mapped,
+                                mtime: local.mtime,
+                                remote_mtime: local.mtime,
+                            });
+                        } else {
+                            await this.syncLocalToRemote(relPath, false);
+                        }
                     } else if (remoteChanged) {
                         // Download remote change
                         await this.syncRemoteToLocal(relPath, remote);
@@ -970,12 +999,6 @@ export class SyncEngine extends EventEmitter {
                     await this.syncRemoteToLocal(relPath, remote);
                 } else {
                     // Previously mapped: was deleted locally
-                    if (this.ignoreMatcher.shouldIgnore(relPath, mapped.is_dir === 1)) {
-                        this.logger.info(`Mapping for ${relPath} is now ignored. Removing mapping.`);
-                        this.db.deleteMapping(relPath);
-                        this.cachedMappingCount--;
-                        return;
-                    }
                     this.logger.info(`Trashing remote node (local deletion): ${relPath}`);
                     await this.deleteRemoteNode(remote.uid, relPath);
                 }

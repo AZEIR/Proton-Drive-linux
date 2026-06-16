@@ -12,7 +12,31 @@ if (typeof (globalThis as any).Bun === 'undefined') {
                     return fs.existsSync(pathStr) ? fs.statSync(pathStr).size : 0;
                 },
                 get type() {
-                    return 'application/octet-stream';
+                    const ext = path.extname(pathStr).toLowerCase();
+                    const mimeTypes: Record<string, string> = {
+                        '.pdf': 'application/pdf',
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg',
+                        '.png': 'image/png',
+                        '.gif': 'image/gif',
+                        '.webp': 'image/webp',
+                        '.txt': 'text/plain',
+                        '.html': 'text/html',
+                        '.htm': 'text/html',
+                        '.css': 'text/css',
+                        '.js': 'text/javascript',
+                        '.mjs': 'text/javascript',
+                        '.json': 'application/json',
+                        '.zip': 'application/zip',
+                        '.mp3': 'audio/mpeg',
+                        '.mp4': 'video/mp4',
+                        '.csv': 'text/csv',
+                        '.md': 'text/markdown',
+                        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                    };
+                    return mimeTypes[ext] || 'application/octet-stream';
                 },
                 get lastModified() {
                     return fs.existsSync(pathStr) ? Math.round(fs.statSync(pathStr).mtimeMs) : 0;
