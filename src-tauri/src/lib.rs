@@ -89,6 +89,14 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    {
+        // Fix blank white screen and EGL display crashes on Linux/Wayland
+        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     tauri::Builder::default()
         .manage(DaemonState {
             child: Arc::new(Mutex::new(None)),
