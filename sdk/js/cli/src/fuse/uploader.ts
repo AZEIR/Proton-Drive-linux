@@ -105,7 +105,16 @@ export class Uploader extends EventEmitter {
             return { nodeUid: result.nodeUid, revisionUid: result.nodeRevisionUid };
         } catch (err: any) {
             this.logger.error(`[uploader] Upload failed for ${relativePath}:`, err);
-            await unlink(tmpPath).catch(() => {});
+            try {
+                const failedDir = path.join(path.dirname(tmpPath), '.failed-uploads');
+                await mkdir(failedDir, { recursive: true });
+                const fallbackPath = path.join(failedDir, path.basename(tmpPath));
+                await rename(tmpPath, fallbackPath);
+                this.logger.warn(`[uploader] Preserved failed upload draft at: ${fallbackPath}`);
+            } catch (moveErr) {
+                this.logger.error(`[uploader] Failed to preserve draft file:`, moveErr);
+                await unlink(tmpPath).catch(() => {});
+            }
             this.emit('error', { path: relativePath, error: err });
             throw err;
         } finally {

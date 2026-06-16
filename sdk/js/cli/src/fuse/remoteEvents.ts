@@ -1,6 +1,7 @@
 import { DriveEvent, DriveEventType, NodeEntity, NodeType, ProtonDriveClient } from '@protontech/drive-sdk';
 import { CacheManager } from './cache';
 import { InodeTable } from './inode';
+import type { EventsProvider } from '../events/interface';
 
 /**
  * Subscribes to SDK remote tree events and keeps the inode table in sync.
@@ -21,6 +22,7 @@ export class RemoteEventHandler {
         private cache: CacheManager,
         private logger: any,
         private onInvalidate?: (ino: number) => void,  // tell FUSE to invalidate cached attrs
+        private eventsProvider?: EventsProvider,
     ) {}
 
     async start(rootFolder: { uid: string; treeEventScopeId: string }) {
@@ -32,11 +34,20 @@ export class RemoteEventHandler {
             async (event: DriveEvent) => {
                 try {
                     await this.handleEvent(event);
+                    if (this.eventsProvider) {
+                        await this.eventsProvider.setLatestEventId('drive', rootFolder.treeEventScopeId, event.eventId);
+                    }
                 } catch (err: any) {
                     this.logger.error('[remote-events] Error handling event:', err);
                 }
             },
         );
+
+        const latestEventId = this.subscription.getLatestEventId();
+        if (latestEventId && this.eventsProvider) {
+            this.logger.debug(`[remote-events] Subscribed to scope drive:${rootFolder.treeEventScopeId} with latest event ID ${latestEventId}`);
+            await this.eventsProvider.setLatestEventId('drive', rootFolder.treeEventScopeId, latestEventId);
+        }
     }
 
     stop() {
@@ -90,6 +101,36 @@ export class RemoteEventHandler {
             .map(n => (n.name.ok ? n.name.value : '_degraded_'))
             .join('/');
         if (!relativePath) return;
+
+        // Ensure all parent directories exist in the inode table before processing the node itself
+        let currentParentIno = this.inodes.rootIno;
+        for (let i = 1; i < hierarchy.length - 1; i++) {
+            const parentNode = hierarchy[i];
+            const parentName = parentNode.name.ok ? parentNode.name.value : '_degraded_';
+            const parentPath = hierarchy
+                .slice(1, i + 1)
+                .map(n => (n.name.ok ? n.name.value : '_degraded_'))
+                .join('/');
+
+            let parentInode = this.inodes.getByUid(parentNode.uid);
+            if (!parentInode) {
+                this.logger.info(`[remote-events] Recursively creating parent inode for ${parentPath} (uid=${parentNode.uid})`);
+                const ino = this.inodes.upsert({
+                    node_uid:     parentNode.uid,
+                    parent_ino:   currentParentIno,
+                    name:         parentName,
+                    local_path:   parentPath,
+                    is_dir:       1,
+                    size:         0,
+                    remote_mtime: parentNode.modificationTime.getTime(),
+                    is_local:     1,
+                    mode:         16877, // 0o40755
+                });
+                currentParentIno = ino;
+            } else {
+                currentParentIno = parentInode.ino;
+            }
+        }
 
         // ── Created / Updated ─────────────────────────────────────────────
         const inode = this.inodes.getByUid(nodeUid);

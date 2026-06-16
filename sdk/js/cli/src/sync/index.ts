@@ -29,7 +29,7 @@ export async function runSync(port: number = 8085) {
 
     // Initialize Database and Sync Engine
     const db = new SyncDatabase();
-    const engine = new SyncEngine(db, session.sdk, session.auth, logger);
+    const engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
 
     // Start sync engine if logged in
     if (!session.auth.isLoggedIn()) {

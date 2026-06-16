@@ -67,14 +67,32 @@ export class IgnoreMatcher {
     shouldIgnore(relativePath: string, isDir: boolean): boolean {
         // Normalise to forward slashes for consistent matching
         const normalized = relativePath.replace(/\\/g, '/');
-        const basename = path.posix.basename(normalized);
+
+        // Check all ancestor directories first (implicit inheritance of ignore rules)
+        const parts = normalized.split('/');
+        let currentPath = '';
+        for (let i = 0; i < parts.length - 1; i++) {
+            currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
+            if (this.shouldIgnoreDirect(currentPath, true)) {
+                return true;
+            }
+        }
+
+        return this.shouldIgnoreDirect(normalized, isDir);
+    }
+
+    /**
+     * Test a path directly against compiled ignore patterns.
+     */
+    private shouldIgnoreDirect(normalizedPath: string, isDir: boolean): boolean {
+        const basename = path.posix.basename(normalizedPath);
 
         for (const { regex, dirOnly } of this.compiled) {
             // Directory-only patterns skip files
             if (dirOnly && !isDir) continue;
 
             // Test against both the full relative path and the basename
-            if (regex.test(normalized) || regex.test(basename)) {
+            if (regex.test(normalizedPath) || regex.test(basename)) {
                 return true;
             }
         }

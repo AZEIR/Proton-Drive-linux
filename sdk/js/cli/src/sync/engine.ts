@@ -8,6 +8,7 @@ import path from 'node:path';
 import { getSha1 } from '../commands/fileSystem/digest';
 import { SyncDatabase, SyncMapping } from './db';
 import { IgnoreMatcher, PROTONIGNORE_FILENAME } from './ignore';
+import type { EventsProvider } from '../events/interface';
 
 export class SyncEngine extends EventEmitter {
     private db: SyncDatabase;
@@ -45,14 +46,16 @@ export class SyncEngine extends EventEmitter {
     private pendingLocalDeletes: Map<string, { timestamp: number; isDir: boolean; nodeUid: string }> = new Map();
     /** Ignore matcher — enforces built-in defaults and user .protonignore rules. */
     private ignoreMatcher!: IgnoreMatcher;
+    private eventsProvider?: EventsProvider;
 
 
-    constructor(db: SyncDatabase, sdk: ProtonDriveClient, auth: any, logger: any) {
+    constructor(db: SyncDatabase, sdk: ProtonDriveClient, auth: any, logger: any, eventsProvider?: EventsProvider) {
         super();
         this.db = db;
         this.sdk = sdk;
         this.auth = auth;
         this.logger = logger;
+        this.eventsProvider = eventsProvider;
 
         // Load config with environment variable override
         const envPath = process.env.PROTON_MOUNT_POINT;
@@ -363,6 +366,12 @@ export class SyncEngine extends EventEmitter {
             const pendingDeletes: SyncMapping[] = [];
             for (const mapped of mappingsArr) {
                 if (!localFiles.has(mapped.local_path)) {
+                    if (this.ignoreMatcher.shouldIgnore(mapped.local_path, mapped.is_dir === 1)) {
+                        this.logger.info(`Mapping for ${mapped.local_path} is now ignored. Removing mapping.`);
+                        this.db.deleteMapping(mapped.local_path);
+                        this.cachedMappingCount--;
+                        continue;
+                    }
                     pendingDeletes.push(mapped);
                 }
             }
@@ -461,52 +470,75 @@ export class SyncEngine extends EventEmitter {
         return results;
     }
 
-    // Recursively scan remote Proton folder
-    private async scanRemoteDir(folderUid: string, relativePath: string, result: Map<string, NodeEntity>): Promise<void> {
-        // Fetch all children UIDs with retry
-        const childrenUids = await this.runWithRetry(async () => {
-            const uids: string[] = [];
-            for await (const uid of this.sdk.iterateFolderChildrenNodeUids(folderUid)) {
-                uids.push(uid);
+    // Concurrently scan remote Proton folder
+    private async scanRemoteDir(rootUid: string, rootRelPath: string, result: Map<string, NodeEntity>): Promise<void> {
+        const folderQueue: { uid: string; relPath: string }[] = [{ uid: rootUid, relPath: rootRelPath }];
+        let activeTasks = 0;
+
+        const workers = Array.from({ length: this.concurrencyLimit }, async () => {
+            while (true) {
+                if (folderQueue.length === 0) {
+                    if (activeTasks === 0) break;
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    continue;
+                }
+
+                const current = folderQueue.shift();
+                if (!current) continue;
+
+                activeTasks++;
+                try {
+                    const { uid: folderUid, relPath: relativePath } = current;
+
+                    const childrenUids = await this.runWithRetry(async () => {
+                        const uids: string[] = [];
+                        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(folderUid)) {
+                            uids.push(uid);
+                        }
+                        return uids;
+                    });
+
+                    const childFolders: { uid: string; relPath: string }[] = [];
+                    const chunkSize = 50;
+                    for (let i = 0; i < childrenUids.length; i += chunkSize) {
+                        const chunk = childrenUids.slice(i, i + chunkSize);
+                        const chunkFolders = await this.runWithRetry(async () => {
+                            const folders: { uid: string; relPath: string }[] = [];
+                            for await (const node of this.sdk.iterateNodes(chunk)) {
+                                if ('missingUid' in node) continue;
+                                if (node.trashTime) continue;
+                                
+                                this.remoteScanCount++;
+                                if (this.remoteScanCount % 200 === 0) {
+                                    this.logger.info(`Remote scan: discovered ${this.remoteScanCount} cloud files...`);
+                                    this.db.log('system', 'system', 'syncing', `Remote scan: discovered ${this.remoteScanCount} cloud files...`);
+                                }
+                                
+                                const name = node.name.ok ? node.name.value : 'degraded_name';
+                                const relPath = relativePath ? `${relativePath}/${name}` : name;
+                                
+                                result.set(relPath, node);
+
+                                if (node.type === NodeType.Folder) {
+                                    folders.push({ uid: node.uid, relPath });
+                                }
+                            }
+                            return folders;
+                        });
+                        childFolders.push(...chunkFolders);
+                    }
+
+                    folderQueue.push(...childFolders);
+                } catch (error: any) {
+                    this.logger.error(`[Worker] Error scanning folder ${current.uid}:`, error);
+                    throw error;
+                } finally {
+                    activeTasks--;
+                }
             }
-            return uids;
         });
 
-        // Fetch children in chunks of 50 with retry to optimize network calls
-        const childFolders: { uid: string; relPath: string }[] = [];
-        const chunkSize = 50;
-        for (let i = 0; i < childrenUids.length; i += chunkSize) {
-            const chunk = childrenUids.slice(i, i + chunkSize);
-            const chunkFolders = await this.runWithRetry(async () => {
-                const folders: { uid: string; relPath: string }[] = [];
-                for await (const node of this.sdk.iterateNodes(chunk)) {
-                    if ('missingUid' in node) continue; // Skip missing nodes
-                    if (node.trashTime) continue; // Skip trashed nodes
-                    
-                    const name = node.name.ok ? node.name.value : 'degraded_name';
-                    const relPath = relativePath ? `${relativePath}/${name}` : name;
-                    
-                    result.set(relPath, node);
-                    this.remoteScanCount++;
-
-                    // Log progress every 200 nodes — avoids hammering DB during deep remote scans
-                    if (this.remoteScanCount % 200 === 0) {
-                        this.logger.info(`Remote scan: discovered ${this.remoteScanCount} cloud files...`);
-                    }
-
-                    if (node.type === NodeType.Folder) {
-                        folders.push({ uid: node.uid, relPath });
-                    }
-                }
-                return folders;
-            });
-            childFolders.push(...chunkFolders);
-        }
-
-        // Recursively scan child folders
-        for (const folder of childFolders) {
-            await this.scanRemoteDir(folder.uid, folder.relPath, result);
-        }
+        await Promise.all(workers);
     }
 
     // Two-way reconciliation algorithm
@@ -938,6 +970,12 @@ export class SyncEngine extends EventEmitter {
                     await this.syncRemoteToLocal(relPath, remote);
                 } else {
                     // Previously mapped: was deleted locally
+                    if (this.ignoreMatcher.shouldIgnore(relPath, mapped.is_dir === 1)) {
+                        this.logger.info(`Mapping for ${relPath} is now ignored. Removing mapping.`);
+                        this.db.deleteMapping(relPath);
+                        this.cachedMappingCount--;
+                        return;
+                    }
                     this.logger.info(`Trashing remote node (local deletion): ${relPath}`);
                     await this.deleteRemoteNode(remote.uid, relPath);
                 }
@@ -1019,6 +1057,11 @@ export class SyncEngine extends EventEmitter {
         }
 
         const relativePath = path.relative(this.localSyncRoot, absolutePath);
+
+        if (this.ignoreMatcher.shouldIgnore(relativePath, isDir)) {
+            this.logger.debug(`Ignoring watcher change at ${relativePath} (matches ignore rules)`);
+            return;
+        }
         
         // Reload ignore rules when the user edits .protonignore
         if (path.basename(absolutePath) === PROTONIGNORE_FILENAME && (type === 'add' || type === 'change')) {
@@ -1038,6 +1081,12 @@ export class SyncEngine extends EventEmitter {
 
         try {
             if (type === 'add' || type === 'change') {
+                // Immediately cancel any pending deletion for this exact path
+                if (this.pendingLocalDeletes.has(relativePath)) {
+                    this.logger.info(`Cancelling pending deletion for ${relativePath} due to local recreation/update`);
+                    this.pendingLocalDeletes.delete(relativePath);
+                }
+
                 // Check if this is a moved folder or file from pending deletes
                 let matchedOldPath: string | null = null;
                 let matchedNodeUid: string | null = null;
@@ -1143,6 +1192,8 @@ export class SyncEngine extends EventEmitter {
                 // Standard upload fallback
                 if (this.activeReconciles.has(relativePath)) {
                     this.logger.debug(`Watcher skipping upload for ${relativePath} — reconcile already in progress`);
+                } else if (this.activeTransfers.has(relativePath) || this.activeDownloads.has(relativePath)) {
+                    this.logger.debug(`Watcher skipping upload for ${relativePath} — active transfer in progress`);
                 } else {
                     await this.syncLocalToRemote(relativePath, isDir);
                 }
@@ -1209,11 +1260,20 @@ export class SyncEngine extends EventEmitter {
             try {
                 this.logger.info(`Received remote event type: ${event.type}`);
                 await this.handleRemoteEvent(event);
+                if (this.eventsProvider) {
+                    await this.eventsProvider.setLatestEventId('drive', scopeId, event.eventId);
+                }
                 this.emit('statusChanged');
             } catch (err: any) {
                 this.logger.error('Failed to handle remote event:', err);
             }
         });
+
+        const latestEventId = this.remoteSubscription.getLatestEventId();
+        if (latestEventId && this.eventsProvider) {
+            this.logger.debug(`Subscribed to scope drive:${scopeId} with latest event ID ${latestEventId}`);
+            await this.eventsProvider.setLatestEventId('drive', scopeId, latestEventId);
+        }
     }
 
     private async handleRemoteEvent(event: DriveEvent) {
@@ -1269,6 +1329,10 @@ export class SyncEngine extends EventEmitter {
         // Process remote created or updated event (skip if a reconcile is already handling this path)
         if (this.activeReconciles.has(relativePath)) {
             this.logger.debug(`Remote event for ${relativePath} deferred — reconcile already in progress`);
+            return;
+        }
+        if (this.activeTransfers.has(relativePath) || this.activeDownloads.has(relativePath)) {
+            this.logger.debug(`Remote event for ${relativePath} deferred — active transfer in progress`);
             return;
         }
         await this.syncRemoteToLocal(relativePath, node);

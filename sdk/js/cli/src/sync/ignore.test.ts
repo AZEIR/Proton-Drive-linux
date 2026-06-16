@@ -78,8 +78,9 @@ describe('IgnoreMatcher', () => {
             expect(matcher.shouldIgnore('documents', true)).toBe(false);
         });
 
-        it('does NOT ignore a deeply nested regular file', () => {
-            expect(matcher.shouldIgnore('work/projects/report.docx', false)).toBe(false);
+        it('implicitly ignores files inside ignored directories', () => {
+            expect(matcher.shouldIgnore('.git/config', false)).toBe(true);
+            expect(matcher.shouldIgnore('packages/app/node_modules/lodash/index.js', false)).toBe(true);
         });
     });
 

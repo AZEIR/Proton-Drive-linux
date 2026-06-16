@@ -131,6 +131,8 @@ export async function runFuse(mountPoint: string, port: number) {
             inodes,
             cache,
             logger,
+            undefined,
+            session.eventsProvider,
         );
         await remoteEvents.start(rootFolder);
 
