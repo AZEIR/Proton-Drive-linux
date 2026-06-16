@@ -33,6 +33,10 @@ jobs:
         working-directory: ./sdk/js/cli
         run: bun install
 
+      - name: Print CLI package.json
+        run: |
+          cat sdk/js/cli/package.json
+
       - name: Build Sync and FUSE Daemons
         run: |
           bun run compile:fuse
