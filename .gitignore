@@ -14,3 +14,5 @@ sdk/js/cli/release/
 sdk/js/cli/dist/
 sdk/js/cli/*.sqlite
 sdk/js/cli/*.json
+!sdk/js/cli/package.json
+!sdk/js/cli/tsconfig.json

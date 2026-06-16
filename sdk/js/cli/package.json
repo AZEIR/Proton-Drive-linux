@@ -1,0 +1,57 @@
+{
+  "name": "proton-drive-cli",
+  "private": true,
+  "version": "0.0.1",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "bun ./scripts/build-cli.mjs main",
+    "build:internal": "bun ./scripts/build-cli.mjs internal",
+    "build:sync": "bun ./scripts/build-cli.mjs sync",
+    "build:fuse": "bun ./scripts/build-cli.mjs fuse",
+    "check-types": "tsc --noEmit",
+    "generate-types": "bunx openapi-typescript ../../api/openapi-core.json -o ./src/api/api-core-types.ts && bunx openapi-typescript ../../api/openapi-auth.json -o ./src/api/api-auth-types.ts",
+    "generate-metric-schemas": "bun ./scripts/generate-metric-schemas.ts",
+    "lint": "eslint src integration-tests --ext .ts --cache --ignore-pattern '**/api/*-types.ts'",
+    "pretty": "prettier --write $(find src integration-tests -type f -name '*.ts')",
+    "test": "jest src",
+    "test:watch": "jest src --watch --coverage=false",
+    "test:integration": "jest integration-tests"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.12.3",
+    "@swc/jest": "^0.2.38",
+    "@types/bun": "^1.3.14",
+    "@types/jest": "^29.5.14",
+    "@types/sharedworker": "^0.0.130",
+    "@typescript-eslint/eslint-plugin": "^8.55.0",
+    "bun-types": "^1.3.14",
+    "eslint": "^8.57.1",
+    "eslint-plugin-simple-import-sort": "^13.0.0",
+    "eslint-plugin-tsdoc": "^0.3.0",
+    "jest": "^29.7.0",
+    "json-schema-to-typescript": "^13.1.2",
+    "openapi-typescript": "^7.4.1",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.8",
+    "vite-plugin-dts": "^4.2.4"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "@protontech/crypto": "2.0.0",
+    "@protontech/drive-sdk": "file:../sdk",
+    "@sentry/bun": "^10.53.1",
+    "better-sqlite3": "^12.10.1",
+    "chokidar": "^5.0.0",
+    "fuse-native": "^2.2.6",
+    "ky": "^1.14.3",
+    "ttag": "^1.8.7"
+  },
+  "patchedDependencies": {
+    "@protontech/crypto@2.0.0": "patches/@protontech%2Fcrypto@2.0.0.patch"
+  },
+  "trustedDependencies": [
+    "better-sqlite3",
+    "fuse-native"
+  ]
+}
