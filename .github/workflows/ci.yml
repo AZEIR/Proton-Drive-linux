@@ -89,7 +89,7 @@ jobs:
         working-directory: ./sdk/js/sdk
 
       - name: Run Test Suite
-        run: bun test
+        run: bun run test
         working-directory: ./sdk/js/sdk
 
 
