@@ -35,8 +35,8 @@ jobs:
 
       - name: Build Sync and FUSE Daemons
         run: |
-          bun run build:fuse
-          bun run build:sync
+          bun run compile:fuse
+          bun run compile:sync
 
       - name: Diagnostic - Find Daemons
         run: |
