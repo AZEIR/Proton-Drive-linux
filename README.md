@@ -15,6 +15,9 @@ It runs a background synchronization daemon that keeps a local directory in sync
 
 ---
 
+> [!WARNING]
+> **File-On-Demand (FUSE) Mode is currently broken.** Please use the default **Full Sync Mode** (`PROTON_SYNC_MODE=full`) for synchronization.
+
 ## Getting Started
 
 ### 1. Initial Authentication
