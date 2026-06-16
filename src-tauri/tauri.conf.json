@@ -11,8 +11,8 @@
     "windows": [
       {
         "title": "Proton Drive",
-        "width": 1080,
-        "height": 760,
+        "width": 680,
+        "height": 520,
         "resizable": true,
         "fullscreen": false,
         "label": "main",

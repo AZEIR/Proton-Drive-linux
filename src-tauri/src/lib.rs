@@ -57,9 +57,6 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
 
     println!("[Tauri] Spawning sync daemon at: {}", bin_path);
 
-    let node_bin = which_node().ok_or_else(|| "Neither 'node' nor 'bun' found on system PATH.".to_string())?;
-    println!("[Tauri] Using Node binary: {}", node_bin);
-
     let sync_port = std::env::var("PROTON_SYNC_PORT").unwrap_or_else(|_| "8085".to_string());
     let mount_point = std::env::var("PROTON_MOUNT_POINT")
         .unwrap_or_else(|_| format!("{}/P-Drive", std::env::var("HOME").unwrap_or_default()));
@@ -70,9 +67,19 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
     );
 
     // Run daemon as a child process
-    let mut cmd = Command::new(node_bin);
-    cmd.arg(&bin_path)
-       .arg("--port")
+    let mut cmd = if sync_mode == "full" {
+        // Execute the native compiled binary directly
+        Command::new(&bin_path)
+    } else {
+        // Execute the Node script using Node or Bun
+        let node_bin = which_node().ok_or_else(|| "Neither 'node' nor 'bun' found on system PATH.".to_string())?;
+        println!("[Tauri] Using Node binary: {}", node_bin);
+        let mut c = Command::new(node_bin);
+        c.arg(&bin_path);
+        c
+    };
+
+    cmd.arg("--port")
        .arg(&sync_port)
        .arg("--mount-point")
        .arg(&mount_point)

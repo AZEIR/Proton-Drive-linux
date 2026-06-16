@@ -24,6 +24,7 @@ export function startDashboard(
 ) {
     const logger = session.logger;
     let isAuthenticating = false;
+    let cachedEmail = 'Not Logged In';
 
     const server = Bun.serve({
         port,
@@ -37,11 +38,14 @@ export function startDashboard(
                     if (session.auth.isLoggedIn()) {
                         const primaryAddress = await session.addresses.getOwnPrimaryAddress();
                         email = primaryAddress.email;
+                        cachedEmail = email;
 
                         // Legacy full-sync: auto-start if idle
                         if (engine && engine.getStatus() === 'idle') {
                             engine.start();
                         }
+                    } else {
+                        cachedEmail = 'Not Logged In';
                     }
                 } catch {}
 
@@ -57,6 +61,8 @@ export function startDashboard(
                         bulkDeletionCount: 0,
                         email,
                         isAuthenticating,
+                    }, {
+                        headers: { 'Access-Control-Allow-Origin': '*' }
                     });
                 }
 
@@ -69,6 +75,8 @@ export function startDashboard(
                     bulkDeletionCount: engine!.getBulkDeletionCount(),
                     email,
                     isAuthenticating,
+                }, {
+                    headers: { 'Access-Control-Allow-Origin': '*' }
                 });
             }
 
@@ -94,6 +102,12 @@ export function startDashboard(
                         }).then(async () => {
                             isAuthenticating = false;
                             db.log('system', 'system', 'completed', 'Authentication successful. Starting sync engine...');
+                            try {
+                                if (session.auth.isLoggedIn()) {
+                                    const primaryAddress = await session.addresses.getOwnPrimaryAddress();
+                                    cachedEmail = primaryAddress.email;
+                                }
+                            } catch {}
                             if (engine) {
                                 await engine.start();
                                 engine.emit('statusChanged');
@@ -243,19 +257,55 @@ export function startDashboard(
 
             // SSE PUSH STREAM — replaces client-side 1s polling for status updates
             if (url.pathname === '/api/events') {
-                if (!engine) {
-                    return new Response('Engine not available', { status: 503 });
-                }
                 let cleanup: (() => void) | null = null;
                 const stream = new ReadableStream({
                     start(controller) {
                         const encoder = new TextEncoder();
-                        const send = () => {
+                        const send = async () => {
                             try {
-                                const status = engine!.getStatus();
-                                const transfers = engine!.getActiveTransfers();
-                                const bulkCount = engine!.getBulkDeletionCount();
-                                const payload = JSON.stringify({ status, activeTransfers: transfers, bulkDeletionCount: bulkCount, isAuthenticating });
+                                if (cachedEmail === 'Not Logged In' && session.auth.isLoggedIn()) {
+                                    try {
+                                        const primaryAddress = await session.addresses.getOwnPrimaryAddress();
+                                        cachedEmail = primaryAddress.email;
+                                    } catch {}
+                                } else if (!session.auth.isLoggedIn()) {
+                                    cachedEmail = 'Not Logged In';
+                                }
+
+                                let payload: string;
+                                if (fod?.isFuseMode) {
+                                    const uploads = fod.getUploads();
+                                    payload = JSON.stringify({
+                                        status:          session.auth.isLoggedIn() ? 'synced' : 'auth_required',
+                                        mode:            'fod',
+                                        mountPoint:      fod.mountPoint,
+                                        activeTransfers: uploads.map((u: any) => ({ ...u, type: 'upload' })),
+                                        isPaused:        false,
+                                        bulkDeletionCount: 0,
+                                        email:           cachedEmail,
+                                        isAuthenticating,
+                                    });
+                                } else if (engine) {
+                                    const status = engine.getStatus();
+                                    const transfers = engine.getActiveTransfers();
+                                    const bulkCount = engine.getBulkDeletionCount();
+                                    const localSyncRoot = engine.getLocalSyncRoot();
+                                    payload = JSON.stringify({
+                                        status,
+                                        activeTransfers: transfers,
+                                        bulkDeletionCount: bulkCount,
+                                        isAuthenticating,
+                                        localSyncRoot,
+                                        email: cachedEmail
+                                    });
+                                } else {
+                                    payload = JSON.stringify({
+                                        status: 'error',
+                                        error: 'Engine/FOD not initialized',
+                                        email: cachedEmail,
+                                        isAuthenticating,
+                                    });
+                                }
                                 controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
                             } catch {
                                 // Client disconnected
@@ -263,8 +313,13 @@ export function startDashboard(
                         };
                         // Send immediately on connect, then on every change
                         send();
-                        engine!.on('statusChanged', send);
-                        cleanup = () => engine!.off('statusChanged', send);
+                        if (engine) {
+                            engine.on('statusChanged', send);
+                            cleanup = () => engine.off('statusChanged', send);
+                        } else if (fod?.isFuseMode) {
+                            const interval = setInterval(send, 3000);
+                            cleanup = () => clearInterval(interval);
+                        }
                     },
                     cancel() {
                         if (cleanup) cleanup();
@@ -1380,6 +1435,19 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
         /* ── RESPONSIVE MEDIA QUERIES ────────────────────────────────────── */
 
+        @media (max-width: 1100px) {
+            .card-hero {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 1.2rem;
+                padding: 1.5rem;
+            }
+            .card-hero-actions {
+                width: 100%;
+                justify-content: flex-start;
+            }
+        }
+
         @media (max-width: 1024px) {
             .sidebar {
                 position: fixed;
@@ -1409,6 +1477,62 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
             .content-container {
                 padding: 1.5rem;
+            }
+        }
+
+        @media (max-width: 850px) {
+            .topbar {
+                height: 56px;
+                padding: 0 1.25rem;
+            }
+            .section-title {
+                font-size: 1.2rem;
+            }
+            .status-badge {
+                padding: 0.4rem 0.75rem;
+                font-size: 0.72rem;
+            }
+            .content-container {
+                padding: 1.25rem;
+            }
+            .card {
+                padding: 1.25rem;
+                margin-bottom: 1rem;
+                border-radius: 12px;
+            }
+            .card-hero {
+                padding: 1.2rem 1.25rem;
+                gap: 1.2rem;
+            }
+            .status-icon-wrapper {
+                width: 44px;
+                height: 44px;
+            }
+            .hero-icon {
+                width: 24px;
+                height: 24px;
+            }
+            .status-info h2 {
+                font-size: 1.15rem;
+                margin-bottom: 4px;
+            }
+            .status-info p {
+                font-size: 0.85rem;
+            }
+            .btn {
+                padding: 0.5rem 1rem;
+                font-size: 0.82rem;
+                border-radius: 6px;
+            }
+            .card-header-flex {
+                gap: 8px;
+            }
+            .card-header-flex h2 {
+                font-size: 1.05rem;
+            }
+            .logs-table-wrapper th, .logs-table-wrapper td {
+                padding: 0.6rem 0.8rem;
+                font-size: 0.82rem;
             }
         }
 
@@ -1684,12 +1808,12 @@ function getHtmlContent(isFodMode: boolean = false): string {
                                     </div>
                                 </div>
                                 <div class="card-hero-actions">
-                                    <div id="syncActions" style="display: flex; gap: 8px;">
+                                    <div id="syncActions" style="display: flex; gap: 8px; flex-wrap: wrap;">
                                         <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
                                         <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
                                         <button class="btn" onclick="openFolder()">Open Folder</button>
                                     </div>
-                                    <div id="authActions" style="display: none; gap: 8px;">
+                                    <div id="authActions" style="display: none; gap: 8px; flex-wrap: wrap;">
                                         <button id="btnLogin" class="btn btn-primary" onclick="login()">Login to Proton Drive</button>
                                     </div>
                                 </div>
@@ -2134,21 +2258,23 @@ function getHtmlContent(isFodMode: boolean = false): string {
 
             // Sync path input field (full-sync mode only)
             const pathInput = document.getElementById('syncPath');
-            if (pathInput && document.activeElement !== pathInput) {
+            if (pathInput && document.activeElement !== pathInput && (data.localSyncRoot !== undefined || data.mountPoint !== undefined)) {
                 pathInput.value = data.localSyncRoot || data.mountPoint || '';
             }
 
             // User Profile Email and Status
-            document.getElementById('userEmail').innerText = data.email;
-            const userStatus = document.getElementById('userStatus');
-            if (data.email && data.email !== 'Not Logged In') {
-                document.getElementById('avatarLetter').innerText = data.email[0].toUpperCase();
-                userStatus.innerText = 'Connected';
-                userStatus.style.color = 'var(--success)';
-            } else {
-                document.getElementById('avatarLetter').innerText = '?';
-                userStatus.innerText = 'Disconnected';
-                userStatus.style.color = 'var(--danger)';
+            if (data.email !== undefined) {
+                document.getElementById('userEmail').innerText = data.email;
+                const userStatus = document.getElementById('userStatus');
+                if (data.email && data.email !== 'Not Logged In') {
+                    document.getElementById('avatarLetter').innerText = data.email[0].toUpperCase();
+                    userStatus.innerText = 'Connected';
+                    userStatus.style.color = 'var(--success)';
+                } else {
+                    document.getElementById('avatarLetter').innerText = '?';
+                    userStatus.innerText = 'Disconnected';
+                    userStatus.style.color = 'var(--danger)';
+                }
             }
 
             // Active transfers section
