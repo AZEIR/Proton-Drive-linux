@@ -1288,7 +1288,7 @@ export class SyncEngine extends EventEmitter {
                                 await this.deleteRemoteNode(pending.nodeUid, relativePath);
                             }
                         }
-                    }, 200);
+                    }, 2500);
                 }
             }
             this.emit('statusChanged');
