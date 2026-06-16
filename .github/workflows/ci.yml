@@ -38,6 +38,15 @@ jobs:
           bun run build:fuse
           bun run build:sync
 
+      - name: Diagnostic - Find Daemons
+        run: |
+          echo "=== Finding compiled daemons ==="
+          find . -name "proton-fuse" -o -name "proton-sync"
+          echo "=== Root contents ==="
+          ls -la
+          echo "=== CLI release contents ==="
+          ls -la sdk/js/cli/release || echo "sdk/js/cli/release not found"
+
       - name: Build Desktop Application
         run: bun run tauri build
 
