@@ -150,9 +150,9 @@ pub fn run() {
                         _ => {}
                     }
                 })
-                .on_tray_icon_event(|app, event| {
+                .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click { .. } = event {
-                        if let Some(win) = app.get_webview_window("main") {
+                        if let Some(win) = tray.app_handle().get_webview_window("main") {
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
