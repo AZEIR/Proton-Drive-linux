@@ -1,0 +1,18 @@
+[Unit]
+Description=Proton Drive Sync Client Daemon
+After=network-online.target graphical-session.target
+Wants=network-online.target proton-drive-tray.service
+Requisite=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart={{NODE_BIN}} {{SCRIPT_DIR}}/sdk/js/cli/release/proton-fuse --mount-point {{MOUNT_POINT}} --port {{PORT}}
+Restart=on-failure
+RestartSec=10s
+Environment=PROTON_SYNC_MODE={{SYNC_MODE}}
+Environment=PROTON_MOUNT_POINT={{MOUNT_POINT}}
+Environment=PROTON_SYNC_PORT={{PORT}}
+WorkingDirectory={{SCRIPT_DIR}}
+
+[Install]
+WantedBy=graphical-session.target

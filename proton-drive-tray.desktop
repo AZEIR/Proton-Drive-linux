@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Proton Drive Tray
+Comment=Proton Drive System Tray Status Icon
+Exec=/home/azeir/Code/drive-project/proton-drive-tray.py
+Icon=/home/azeir/Code/drive-project/src-tauri/icons/icon.png
+Terminal=false
+Categories=Network;FileTransfer;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

@@ -18,6 +18,12 @@ show_help() {
     echo "  restart [path]    - Restart the daemon with optional custom path"
     echo "  status            - Check daemon status & view dashboard link"
     echo ""
+    echo "Tray Icon Commands:"
+    echo "  tray              - Start the system tray icon in background"
+    echo "  stop-tray         - Stop the system tray icon"
+    echo "  install-tray      - Enable tray icon autostart on desktop login"
+    echo "  uninstall-tray    - Disable tray icon autostart on desktop login"
+    echo ""
     echo "File Commands:"
     echo "  login             - Authenticate your Proton account"
     echo "  logs              - View real-time daemon logs"
@@ -108,6 +114,65 @@ case "$1" in
         fi
         cd "${SCRIPT_DIR}/sdk/js/cli" && "$BUN_BIN" run build:fuse
         echo "Build complete: ${SCRIPT_DIR}/sdk/js/cli/release/proton-fuse"
+        ;;
+    tray)
+        echo "Starting Proton Drive system tray icon..."
+        TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
+        TRAY_LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-tray.log"
+        mkdir -p "$(dirname "$TRAY_PIDFILE")"
+        mkdir -p "$(dirname "$TRAY_LOGFILE")"
+
+        if [ -f "$TRAY_PIDFILE" ]; then
+            T_PID=$(cat "$TRAY_PIDFILE")
+            if ps -p "$T_PID" > /dev/null 2>&1; then
+                echo "Tray icon is already running (PID: $T_PID)."
+                exit 0
+            fi
+        fi
+
+        setsid "${SCRIPT_DIR}/proton-drive-tray.py" < /dev/null > "$TRAY_LOGFILE" 2>&1 &
+        PID=$!
+        sleep 0.5
+        if ps -p "$PID" > /dev/null 2>&1; then
+            echo "$PID" > "$TRAY_PIDFILE"
+            disown $PID
+            echo "Tray icon started in background (PID: $PID). Logs: $TRAY_LOGFILE"
+        else
+            echo "ERROR: Failed to start tray icon. Logs: $TRAY_LOGFILE"
+            rm -f "$TRAY_PIDFILE"
+        fi
+        ;;
+    stop-tray)
+        echo "Stopping Proton Drive system tray icon..."
+        TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
+        if [ -f "$TRAY_PIDFILE" ]; then
+            T_PID=$(cat "$TRAY_PIDFILE")
+            if ps -p "$T_PID" > /dev/null 2>&1; then
+                kill "$T_PID"
+                echo "Tray icon stopped (PID: $T_PID)."
+            else
+                echo "Tray icon is not running (stale PID file removed)."
+            fi
+            rm -f "$TRAY_PIDFILE"
+        else
+            T_PID=$(pgrep -f "python3 .*/proton-drive-tray.py" | head -n 1)
+            if [ -n "$T_PID" ]; then
+                kill "$T_PID"
+                echo "Tray icon stopped (PID: $T_PID)."
+            else
+                echo "Tray icon is not running."
+            fi
+        fi
+        ;;
+    install-tray)
+        mkdir -p "${HOME}/.config/autostart"
+        cp "${SCRIPT_DIR}/proton-drive-tray.desktop" "${HOME}/.config/autostart/proton-drive-tray.desktop"
+        chmod +x "${HOME}/.config/autostart/proton-drive-tray.desktop"
+        echo "Tray icon desktop entry copied to ~/.config/autostart/ for session autostart."
+        ;;
+    uninstall-tray)
+        rm -f "${HOME}/.config/autostart/proton-drive-tray.desktop"
+        echo "Tray icon desktop entry removed from ~/.config/autostart/."
         ;;
     *)
         show_help
