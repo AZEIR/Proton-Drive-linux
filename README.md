@@ -2,6 +2,8 @@
 
 A fully featured, offline-first, two-way sync client daemon for Proton Drive on Linux, resembling the behavior of the official Windows client. 
 
+<img width="2880" height="1525" alt="Screenshot_20260617_113416" src="https://github.com/user-attachments/assets/353b755f-cc6d-4371-88b1-63d9fc736daa" />
+
 It runs a background synchronization daemon that keeps a local directory in sync with your Proton Drive cloud, and exposes a beautiful web-based dashboard UI locally.
 
 ## Features
