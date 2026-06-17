@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # The binary launches the FUSE daemon and blocks until shutdown
-ExecStart=%h/Code/drive-project/sdk/js/cli/release/proton-fuse \
+ExecStart=%h/Proton-Drive-linux/sdk/js/cli/release/proton-fuse \
     --mount-point %h/ProtonDrive \
     --port 8085
 ExecStop=/bin/fusermount3 -u %h/ProtonDrive

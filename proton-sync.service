@@ -3,7 +3,7 @@ Description=Proton Drive Sync Client Daemon
 After=network.target
 
 [Service]
-ExecStart=/home/azeir/Code/drive-project/sdk/js/cli/release/proton-sync
+ExecStart=%h/Proton-Drive-linux/sdk/js/cli/release/proton-sync
 Restart=on-failure
 RestartSec=10
 Environment=PROTON_SYNC_PORT=8085

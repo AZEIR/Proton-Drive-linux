@@ -6,7 +6,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/home/azeir/Code/drive-project/proton-drive-tray.py
+ExecStart=%h/Proton-Drive-linux/proton-drive-tray.py
 Restart=on-failure
 RestartSec=10
 
