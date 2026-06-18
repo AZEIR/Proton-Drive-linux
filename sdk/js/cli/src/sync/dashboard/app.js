@@ -155,13 +155,13 @@
                     if (logFilterCategory === 'downloads') return !isUpload;
                     if (logFilterCategory === 'system' || logFilterCategory === 'failed') return false;
                     if (logSearchQuery) {
-                        const name = (t.filePath || t.localPath || '').split('/').pop();
+                        const name = t.filePath || t.localPath || '';
                         return name.toLowerCase().includes(logSearchQuery);
                     }
                     return true;
                 })
                 .map(t => {
-                    const name      = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
+                    const name      = t.filePath || t.localPath || 'file';
                     const isUpload  = t.type === 'upload';
                     const dirColor  = isUpload ? '#a78bfa' : '#10b981';
                     const dirLabel  = isUpload ? 'upload' : 'download';

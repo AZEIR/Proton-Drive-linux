@@ -8,8 +8,8 @@ import {
 } from "@protontech/drive-sdk";
 import chokidar from "chokidar";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, statSync, utimesSync } from "node:fs";
-import { mkdir, readdir, rename, rm, stat, unlink } from "node:fs/promises";
+import { existsSync, mkdirSync, utimesSync } from "node:fs";
+import { mkdir, readdir, rename, rm, stat, lstat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { getSha1 } from "../commands/fileSystem/digest";
@@ -334,6 +334,7 @@ export class SyncEngine extends EventEmitter {
 
     // Process all pending deletions that were paused
     const pendingDeletes = Array.from(this.pendingLocalDeletes.entries());
+    const pendingDeletePaths = new Set(pendingDeletes.map(([p]) => p));
     this.pendingLocalDeletes.clear();
     for (const [relPath, pending] of pendingDeletes) {
       try {
@@ -343,7 +344,7 @@ export class SyncEngine extends EventEmitter {
         let current = "";
         for (let i = 0; i < parts.length - 1; i++) {
           current = current ? `${current}/${parts[i]}` : parts[i];
-          if (pendingDeletes.some(([p]) => p === current)) {
+          if (pendingDeletePaths.has(current)) {
             ancestorPending = true;
             break;
           }
@@ -572,7 +573,11 @@ export class SyncEngine extends EventEmitter {
             if (this.isPaused || !this.isStarted) break;
             const item = queue.shift();
             if (item) {
-              await this.syncLocalToRemote(item.path, false);
+              try {
+                await this.syncLocalToRemote(item.path, false);
+              } catch (err: any) {
+                this.logger.error(`Upload worker error for ${item.path}:`, err);
+              }
             }
           }
         },
@@ -630,7 +635,11 @@ export class SyncEngine extends EventEmitter {
         const absPath = path.join(dir, relPath);
 
         try {
-          const st = await stat(absPath);
+          const st = await lstat(absPath);
+          if (st.isSymbolicLink()) {
+            this.logger.debug(`[scan] Skipping symlink: ${relPath}`);
+            return;
+          }
           const isDir = st.isDirectory();
 
           // Skip ignored paths early — avoids traversing node_modules etc.
@@ -1384,8 +1393,8 @@ export class SyncEngine extends EventEmitter {
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: {
-        stabilityThreshold: 3000, // Waits 3 full seconds of silence before firing sync loops
-        pollInterval: 500, // Verifies file metadata updates every 500ms
+        stabilityThreshold: 1500,
+        pollInterval: 300,
       },
     });
 
@@ -1619,25 +1628,23 @@ export class SyncEngine extends EventEmitter {
 
             // C. If directory, recursively rename child mappings in DB
             if (isDir) {
-              const allMappings = this.db.getAllMappings();
-              for (const m of allMappings) {
-                if (m.local_path.startsWith(`${matchedOldPath}/`)) {
-                  const suffix = m.local_path.slice(matchedOldPath.length);
-                  const newChildPath = `${relativePath}${suffix}`;
+              const childMappings = this.db.getMappingsByPrefix(matchedOldPath);
+              for (const m of childMappings) {
+                const suffix = m.local_path.slice(matchedOldPath.length);
+                const newChildPath = `${relativePath}${suffix}`;
 
-                  this.db.deleteMapping(m.local_path);
-                  this.db.setMapping({
-                    ...m,
-                    local_path: newChildPath,
-                  });
+                this.db.deleteMapping(m.local_path);
+                this.db.setMapping({
+                  ...m,
+                  local_path: newChildPath,
+                });
 
-                  // Cancel any pending delete for child files
-                  this.pendingLocalDeletes.delete(m.local_path);
-                  this.ignorePathTemporarily(
-                    this.resolveLocalPath(newChildPath),
-                    3000,
-                  );
-                }
+                // Cancel any pending delete for child files
+                this.pendingLocalDeletes.delete(m.local_path);
+                this.ignorePathTemporarily(
+                  this.resolveLocalPath(newChildPath),
+                  3000,
+                );
               }
             }
 
@@ -1726,16 +1733,23 @@ export class SyncEngine extends EventEmitter {
                 this.recentDeletions.shift();
               }
 
-              if (isEmptyWipe || this.recentDeletions.length >= 10) {
+              // Require both an absolute minimum AND a proportional threshold so
+              // that normal developer workflows (git checkout, rm node_modules)
+              // don't trigger false positives. Mirrors the startup reconciliation logic.
+              const isBulkDelete =
+                this.recentDeletions.length >= 10 &&
+                this.recentDeletions.length > mappedCount * 0.3;
+
+              if (isEmptyWipe || isBulkDelete) {
                 this.logger.warn(
-                  `Bulk deletion safety warning triggered inside timer! isEmptyWipe=${isEmptyWipe}, deletionsCount=${this.recentDeletions.length}`,
+                  `Bulk deletion safety warning triggered! isEmptyWipe=${isEmptyWipe}, deletionsCount=${this.recentDeletions.length}, mappedCount=${mappedCount}`,
                 );
                 this.bulkDeletionWarning = true;
                 await this.pause();
 
                 const msg = isEmptyWipe
                   ? "Local sync folder was emptied. Synchronization paused to protect remote cloud files."
-                  : `Bulk deletion of ${this.recentDeletions.length} files detected. Synchronization paused.`;
+                  : `Bulk deletion of ${this.recentDeletions.length} files (${Math.round(this.recentDeletions.length / mappedCount * 100)}% of synced files) detected. Synchronization paused.`;
 
                 this.db.log("system", "system", "failed", msg);
                 this.emit("statusChanged");
@@ -1904,7 +1918,7 @@ export class SyncEngine extends EventEmitter {
     try {
       if (isDir) {
         await this.runWithRetry(async () => {
-          const stat = statSync(localPath);
+          const fileStat = await stat(localPath);
 
           // Ensure parent exists remotely and get its UID
           const parts = relativePath.split("/");
@@ -1933,10 +1947,10 @@ export class SyncEngine extends EventEmitter {
             node_uid: nodeUid,
             is_dir: 1,
             size: 0,
-            mtime: stat.mtimeMs,
+            mtime: fileStat.mtimeMs,
             sha1: "",
             remote_revision_uid: "",
-            remote_mtime: stat.mtimeMs,
+            remote_mtime: fileStat.mtimeMs,
           });
 
           this.db.log(
@@ -1948,9 +1962,9 @@ export class SyncEngine extends EventEmitter {
         });
       } else {
         // It is a file upload
-        const stat = statSync(localPath);
-        const size = stat.size;
-        const mtime = stat.mtimeMs;
+        const fileStat = await stat(localPath);
+        const size = fileStat.size;
+        const mtime = fileStat.mtimeMs;
         const sha1 = await getSha1(localPath);
 
         const file = Bun.file(localPath);
@@ -2336,7 +2350,7 @@ export class SyncEngine extends EventEmitter {
         utimesSync(localPath, new Date(), new Date(remoteMtime));
 
         // Fetch local stat to verify size/mtime mapping
-        const localStat = statSync(localPath);
+        const localStat = await stat(localPath);
 
         // Save mapping
         this.db.setMapping({
@@ -2491,7 +2505,7 @@ export class SyncEngine extends EventEmitter {
               try {
                 const localFolderAbsPath = this.resolveLocalPath(prefix);
                 if (existsSync(localFolderAbsPath)) {
-                  folderMtime = statSync(localFolderAbsPath).mtimeMs;
+                  folderMtime = (await stat(localFolderAbsPath)).mtimeMs;
                 }
               } catch (e) {}
 
@@ -2548,12 +2562,7 @@ export class SyncEngine extends EventEmitter {
 
       // If it is a directory, recursively delete child mappings in the database
       if (isDir) {
-        const allMappings = this.db.getAllMappings();
-        for (const m of allMappings) {
-          if (m.local_path.startsWith(`${relativePath}/`)) {
-            this.db.deleteMapping(m.local_path);
-          }
-        }
+        this.db.deleteMappingsByPrefix(relativePath);
       }
 
       this.db.log(
@@ -2623,6 +2632,7 @@ export class SyncEngine extends EventEmitter {
 
     // Process all pending deletions that were paused
     const pendingDeletes = Array.from(this.pendingLocalDeletes.entries());
+    const pendingDeletePaths = new Set(pendingDeletes.map(([p]) => p));
     this.pendingLocalDeletes.clear();
     for (const [relPath, pending] of pendingDeletes) {
       try {
@@ -2632,7 +2642,7 @@ export class SyncEngine extends EventEmitter {
         let current = "";
         for (let i = 0; i < parts.length - 1; i++) {
           current = current ? `${current}/${parts[i]}` : parts[i];
-          if (pendingDeletes.some(([p]) => p === current)) {
+          if (pendingDeletePaths.has(current)) {
             ancestorPending = true;
             break;
           }

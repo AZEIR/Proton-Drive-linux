@@ -69,6 +69,7 @@ if [ "$FORCE_REBUILD" -eq 1 ]; then
         echo "(Service not running — start it with: ./drive.sh start)"
     fi
     # Restart tray so it reconnects to the restarted daemon
+    "${SCRIPT_DIR}/drive.sh" install-tray
     "${SCRIPT_DIR}/drive.sh" stop-tray 2>/dev/null || true
     sleep 1
     "${SCRIPT_DIR}/drive.sh" tray
@@ -170,7 +171,8 @@ if ! systemctl --user is-active --quiet "$SERVICE_NAME"; then
     exit 1
 fi
 
-# ── 5. Start / restart tray icon ─────────────────────────────────────────────
+# ── 5. Install tray autostart and start / restart tray icon ──────────────────
+"${SCRIPT_DIR}/drive.sh" install-tray
 "${SCRIPT_DIR}/drive.sh" stop-tray 2>/dev/null || true
 sleep 1
 "${SCRIPT_DIR}/drive.sh" tray

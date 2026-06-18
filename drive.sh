@@ -166,9 +166,11 @@ case "$1" in
         ;;
     install-tray)
         mkdir -p "${HOME}/.config/autostart"
-        cp "${SCRIPT_DIR}/proton-drive-tray.desktop" "${HOME}/.config/autostart/proton-drive-tray.desktop"
+        sed "s|__INSTALL_DIR__|${SCRIPT_DIR}|g" \
+            "${SCRIPT_DIR}/proton-drive-tray.desktop" \
+            > "${HOME}/.config/autostart/proton-drive-tray.desktop"
         chmod +x "${HOME}/.config/autostart/proton-drive-tray.desktop"
-        echo "Tray icon desktop entry copied to ~/.config/autostart/ for session autostart."
+        echo "Tray icon installed to ~/.config/autostart/ — will start automatically on desktop login."
         ;;
     uninstall-tray)
         rm -f "${HOME}/.config/autostart/proton-drive-tray.desktop"

@@ -25,29 +25,16 @@ describe('IgnoreMatcher', () => {
     });
 
     describe('built-in default patterns', () => {
-        it('ignores node_modules directory', () => {
-            expect(matcher.shouldIgnore('node_modules', true)).toBe(true);
-        });
-
-        it('does NOT ignore a file named node_modules (not a dir)', () => {
-            // node_modules/ is directory-only
-            expect(matcher.shouldIgnore('node_modules', false)).toBe(false);
-        });
-
-        it('ignores .git directory', () => {
-            expect(matcher.shouldIgnore('.git', true)).toBe(true);
-        });
-
-        it('ignores nested node_modules', () => {
-            expect(matcher.shouldIgnore('packages/app/node_modules', true)).toBe(true);
-        });
-
         it('ignores .DS_Store file', () => {
             expect(matcher.shouldIgnore('.DS_Store', false)).toBe(true);
         });
 
         it('ignores Thumbs.db file', () => {
             expect(matcher.shouldIgnore('Thumbs.db', false)).toBe(true);
+        });
+
+        it('ignores desktop.ini file', () => {
+            expect(matcher.shouldIgnore('desktop.ini', false)).toBe(true);
         });
 
         it('ignores .protonignore itself', () => {
@@ -62,12 +49,9 @@ describe('IgnoreMatcher', () => {
             expect(matcher.shouldIgnore('~$report.docx', false)).toBe(true);
         });
 
-        it('ignores .vscode directory', () => {
-            expect(matcher.shouldIgnore('.vscode', true)).toBe(true);
-        });
-
-        it('ignores .idea directory', () => {
-            expect(matcher.shouldIgnore('.idea', true)).toBe(true);
+        it('ignores vim swap files (*.swp, *.swo)', () => {
+            expect(matcher.shouldIgnore('file.swp', false)).toBe(true);
+            expect(matcher.shouldIgnore('file.swo', false)).toBe(true);
         });
 
         it('does NOT ignore a regular file', () => {
@@ -78,9 +62,28 @@ describe('IgnoreMatcher', () => {
             expect(matcher.shouldIgnore('documents', true)).toBe(false);
         });
 
-        it('implicitly ignores files inside ignored directories', () => {
-            expect(matcher.shouldIgnore('.git/config', false)).toBe(true);
-            expect(matcher.shouldIgnore('packages/app/node_modules/lodash/index.js', false)).toBe(true);
+        it('does NOT ignore .git directory (syncs like any other folder)', () => {
+            expect(matcher.shouldIgnore('.git', true)).toBe(false);
+        });
+
+        it('does NOT ignore node_modules directory', () => {
+            expect(matcher.shouldIgnore('node_modules', true)).toBe(false);
+        });
+
+        it('does NOT ignore .vscode directory', () => {
+            expect(matcher.shouldIgnore('.vscode', true)).toBe(false);
+        });
+
+        it('does NOT ignore .idea directory', () => {
+            expect(matcher.shouldIgnore('.idea', true)).toBe(false);
+        });
+
+        it('does NOT ignore .obsidian directory', () => {
+            expect(matcher.shouldIgnore('.obsidian', true)).toBe(false);
+        });
+
+        it('does NOT ignore files inside .git', () => {
+            expect(matcher.shouldIgnore('.git/config', false)).toBe(false);
         });
     });
 
@@ -97,6 +100,21 @@ describe('IgnoreMatcher', () => {
             matcher.reload();
             expect(matcher.shouldIgnore('dist', true)).toBe(true);
             expect(matcher.shouldIgnore('packages/app/dist', true)).toBe(true);
+        });
+
+        it('can ignore node_modules via user pattern', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), 'node_modules/\n');
+            matcher.reload();
+            expect(matcher.shouldIgnore('node_modules', true)).toBe(true);
+            expect(matcher.shouldIgnore('node_modules', false)).toBe(false); // file named "node_modules" not ignored
+            expect(matcher.shouldIgnore('packages/app/node_modules', true)).toBe(true);
+        });
+
+        it('can ignore .git via user pattern', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '.git/\n');
+            matcher.reload();
+            expect(matcher.shouldIgnore('.git', true)).toBe(true);
+            expect(matcher.shouldIgnore('.git/config', false)).toBe(true);
         });
 
         it('ignores comment lines (#)', () => {
@@ -129,6 +147,36 @@ describe('IgnoreMatcher', () => {
             matcher.reload();
             // Rooted: matches only at top level
             expect(matcher.shouldIgnore('cache', true)).toBe(true);
+        });
+    });
+
+    describe('negation patterns (!)', () => {
+        it('un-ignores a user-blocked directory via !pattern', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '.git/\n!.git/\n');
+            matcher.reload();
+            expect(matcher.shouldIgnore('.git', true)).toBe(false);
+        });
+
+        it('un-ignores a custom pattern added earlier in the same file', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '*.log\n!important.log\n');
+            matcher.reload();
+            expect(matcher.shouldIgnore('server.log', false)).toBe(true);
+            expect(matcher.shouldIgnore('important.log', false)).toBe(false);
+        });
+
+        it('still ignores paths that do not match the negation', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '.git/\n.svn/\n!.git/\n');
+            matcher.reload();
+            // .git is un-ignored; .svn is still blocked
+            expect(matcher.shouldIgnore('.git', true)).toBe(false);
+            expect(matcher.shouldIgnore('.svn', true)).toBe(true);
+        });
+
+        it('ignores a bare ! line (empty after stripping)', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '!\n*.log\n');
+            matcher.reload();
+            // bare ! is discarded; *.log should still be applied
+            expect(matcher.shouldIgnore('server.log', false)).toBe(true);
         });
     });
 
