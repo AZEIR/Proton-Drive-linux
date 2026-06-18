@@ -415,6 +415,7 @@
             flex-grow: 1;
             padding: 2rem;
             overflow-y: auto;
+            will-change: transform;
         }
 
         /* Tab Panels */
@@ -695,8 +696,6 @@
 
         .logs-table-wrapper {
             overflow-x: auto;
-            max-height: 550px;
-            overflow-y: auto;
             border-radius: 12px;
             border: 1px solid var(--border-color);
             background: var(--input-bg);
