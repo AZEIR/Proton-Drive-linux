@@ -39,20 +39,23 @@ export class FallbackCredentialsStore implements CredentialsStore {
     }
 
     async save(snapshot: Credentials): Promise<void> {
-        if (this.useFallback) {
-            this.logger.debug('Saving credentials to fallback plaintext file store (sticky fallback active)');
-            return this.fallback.save(snapshot);
-        }
+        // Always attempt primary first (keyring).
         try {
             this.logger.debug('Attempting to save credentials to primary secure store');
             await this.primary.save(snapshot);
             this.logger.debug('Successfully saved credentials to primary secure store');
         } catch (err: any) {
             this.logger.warn(
-                `Primary secure credentials store failed to save. Falling back to plaintext file store. Error: ${err.message || err}`
+                `Primary secure credentials store failed to save. Error: ${err.message || err}`
             );
             this.useFallback = true;
+        }
+        // Always write to the file fallback so credentials survive a keyring
+        // outage at service startup time (e.g. GNOME Keyring not yet unlocked).
+        try {
             await this.fallback.save(snapshot);
+        } catch (err: any) {
+            this.logger.warn(`Failed to save credentials to fallback plaintext file store: ${err.message || err}`);
         }
     }
 

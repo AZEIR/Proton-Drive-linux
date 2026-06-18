@@ -4,14 +4,13 @@ import path from 'node:path';
 /**
  * Built-in patterns that are always ignored regardless of user config.
  * Entries ending with '/' are directory-only patterns.
+ *
+ * This list is intentionally minimal — it only blocks things that would
+ * cause sync loops or are pure OS/editor noise with no meaningful content.
+ * Opinionated directory exclusions (node_modules, .git, IDE folders, etc.)
+ * belong in the user's .protonignore, not here.
  */
 const DEFAULT_PATTERNS: string[] = [
-    'node_modules/',
-    '.git/',
-    '.svn/',
-    '.hg/',
-    '.idea/',
-    '.vscode/',
     '.DS_Store',
     'Thumbs.db',
     'desktop.ini',

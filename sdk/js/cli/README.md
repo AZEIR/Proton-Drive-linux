@@ -95,3 +95,37 @@ Unless `PROTON_DRIVE_CACHE_DIR` is set:
 **Credentials** are stored in the OS secret store (see [Requirements](#requirements)) under the service `ch.proton.drive/drive-sdk-cli`.
 
 To reset local state for troubleshooting, stop the CLI, then remove the relevant directories (or the single override directory).
+
+## Excluding files from sync (.protonignore)
+
+Place a `.protonignore` file in your sync root to exclude paths. The format follows `.gitignore` conventions:
+
+- Lines starting with `#` are comments
+- Trailing `/` makes a pattern directory-only (`node_modules/`)
+- Leading `/` roots the pattern to the sync root only (`/cache`)
+- `*` matches anything except a path separator
+- `!pattern` negates a previous match (un-ignores)
+
+Patterns are evaluated in order; the last matching pattern wins.
+
+A few patterns are always excluded regardless of `.protonignore` (OS metadata and sync temp files): `.DS_Store`, `Thumbs.db`, `desktop.ini`, `*.tmp-*`, `~*`, `*.swp`, `*.swo`.
+
+**Example `.protonignore` for a development machine:**
+
+```
+# Dependencies
+node_modules/
+
+# Version control internals
+.git/
+.svn/
+.hg/
+
+# IDE/editor state
+.idea/
+.vscode/
+
+# Build output
+dist/
+build/
+```

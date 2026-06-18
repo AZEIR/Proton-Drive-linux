@@ -130,6 +130,18 @@ export class SyncDatabase {
         return this.db.prepare('SELECT * FROM sync_mappings').all() as SyncMapping[];
     }
 
+    getMappingsByPrefix(pathPrefix: string): SyncMapping[] {
+        return this.db.prepare(
+            'SELECT * FROM sync_mappings WHERE local_path LIKE ? ESCAPE \'\\\'',
+        ).all(pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%') as SyncMapping[];
+    }
+
+    deleteMappingsByPrefix(pathPrefix: string): void {
+        this.db.prepare(
+            'DELETE FROM sync_mappings WHERE local_path LIKE ? ESCAPE \'\\\'',
+        ).run(pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%');
+    }
+
     clearMappings(): void {
         this.db.run('DELETE FROM sync_mappings');
     }
