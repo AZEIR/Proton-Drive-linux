@@ -153,14 +153,6 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                             </div>
                         </div>
 
-                        <!-- Active Transfers (inline, shown only during active transfers) -->
-                        <div id="transfersCard" class="card transfers-inline-card" style="display: none;">
-                            <h2>Active Transfers</h2>
-                            <ul id="transfersList" class="transfers-list">
-                                <!-- Populated dynamically via JS -->
-                            </ul>
-                        </div>
-
                         <!-- Activity History Card -->
                         <div class="card">
                             <div class="card-header-flex">

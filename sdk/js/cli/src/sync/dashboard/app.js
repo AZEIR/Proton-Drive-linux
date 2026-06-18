@@ -9,6 +9,7 @@
         let logFilterCategory = 'all';
         let cachedLogs = [];
         let lastLogsJson = '';
+        let cachedActiveTransfers = [];
 
         let cacheSearchQuery = '';
         let cacheFilterStatus = 'all';
@@ -143,42 +144,75 @@
 
         function renderLogs() {
             const body = document.getElementById('logsBody');
-            if (!cachedLogs || cachedLogs.length === 0) {
-                body.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">cloud_off</span><span class="empty-title">No recent sync activity</span><span class="empty-desc">Proton Drive is scanning your files. Activity logs will appear here as changes are detected.</span></div></td></tr>';
-                return;
-            }
 
-            const filtered = cachedLogs.filter(l => {
+            // Build active-transfer rows pinned to the top of the table
+            const ringR = 8;
+            const ringCirc = +(2 * Math.PI * ringR).toFixed(2);
+            const activeRows = cachedActiveTransfers
+                .filter(t => {
+                    const isUpload = t.type === 'upload';
+                    if (logFilterCategory === 'uploads')   return isUpload;
+                    if (logFilterCategory === 'downloads') return !isUpload;
+                    if (logFilterCategory === 'system' || logFilterCategory === 'failed') return false;
+                    if (logSearchQuery) {
+                        const name = (t.filePath || t.localPath || '').split('/').pop();
+                        return name.toLowerCase().includes(logSearchQuery);
+                    }
+                    return true;
+                })
+                .map(t => {
+                    const name      = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
+                    const isUpload  = t.type === 'upload';
+                    const dirColor  = isUpload ? '#a78bfa' : '#10b981';
+                    const dirLabel  = isUpload ? 'upload' : 'download';
+                    const ringClass = isUpload ? 'upload-ring' : 'download-ring';
+                    const percent   = t.percent || 0;
+                    const offset    = +(ringCirc * (1 - percent / 100)).toFixed(2);
+                    const sizeTxt   = t.size > 0 ? `${formatBytes(t.transferred)} / ${formatBytes(t.size)}` : '';
+                    return `<tr class="transfer-active-row">
+                        <td class="time-col">${new Date().toLocaleString()}</td>
+                        <td class="log-direction" style="color:${dirColor}">${dirLabel}</td>
+                        <td>
+                            <span class="transfer-progress-cell">
+                                <svg class="transfer-mini-ring" viewBox="0 0 22 22" width="20" height="20">
+                                    <circle class="transfer-ring-track" cx="11" cy="11" r="${ringR}"/>
+                                    <circle class="transfer-ring-fill ${ringClass}" cx="11" cy="11" r="${ringR}"
+                                        stroke-dasharray="${ringCirc}" stroke-dashoffset="${offset}"/>
+                                </svg>
+                                <span>${percent}%</span>
+                            </span>
+                        </td>
+                        <td><strong class="file-path-text">${name}</strong>${sizeTxt ? `<span class="log-message">${sizeTxt}</span>` : ''}</td>
+                    </tr>`;
+                });
+
+            const filtered = (cachedLogs || []).filter(l => {
                 const path = l.file_path || '';
-                const msg = l.message || '';
+                const msg  = l.message || '';
                 const matchesSearch = !logSearchQuery || path.toLowerCase().includes(logSearchQuery) || msg.toLowerCase().includes(logSearchQuery);
-                
                 let matchesCategory = true;
                 const dir = l.direction.toLowerCase();
-                if (logFilterCategory === 'uploads') {
-                    matchesCategory = dir.startsWith('up') || dir === 'upload';
-                } else if (logFilterCategory === 'downloads') {
-                    matchesCategory = dir.startsWith('down') || dir === 'download';
-                } else if (logFilterCategory === 'system') {
-                    matchesCategory = dir === 'system';
-                } else if (logFilterCategory === 'failed') {
-                    matchesCategory = l.status === 'failed';
-                }
-
+                if (logFilterCategory === 'uploads')        matchesCategory = dir.startsWith('up') || dir === 'upload';
+                else if (logFilterCategory === 'downloads') matchesCategory = dir.startsWith('down') || dir === 'download';
+                else if (logFilterCategory === 'system')    matchesCategory = dir === 'system';
+                else if (logFilterCategory === 'failed')    matchesCategory = l.status === 'failed';
                 return matchesSearch && matchesCategory;
             });
 
-            if (filtered.length === 0) {
-                body.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">search_off</span><span class="empty-title">No matches found</span><span class="empty-desc">Try adjusting your search query or filters.</span></div></td></tr>';
+            if (activeRows.length === 0 && filtered.length === 0) {
+                const isEmpty = !cachedLogs || cachedLogs.length === 0;
+                body.innerHTML = isEmpty
+                    ? '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">cloud_off</span><span class="empty-title">No recent sync activity</span><span class="empty-desc">Proton Drive is scanning your files. Activity logs will appear here as changes are detected.</span></div></td></tr>'
+                    : '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">search_off</span><span class="empty-title">No matches found</span><span class="empty-desc">Try adjusting your search query or filters.</span></div></td></tr>';
                 return;
             }
 
-            body.innerHTML = filtered.map(l => {
-                const time       = new Date(l.timestamp).toLocaleString();
-                const action     = l.direction.replace('_', ' ');
-                const statusClass= 'status-' + l.status;
-                const path       = l.file_path;
-                const msg        = l.message ? `<span class="log-message">${l.message}</span>` : '';
+            body.innerHTML = activeRows.join('') + filtered.map(l => {
+                const time        = new Date(l.timestamp).toLocaleString();
+                const action      = l.direction.replace('_', ' ');
+                const statusClass = 'status-' + l.status;
+                const path        = l.file_path;
+                const msg         = l.message ? `<span class="log-message">${l.message}</span>` : '';
                 return `<tr>
                     <td class="time-col">${time}</td>
                     <td class="log-direction" style="color: ${l.direction.startsWith('up') ? '#a78bfa' : '#10b981'}">${action}</td>
@@ -370,43 +404,9 @@
                 }
             }
 
-            // Active transfers section
-            const transfersCard = document.getElementById('transfersCard');
-            const transfersList = document.getElementById('transfersList');
-            if (data.activeTransfers && data.activeTransfers.length > 0) {
-                transfersCard.style.display = 'block';
-                transfersList.innerHTML = data.activeTransfers.map(t => {
-                    const name = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
-                    const isUpload = t.type === 'upload';
-                    const iconName = isUpload ? 'upload' : 'download';
-                    const ringClass = isUpload ? 'upload-ring' : 'download-ring';
-                    const iconClass = isUpload ? 'upload-color' : 'download-color';
-                    const percent = t.percent || 0;
-                    const progressText = t.size > 0
-                        ? `${formatBytes(t.transferred)} / ${formatBytes(t.size)} (${percent}%)`
-                        : `${isUpload ? 'Uploading' : 'Downloading'}…`;
-                    const circ = 2 * Math.PI * 16;
-                    const dashoffset = circ * (1 - percent / 100);
-
-                    return `<li class="transfer-item">
-                        <div class="transfer-ring-wrap">
-                            <svg class="transfer-ring" viewBox="0 0 42 42" width="42" height="42">
-                                <circle class="transfer-ring-track" cx="21" cy="21" r="16"/>
-                                <circle class="transfer-ring-fill ${ringClass}" cx="21" cy="21" r="16"
-                                    stroke-dasharray="${circ.toFixed(2)}"
-                                    stroke-dashoffset="${dashoffset.toFixed(2)}"/>
-                            </svg>
-                            <span class="material-symbols-outlined transfer-type-icon ${iconClass}">${iconName}</span>
-                        </div>
-                        <div class="transfer-info">
-                            <span class="transfer-name" title="${t.filePath || t.localPath || ''}">${name}</span>
-                            <span class="transfer-meta">${progressText}</span>
-                        </div>
-                    </li>`;
-                }).join('');
-            } else {
-                transfersCard.style.display = 'none';
-            }
+            // Active transfers — store and re-render log table so they appear as pinned rows
+            cachedActiveTransfers = data.activeTransfers || [];
+            renderLogs();
 
             // Update pause button state
             if (!FOD_MODE) {

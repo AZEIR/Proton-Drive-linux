@@ -600,102 +600,39 @@
             color: #ffffff;
         }
 
-        /* Active Transfers Panel (inline, between hero and log) */
-        .transfers-inline-card {
-            animation: transfers-slide-in 0.22s ease;
+        /* Active transfer rows pinned to top of the log table */
+        .transfer-active-row td {
+            background: rgba(108, 71, 255, 0.04);
         }
 
-        @keyframes transfers-slide-in {
-            from { opacity: 0; transform: translateY(-8px); }
-            to   { opacity: 1; transform: translateY(0); }
-        }
-
-        .transfers-list {
-            list-style: none;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            padding: 0;
-            margin: 0;
-        }
-
-        .transfer-item {
-            display: flex;
+        .transfer-progress-cell {
+            display: inline-flex;
             align-items: center;
-            gap: 11px;
-            padding: 10px 14px 10px 10px;
-            background: var(--input-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 14px;
-            min-width: 190px;
-            max-width: 300px;
-            box-sizing: border-box;
+            gap: 6px;
+            font-size: 0.82rem;
+            color: var(--text-muted);
         }
 
-        .transfer-ring-wrap {
-            position: relative;
-            width: 42px;
-            height: 42px;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .transfer-ring {
-            position: absolute;
-            top: 0;
-            left: 0;
+        .transfer-mini-ring {
             transform: rotate(-90deg);
+            flex-shrink: 0;
         }
 
         .transfer-ring-track {
             fill: none;
-            stroke: rgba(108, 71, 255, 0.12);
-            stroke-width: 3;
+            stroke: rgba(108, 71, 255, 0.15);
+            stroke-width: 2.5;
         }
 
         .transfer-ring-fill {
             fill: none;
-            stroke-width: 3;
+            stroke-width: 2.5;
             stroke-linecap: round;
             transition: stroke-dashoffset 0.4s ease;
         }
 
         .upload-ring   { stroke: #8b5cf6; }
         .download-ring { stroke: var(--success); }
-
-        .transfer-type-icon {
-            font-size: 16px;
-            position: relative;
-            z-index: 1;
-        }
-
-        .upload-color   { color: #a78bfa; }
-        .download-color { color: var(--success); }
-
-        .transfer-info {
-            display: flex;
-            flex-direction: column;
-            gap: 3px;
-            min-width: 0;
-            flex: 1;
-        }
-
-        .transfer-name {
-            font-size: 0.85rem;
-            font-weight: 500;
-            color: var(--text-main);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .transfer-meta {
-            font-size: 0.74rem;
-            color: var(--text-muted);
-            white-space: nowrap;
-        }
 
         /* Settings configuration page */
         .settings-group {
@@ -1232,11 +1169,6 @@
                 width: 100%;
             }
 
-            .transfer-item {
-                min-width: 0;
-                max-width: 100%;
-                flex: 1 1 100%;
-            }
 
             .topbar {
                 height: 56px;
