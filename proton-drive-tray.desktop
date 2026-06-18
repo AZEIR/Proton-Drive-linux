@@ -2,7 +2,7 @@
 Type=Application
 Name=Proton Drive Tray
 Comment=Proton Drive System Tray Status Icon
-Exec=__INSTALL_DIR__/proton-drive-tray.py
+Exec=__INSTALL_DIR__/drive.sh tray
 Icon=__INSTALL_DIR__/src-tauri/icons/icon.png
 Terminal=false
 Categories=Network;FileTransfer;

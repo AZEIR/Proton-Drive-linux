@@ -38,145 +38,142 @@ show_help() {
 }
 
 case "$1" in
-    login)
-        echo "Launching Proton Drive authentication..."
-        "$CLI_BINARY" auth login
-        ;;
-    start)
-        "$SYNC_SCRIPT" start "$2"
-        ;;
-    stop)
-        "$SYNC_SCRIPT" stop
-        ;;
-    restart)
-        "$SYNC_SCRIPT" restart "$2"
-        ;;
-    status)
-        "$SYNC_SCRIPT" status
-        ;;
-    logs)
-        LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-fuse-daemon.log"
-        # Fall back to legacy log
-        [ ! -f "$LOGFILE" ] && LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-sync-daemon.log"
-        echo "Tailing logs (Ctrl+C to exit)..."
-        tail -f "$LOGFILE"
-        ;;
-    ui)
-        PORT="${PROTON_SYNC_PORT:-8085}"
-        echo "Opening Web Dashboard at http://localhost:${PORT}..."
-        if command -v xdg-open > /dev/null; then
-            xdg-open "http://localhost:${PORT}"
-        elif command -v open > /dev/null; then
-            open "http://localhost:${PORT}"
-        else
-            echo "Please open http://localhost:${PORT} in your browser."
-        fi
-        ;;
-    mount)
-        echo "Mount point: ${MOUNT_POINT}"
-        if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
-            echo "Status: MOUNTED ✓"
-        else
-            echo "Status: Not mounted"
-        fi
-        ;;
-    reset)
-        echo "Stopping daemon..."
-        "$SYNC_SCRIPT" stop
-        echo "Resetting sync database and inode cache..."
-        rm -f "${HOME}/.config/proton-drive-sync/sync_state.db"
-        rm -rf "${HOME}/.local/share/proton-drive-fod"
-        echo "Done. Start fresh with: ./drive.sh start"
-        ;;
-    sync-once)
-        PORT="${PROTON_SYNC_PORT:-8085}"
-        CUSTOM_PATH="$2"
-        if [ -n "$CUSTOM_PATH" ]; then
-            TARGET_PATH=$(realpath "$CUSTOM_PATH")
-        else
-            TARGET_PATH="${MOUNT_POINT}"
-        fi
-        echo "Running one-time synchronization pass..."
-        PROTON_SYNC_ONCE=true PROTON_MOUNT_POINT="${TARGET_PATH}" PROTON_SYNC_PORT="${PORT}" PROTON_SYNC_MODE="full" "$CLI_BINARY"
-        ;;
-    build)
-        echo "Building proton-fuse binary..."
-        BUN_BIN="bun"
-        if ! command -v bun >/dev/null 2>&1; then
-            for p in "${SCRIPT_DIR}/node_modules/@oven/bun-linux-x64-baseline/bin/bun" \
-                     "${SCRIPT_DIR}/node_modules/.bin/bun" \
-                     "${SCRIPT_DIR}/sdk/js/cli/node_modules/.bin/bun"; do
-                if [ -f "$p" ]; then
-                    BUN_BIN="$p"
-                    break
-                fi
-            done
-        fi
-        cd "${SCRIPT_DIR}/sdk/js/cli" && "$BUN_BIN" run build:fuse
-        echo "Build complete: ${SCRIPT_DIR}/sdk/js/cli/release/proton-fuse"
-        ;;
-    tray)
-        echo "Starting Proton Drive system tray icon..."
-        TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
-        TRAY_LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-tray.log"
-        mkdir -p "$(dirname "$TRAY_PIDFILE")"
-        mkdir -p "$(dirname "$TRAY_LOGFILE")"
+login)
+    echo "Launching Proton Drive authentication..."
+    "$CLI_BINARY" auth login
+    ;;
+start)
+    "$SYNC_SCRIPT" start "$2"
+    ;;
+stop)
+    "$SYNC_SCRIPT" stop
+    ;;
+restart)
+    "$SYNC_SCRIPT" restart "$2"
+    ;;
+status)
+    "$SYNC_SCRIPT" status
+    ;;
+logs)
+    LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-fuse-daemon.log"
+    # Fall back to legacy log
+    [ ! -f "$LOGFILE" ] && LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-sync-daemon.log"
+    echo "Tailing logs (Ctrl+C to exit)..."
+    tail -f "$LOGFILE"
+    ;;
+ui)
+    PORT="${PROTON_SYNC_PORT:-8085}"
+    echo "Opening Web Dashboard at http://localhost:${PORT}..."
+    if command -v xdg-open >/dev/null; then
+        xdg-open "http://localhost:${PORT}"
+    elif command -v open >/dev/null; then
+        open "http://localhost:${PORT}"
+    else
+        echo "Please open http://localhost:${PORT} in your browser."
+    fi
+    ;;
+mount)
+    echo "Mount point: ${MOUNT_POINT}"
+    if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        echo "Status: MOUNTED ✓"
+    else
+        echo "Status: Not mounted"
+    fi
+    ;;
+reset)
+    echo "Stopping daemon..."
+    "$SYNC_SCRIPT" stop
+    echo "Resetting sync database and inode cache..."
+    rm -f "${HOME}/.config/proton-drive-sync/sync_state.db"
+    rm -rf "${HOME}/.local/share/proton-drive-fod"
+    echo "Done. Start fresh with: ./drive.sh start"
+    ;;
+sync-once)
+    PORT="${PROTON_SYNC_PORT:-8085}"
+    CUSTOM_PATH="$2"
+    if [ -n "$CUSTOM_PATH" ]; then
+        TARGET_PATH=$(realpath "$CUSTOM_PATH")
+    else
+        TARGET_PATH="${MOUNT_POINT}"
+    fi
+    echo "Running one-time synchronization pass..."
+    PROTON_SYNC_ONCE=true PROTON_MOUNT_POINT="${TARGET_PATH}" PROTON_SYNC_PORT="${PORT}" PROTON_SYNC_MODE="full" "$CLI_BINARY"
+    ;;
+build)
+    echo "Building proton-fuse binary..."
+    BUN_BIN="bun"
+    if ! command -v bun >/dev/null 2>&1; then
+        for p in "${SCRIPT_DIR}/node_modules/@oven/bun-linux-x64-baseline/bin/bun" \
+            "${SCRIPT_DIR}/node_modules/.bin/bun" \
+            "${SCRIPT_DIR}/sdk/js/cli/node_modules/.bin/bun"; do
+            if [ -f "$p" ]; then
+                BUN_BIN="$p"
+                break
+            fi
+        done
+    fi
+    cd "${SCRIPT_DIR}/sdk/js/cli" && "$BUN_BIN" run build:fuse
+    echo "Build complete: ${SCRIPT_DIR}/sdk/js/cli/release/proton-fuse"
+    ;;
+tray)
+    echo "Starting Proton Drive system tray icon..."
+    TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
+    TRAY_LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-tray.log"
+    mkdir -p "$(dirname "$TRAY_PIDFILE")"
+    mkdir -p "$(dirname "$TRAY_LOGFILE")"
 
-        if [ -f "$TRAY_PIDFILE" ]; then
-            T_PID=$(cat "$TRAY_PIDFILE")
-            if ps -p "$T_PID" > /dev/null 2>&1; then
-                echo "Tray icon is already running (PID: $T_PID)."
-                exit 0
-            fi
+    if [ -f "$TRAY_PIDFILE" ]; then
+        T_PID=$(cat "$TRAY_PIDFILE")
+        if ps -p "$T_PID" >/dev/null 2>&1; then
+            echo "Tray icon is already running (PID: $T_PID)."
+            exit 0
         fi
+        rm -f "$TRAY_PIDFILE"
+    fi
 
-        setsid "${SCRIPT_DIR}/proton-drive-tray.py" < /dev/null > "$TRAY_LOGFILE" 2>&1 &
-        PID=$!
-        sleep 0.5
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "$PID" > "$TRAY_PIDFILE"
-            disown $PID
-            echo "Tray icon started in background (PID: $PID). Logs: $TRAY_LOGFILE"
-        else
-            echo "ERROR: Failed to start tray icon. Logs: $TRAY_LOGFILE"
-            rm -f "$TRAY_PIDFILE"
-        fi
-        ;;
-    stop-tray)
-        echo "Stopping Proton Drive system tray icon..."
-        TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
-        if [ -f "$TRAY_PIDFILE" ]; then
-            T_PID=$(cat "$TRAY_PIDFILE")
-            if ps -p "$T_PID" > /dev/null 2>&1; then
-                kill "$T_PID"
-                echo "Tray icon stopped (PID: $T_PID)."
-            else
-                echo "Tray icon is not running (stale PID file removed)."
-            fi
-            rm -f "$TRAY_PIDFILE"
-        else
-            T_PID=$(pgrep -f "python3 .*/proton-drive-tray.py" | head -n 1)
-            if [ -n "$T_PID" ]; then
-                kill "$T_PID"
-                echo "Tray icon stopped (PID: $T_PID)."
-            else
-                echo "Tray icon is not running."
-            fi
-        fi
-        ;;
-    install-tray)
-        mkdir -p "${HOME}/.config/autostart"
-        sed "s|__INSTALL_DIR__|${SCRIPT_DIR}|g" \
-            "${SCRIPT_DIR}/proton-drive-tray.desktop" \
-            > "${HOME}/.config/autostart/proton-drive-tray.desktop"
-        chmod +x "${HOME}/.config/autostart/proton-drive-tray.desktop"
-        echo "Tray icon installed to ~/.config/autostart/ — will start automatically on desktop login."
-        ;;
-    uninstall-tray)
-        rm -f "${HOME}/.config/autostart/proton-drive-tray.desktop"
-        echo "Tray icon desktop entry removed from ~/.config/autostart/."
-        ;;
-    *)
-        show_help
-        ;;
+    # Also catch instances launched outside of drive.sh (e.g. XDG autostart)
+    T_PID=$(pgrep -f "proton-drive-tray.py" | head -n 1)
+    if [ -n "$T_PID" ]; then
+        echo "Tray icon is already running (PID: $T_PID)."
+        echo "$T_PID" >"$TRAY_PIDFILE"
+        exit 0
+    fi
+
+    setsid "${SCRIPT_DIR}/proton-drive-tray.py" </dev/null >"$TRAY_LOGFILE" 2>&1 &
+    PID=$!
+    sleep 0.5
+    if ps -p "$PID" >/dev/null 2>&1; then
+        echo "$PID" >"$TRAY_PIDFILE"
+        disown $PID
+        echo "Tray icon started in background (PID: $PID). Logs: $TRAY_LOGFILE"
+    else
+        echo "ERROR: Failed to start tray icon. Logs: $TRAY_LOGFILE"
+        rm -f "$TRAY_PIDFILE"
+    fi
+    ;;
+stop-tray)
+    echo "Stopping Proton Drive system tray icon..."
+    TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
+    rm -f "$TRAY_PIDFILE"
+    if pkill -f "proton-drive-tray.py" 2>/dev/null; then
+        echo "Tray icon stopped."
+    else
+        echo "Tray icon is not running."
+    fi
+    ;;
+install-tray)
+    mkdir -p "${HOME}/.config/autostart"
+    sed "s|__INSTALL_DIR__|${SCRIPT_DIR}|g" \
+        "${SCRIPT_DIR}/proton-drive-tray.desktop" \
+        >"${HOME}/.config/autostart/proton-drive-tray.desktop"
+    chmod +x "${HOME}/.config/autostart/proton-drive-tray.desktop"
+    echo "Tray icon installed to ~/.config/autostart/ — will start automatically on desktop login."
+    ;;
+uninstall-tray)
+    rm -f "${HOME}/.config/autostart/proton-drive-tray.desktop"
+    echo "Tray icon desktop entry removed from ~/.config/autostart/."
+    ;;
+*)
+    show_help
+    ;;
 esac
