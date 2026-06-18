@@ -1371,13 +1371,15 @@ export class SyncEngine extends EventEmitter {
     if (this.watcher) return;
 
     this.watcher = chokidar.watch(this.localSyncRoot, {
-      // Delegate all ignore decisions to IgnoreMatcher so that dotfolders like
-      // .obsidian are synced unless explicitly listed in DEFAULT_PATTERNS.
-      ignored: (absolutePath: string, stats?: import("node:fs").Stats) => {
+      // Only block chokidar from recursing into known large/VCS root-level
+      // directories. Chokidar v5 no longer passes stats to the ignored callback
+      // so fine-grained per-file filtering is unreliable here — all of that is
+      // handled in handleLocalChange via IgnoreMatcher instead.
+      ignored: (absolutePath: string) => {
         const relPath = path.relative(this.localSyncRoot, absolutePath);
         if (!relPath || relPath.startsWith("..")) return false;
-        const isDir = stats ? stats.isDirectory() : false;
-        return this.ignoreMatcher.shouldIgnore(relPath, isDir);
+        const topLevel = relPath.split(path.sep)[0];
+        return this.ignoreMatcher.shouldIgnore(topLevel, true);
       },
       persistent: true,
       ignoreInitial: true,
