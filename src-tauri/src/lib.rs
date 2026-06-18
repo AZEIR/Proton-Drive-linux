@@ -43,17 +43,10 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
     let sync_mode = std::env::var("PROTON_SYNC_MODE").unwrap_or_else(|_| "full".to_string());
     let binary_name = if sync_mode == "full" { "proton-sync" } else { "proton-fuse" };
 
-    // Check local developer path first
-    let dev_path = format!("/home/azeir/Code/drive-project/sdk/js/cli/release/{}", binary_name);
-    let bin_path = if std::fs::metadata(&dev_path).is_ok() {
-        dev_path
-    } else {
-        // Packed application resource path fallback
-        app.path()
-            .resource_dir()
-            .map(|p| p.join(binary_name).to_string_lossy().into_owned())
-            .map_err(|e| e.to_string())?
-    };
+    let bin_path = app.path()
+        .resource_dir()
+        .map(|p| p.join(binary_name).to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())?;
 
     println!("[Tauri] Spawning sync daemon at: {}", bin_path);
 
