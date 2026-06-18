@@ -270,6 +270,23 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                 </div>
                                 <button class="btn btn-danger" onclick="logout()">Logout Account</button>
                             </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Daemon Control</span>
+                                    <span class="setting-desc">Stop or restart the background sync process. Stopping will disconnect this dashboard until the daemon is restarted manually.</span>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-shrink:0;">
+                                    <button class="btn" onclick="restartDaemon()">
+                                        <span class="material-symbols-outlined" style="font-size:16px;">refresh</span>
+                                        Restart
+                                    </button>
+                                    <button class="btn btn-danger" onclick="stopDaemon()">
+                                        <span class="material-symbols-outlined" style="font-size:16px;">stop_circle</span>
+                                        Stop Daemon
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

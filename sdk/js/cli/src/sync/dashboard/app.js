@@ -573,6 +573,17 @@
             }
         }
 
+        async function stopDaemon() {
+            if (!confirm('Stop the sync daemon? This dashboard will disconnect. Restart it manually with ./drive.sh start')) return;
+            try { await fetch('/api/daemon/stop', { method: 'POST' }); } catch {}
+        }
+
+        async function restartDaemon() {
+            if (!confirm('Restart the sync daemon? This dashboard will briefly disconnect then reconnect.')) return;
+            try { await fetch('/api/daemon/restart', { method: 'POST' }); } catch {}
+            setTimeout(() => location.reload(), 3000);
+        }
+
         let isLoggingIn = false;
         async function login() {
             if (isLoggingIn) return;
