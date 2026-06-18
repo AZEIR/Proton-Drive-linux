@@ -66,6 +66,17 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
         sync_port, sync_mode, mount_point
     );
 
+    // Ensure the binary is executable (AppImage bundling can strip the execute bit)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&bin_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            let _ = std::fs::set_permissions(&bin_path, perms);
+        }
+    }
+
     // Run daemon as a child process
     let mut cmd = if sync_mode == "full" {
         // Execute the native compiled binary directly
@@ -102,9 +113,10 @@ pub fn run() {
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-        // Disable WebKit sandbox to prevent Bubblewrap crashes inside AppImages on distros like Fedora
-        if std::env::var("WEBKIT_FORCE_SANDBOX").is_err() {
-            std::env::set_var("WEBKIT_FORCE_SANDBOX", "0");
+        // Disable WebKit sandbox to prevent Bubblewrap/EGL crashes inside AppImages.
+        // WEBKIT_FORCE_SANDBOX was removed in newer WebKit — use the replacement.
+        if std::env::var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS").is_err() {
+            std::env::set_var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
         }
     }
 
