@@ -128,75 +128,71 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                         </div>
                     </div>
 
-                    <!-- Dashboard Grid Layout -->
-                    <div class="dashboard-grid">
-                        <div class="dashboard-main-col">
-                            <!-- Hero Synced Status Card -->
-                            <div class="card card-hero">
-                                <div class="card-hero-content">
-                                    <div class="status-icon-wrapper" id="syncStatusIcon">
-                                        <!-- Large Material Icon inserted dynamically via JS -->
-                                    </div>
-                                    <div class="status-info">
-                                        <h2 id="syncStateTitle">Your files are up to date</h2>
-                                        <p id="syncStateDesc">Proton Drive is actively monitoring your sync folder.</p>
-                                    </div>
+                    <!-- Dashboard Layout -->
+                    <div class="dashboard-main-col">
+                        <!-- Hero Synced Status Card -->
+                        <div class="card card-hero">
+                            <div class="card-hero-content">
+                                <div class="status-icon-wrapper" id="syncStatusIcon">
+                                    <!-- Large Material Icon inserted dynamically via JS -->
                                 </div>
-                                <div class="card-hero-actions">
-                                    <div id="syncActions">
-                                        <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
-                                        <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
-                                        <button class="btn" onclick="openFolder()">Open Folder</button>
-                                    </div>
-                                    <div id="authActions" style="display: none;">
-                                        <button id="btnLogin" class="btn btn-primary btn-login-action" onclick="login()">Login to Proton Drive</button>
-                                    </div>
+                                <div class="status-info">
+                                    <h2 id="syncStateTitle">Your files are up to date</h2>
+                                    <p id="syncStateDesc">Proton Drive is actively monitoring your sync folder.</p>
                                 </div>
                             </div>
-
-                            <!-- Activity History Card -->
-                            <div class="card">
-                                <div class="card-header-flex">
-                                    <h2>Recent Activity Log</h2>
-                                    <div class="filter-search-container">
-                                        <div class="search-box">
-                                            <span class="material-symbols-outlined search-icon">search</span>
-                                            <input type="text" id="logSearchInput" placeholder="Search logs..." oninput="filterLogs()">
-                                        </div>
-                                        <div class="filter-pills" id="logFilterPills">
-                                            <button class="filter-pill active" onclick="setLogFilter('all')">All</button>
-                                            <button class="filter-pill" onclick="setLogFilter('uploads')">Uploads</button>
-                                            <button class="filter-pill" onclick="setLogFilter('downloads')">Downloads</button>
-                                            <button class="filter-pill" onclick="setLogFilter('system')">System</button>
-                                            <button class="filter-pill" onclick="setLogFilter('failed')">Errors</button>
-                                        </div>
-                                    </div>
+                            <div class="card-hero-actions">
+                                <div id="syncActions">
+                                    <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
+                                    <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
+                                    <button class="btn" onclick="openFolder()">Open Folder</button>
                                 </div>
-                                <div class="logs-table-wrapper">
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>Time</th>
-                                                <th>Operation</th>
-                                                <th>Status</th>
-                                                <th>File / Details</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="logsBody">
-                                            <!-- Populated dynamically via JS -->
-                                        </tbody>
-                                    </table>
+                                <div id="authActions" style="display: none;">
+                                    <button id="btnLogin" class="btn btn-primary btn-login-action" onclick="login()">Login to Proton Drive</button>
                                 </div>
                             </div>
                         </div>
 
-                        <div class="dashboard-side-col" id="dashboardSideCol">
-                            <!-- Active Transfers Card -->
-                            <div id="transfersCard" class="card" style="display: none;">
-                                <h2>Active Transfers</h2>
-                                <ul id="transfersList" class="transfers-list">
-                                    <!-- Populated dynamically via JS -->
-                                </ul>
+                        <!-- Active Transfers (inline, shown only during active transfers) -->
+                        <div id="transfersCard" class="card transfers-inline-card" style="display: none;">
+                            <h2>Active Transfers</h2>
+                            <ul id="transfersList" class="transfers-list">
+                                <!-- Populated dynamically via JS -->
+                            </ul>
+                        </div>
+
+                        <!-- Activity History Card -->
+                        <div class="card">
+                            <div class="card-header-flex">
+                                <h2>Recent Activity Log</h2>
+                                <div class="filter-search-container">
+                                    <div class="search-box">
+                                        <span class="material-symbols-outlined search-icon">search</span>
+                                        <input type="text" id="logSearchInput" placeholder="Search logs..." oninput="filterLogs()">
+                                    </div>
+                                    <div class="filter-pills" id="logFilterPills">
+                                        <button class="filter-pill active" onclick="setLogFilter('all')">All</button>
+                                        <button class="filter-pill" onclick="setLogFilter('uploads')">Uploads</button>
+                                        <button class="filter-pill" onclick="setLogFilter('downloads')">Downloads</button>
+                                        <button class="filter-pill" onclick="setLogFilter('system')">System</button>
+                                        <button class="filter-pill" onclick="setLogFilter('failed')">Errors</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="logs-table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Operation</th>
+                                            <th>Status</th>
+                                            <th>File / Details</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="logsBody">
+                                        <!-- Populated dynamically via JS -->
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>

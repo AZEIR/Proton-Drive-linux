@@ -451,10 +451,10 @@
             padding-bottom: 0.6rem;
         }
 
-        /* Dashboard Grid Layout (Desktop 2-columns) */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: 1fr;
+        /* Dashboard Layout */
+        .dashboard-main-col {
+            display: flex;
+            flex-direction: column;
             gap: 1.5rem;
         }
 
@@ -600,19 +600,23 @@
             color: #ffffff;
         }
 
-        /* Active Transfers Panel */
-        #transfersCard {
-            transition: opacity 0.25s ease;
+        /* Active Transfers Panel (inline, between hero and log) */
+        .transfers-inline-card {
+            animation: transfers-slide-in 0.22s ease;
+        }
+
+        @keyframes transfers-slide-in {
+            from { opacity: 0; transform: translateY(-8px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 
         .transfers-list {
             list-style: none;
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
             gap: 12px;
-            max-height: 350px;
-            overflow-y: auto;
-            padding-right: 4px;
+            padding: 0;
+            margin: 0;
             min-width: 0;
         }
 
@@ -1145,14 +1149,7 @@
         }
 
         @media (min-width: 1200px) {
-            .dashboard-grid {
-                grid-template-columns: 2fr 1.1fr;
-            }
             .dashboard-main-col {
-                display: flex;
-                flex-direction: column;
-            }
-            .dashboard-side-col {
                 display: flex;
                 flex-direction: column;
             }
@@ -1228,16 +1225,14 @@
                 min-width: 0;
             }
 
-            .dashboard-grid {
-                grid-template-columns: 1fr !important;
+            .dashboard-main-col {
                 gap: 0.75rem;
                 min-width: 0;
+                width: 100%;
             }
 
-            .dashboard-main-col,
-            .dashboard-side-col {
-                min-width: 0;
-                width: 100%;
+            .transfers-list {
+                grid-template-columns: 1fr;
             }
 
             .topbar {
