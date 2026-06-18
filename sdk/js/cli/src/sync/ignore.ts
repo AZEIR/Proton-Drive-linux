@@ -28,6 +28,7 @@ export const PROTONIGNORE_FILENAME = '.protonignore';
 interface CompiledPattern {
     regex: RegExp;
     dirOnly: boolean;
+    negated: boolean;
 }
 
 /**
@@ -38,7 +39,12 @@ interface CompiledPattern {
  *   - Wildcard globs:       `*.log`, `~*`
  *   - Directory-only:       `node_modules/`  (trailing slash)
  *   - Rooted patterns:      `/cache/` only matches at the root level
+ *   - Negation:             `!.git/` un-ignores a previously matched pattern
  *   - Blank lines and `#` comments in .protonignore
+ *
+ * Patterns are evaluated in order (defaults first, then user patterns).
+ * The last matching pattern wins, so a negation in .protonignore always
+ * overrides a default pattern that precedes it.
  */
 export class IgnoreMatcher {
     private compiled: CompiledPattern[] = [];
@@ -83,20 +89,22 @@ export class IgnoreMatcher {
 
     /**
      * Test a path directly against compiled ignore patterns.
+     * Uses last-match-wins semantics: a negated pattern overrides any earlier match.
      */
     private shouldIgnoreDirect(normalizedPath: string, isDir: boolean): boolean {
         const basename = path.posix.basename(normalizedPath);
+        let matched = false;
 
-        for (const { regex, dirOnly } of this.compiled) {
+        for (const { regex, dirOnly, negated } of this.compiled) {
             // Directory-only patterns skip files
             if (dirOnly && !isDir) continue;
 
             // Test against both the full relative path and the basename
             if (regex.test(normalizedPath) || regex.test(basename)) {
-                return true;
+                matched = !negated;
             }
         }
-        return false;
+        return matched;
     }
 
     /**
@@ -132,6 +140,11 @@ function compilePattern(raw: string): CompiledPattern | null {
     let pattern = raw.trim();
     if (!pattern || pattern.startsWith('#')) return null;
 
+    // Leading ! marks a negation — un-ignores paths that a prior pattern matched
+    const negated = pattern.startsWith('!');
+    if (negated) pattern = pattern.slice(1).trim();
+    if (!pattern) return null;
+
     // Trailing slash marks a directory-only pattern
     const dirOnly = pattern.endsWith('/');
     if (dirOnly) pattern = pattern.slice(0, -1);
@@ -163,7 +176,7 @@ function compilePattern(raw: string): CompiledPattern | null {
     }
 
     try {
-        return { regex: new RegExp(regexStr), dirOnly };
+        return { regex: new RegExp(regexStr), dirOnly, negated };
     } catch {
         return null;
     }

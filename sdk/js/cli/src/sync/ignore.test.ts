@@ -132,6 +132,52 @@ describe('IgnoreMatcher', () => {
         });
     });
 
+    describe('negation patterns (!)', () => {
+        it('un-ignores a default-blocked directory via !pattern', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '!.git/\n');
+            matcher.reload();
+            expect(matcher.shouldIgnore('.git', true)).toBe(false);
+        });
+
+        it('un-ignores files inside a previously-blocked directory', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '!.git/\n');
+            matcher.reload();
+            expect(matcher.shouldIgnore('.git/config', false)).toBe(false);
+            expect(matcher.shouldIgnore('.git/objects/pack/pack-abc.idx', false)).toBe(false);
+        });
+
+        it('un-ignores a custom pattern added earlier in the same file', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '*.log\n!important.log\n');
+            matcher.reload();
+            expect(matcher.shouldIgnore('server.log', false)).toBe(true);
+            expect(matcher.shouldIgnore('important.log', false)).toBe(false);
+        });
+
+        it('still ignores paths that do not match the negation', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '!.git/\n');
+            matcher.reload();
+            // .svn is still blocked by its default pattern
+            expect(matcher.shouldIgnore('.svn', true)).toBe(true);
+            // node_modules is still blocked
+            expect(matcher.shouldIgnore('node_modules', true)).toBe(true);
+        });
+
+        it('handles negation of a directory-only pattern against a file of the same name', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '!node_modules/\n');
+            matcher.reload();
+            // The negation carries dirOnly=true, so a file named "node_modules" was never
+            // matched by the original dir-only pattern — result is still not ignored
+            expect(matcher.shouldIgnore('node_modules', false)).toBe(false);
+        });
+
+        it('ignores a bare ! line (empty after stripping)', () => {
+            writeFileSync(path.join(tmpDir, PROTONIGNORE_FILENAME), '!\n*.log\n');
+            matcher.reload();
+            // bare ! is discarded; *.log should still be applied
+            expect(matcher.shouldIgnore('server.log', false)).toBe(true);
+        });
+    });
+
     describe('reload()', () => {
         it('picks up new rules after reload', () => {
             expect(matcher.shouldIgnore('output.log', false)).toBe(false);
