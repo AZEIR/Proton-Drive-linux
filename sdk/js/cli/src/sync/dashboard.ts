@@ -253,6 +253,24 @@ export function startDashboard(
                     }
                     return Response.json({ ok: false, error: 'Directory does not exist' }, { status: 404 });
                 }
+
+                if (url.pathname === '/api/daemon/stop') {
+                    db.log('system', 'system', 'syncing', 'Daemon stop requested from dashboard');
+                    setTimeout(() => {
+                        exec('systemctl --user stop proton-sync.service 2>/dev/null', () => process.exit(0));
+                    }, 300);
+                    return Response.json({ ok: true });
+                }
+
+                if (url.pathname === '/api/daemon/restart') {
+                    db.log('system', 'system', 'syncing', 'Daemon restart requested from dashboard');
+                    setTimeout(() => {
+                        exec('systemctl --user restart proton-sync.service 2>/dev/null', (err) => {
+                            if (err) process.exit(1); // non-zero so systemd restarts us
+                        });
+                    }, 300);
+                    return Response.json({ ok: true });
+                }
             }
 
             // SSE PUSH STREAM — replaces client-side 1s polling for status updates
@@ -686,6 +704,11 @@ function getHtmlContent(isFodMode: boolean = false): string {
             padding: 0 2rem;
             background: transparent;
             z-index: 9;
+            gap: 1rem;
+        }
+
+        .topbar-actions {
+            flex-shrink: 0;
         }
 
         .section-title {
@@ -808,9 +831,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
             min-width: 0;
         }
 
-        .card:hover {
-            border-color: var(--primary);
-        }
+        /* Cards don't change border on hover — only interactive elements do */
 
         .card h2 {
             font-size: 1.15rem;
@@ -970,26 +991,23 @@ function getHtmlContent(isFodMode: boolean = false): string {
             color: #ffffff;
         }
 
-        /* Active Transfers Panel */
+        /* Active Transfers Panel (inline, above log) */
         .transfers-list {
             list-style: none;
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            max-height: 350px;
-            overflow-y: auto;
-            padding-right: 4px;
+            gap: 8px;
             min-width: 0;
         }
 
         .transfer-item {
             background: var(--input-bg);
-            padding: 1rem;
-            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
             border: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
             min-width: 0;
             box-sizing: border-box;
             width: 100%;
@@ -1511,14 +1529,7 @@ function getHtmlContent(isFodMode: boolean = false): string {
         }
 
         @media (min-width: 1200px) {
-            .dashboard-grid.has-transfers {
-                grid-template-columns: 2fr 1.1fr;
-            }
             .dashboard-main-col {
-                display: flex;
-                flex-direction: column;
-            }
-            .dashboard-side-col {
                 display: flex;
                 flex-direction: column;
             }
@@ -2082,6 +2093,17 @@ function getHtmlContent(isFodMode: boolean = false): string {
                                 </div>
                             </div>
 
+                            <!-- Active Transfers Card (shown inline when transfers are active) -->
+                            <div id="transfersCard" class="card" style="display: none;">
+                                <div class="card-header-flex" style="margin-bottom:0.8rem;">
+                                    <h2>Active Transfers</h2>
+                                    <span id="transfersCount" style="font-size:0.8rem;color:var(--text-muted);font-weight:500;"></span>
+                                </div>
+                                <ul id="transfersList" class="transfers-list">
+                                    <!-- Populated dynamically via JS -->
+                                </ul>
+                            </div>
+
                             <!-- Activity History Card -->
                             <div class="card">
                                 <div class="card-header-flex">
@@ -2115,16 +2137,6 @@ function getHtmlContent(isFodMode: boolean = false): string {
                                         </tbody>
                                     </table>
                                 </div>
-                            </div>
-                        </div>
-
-                        <div class="dashboard-side-col" id="dashboardSideCol">
-                            <!-- Active Transfers Card -->
-                            <div id="transfersCard" class="card" style="display: none;">
-                                <h2>Active Transfers</h2>
-                                <ul id="transfersList" class="transfers-list">
-                                    <!-- Populated dynamically via JS -->
-                                </ul>
                             </div>
                         </div>
                     </div>
@@ -2197,6 +2209,23 @@ function getHtmlContent(isFodMode: boolean = false): string {
                                     <span class="setting-desc">Disconnect this daemon from your Proton account. All local files will remain intact.</span>
                                 </div>
                                 <button class="btn btn-danger" onclick="logout()">Logout Account</button>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Daemon Control</span>
+                                    <span class="setting-desc">Stop or restart the background sync process. Stopping will disconnect this dashboard until the daemon is restarted manually.</span>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-shrink:0;">
+                                    <button class="btn" onclick="restartDaemon()">
+                                        <span class="material-symbols-outlined" style="font-size:16px;">refresh</span>
+                                        Restart
+                                    </button>
+                                    <button class="btn btn-danger" onclick="stopDaemon()">
+                                        <span class="material-symbols-outlined" style="font-size:16px;">stop_circle</span>
+                                        Stop Daemon
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2495,7 +2524,8 @@ function getHtmlContent(isFodMode: boolean = false): string {
             const badge = document.getElementById('statusBadge');
             const text = document.getElementById('statusText');
             badge.className = 'status-badge status-' + data.status;
-            text.innerText = data.status.replace('_', ' ');
+            const statusLabels = { synced: 'Synced', syncing: 'Syncing', scanning: 'Scanning', paused: 'Paused', offline: 'Offline', error: 'Error', auth_required: 'Login Required', bulk_deletion_warning: 'Action Required' };
+            text.innerText = statusLabels[data.status] || data.status;
 
             // FOD mode — show mount point in hero card
             if (FOD_MODE && data.mountPoint) {
@@ -2595,13 +2625,13 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 }
             }
 
-            // Active transfers section
+            // Active transfers section (inline, above log)
             const transfersCard = document.getElementById('transfersCard');
             const transfersList = document.getElementById('transfersList');
-            const dashboardGrid = document.querySelector('.dashboard-grid');
+            const transfersCount = document.getElementById('transfersCount');
             if (data.activeTransfers && data.activeTransfers.length > 0) {
                 transfersCard.style.display = 'block';
-                if (dashboardGrid) dashboardGrid.classList.add('has-transfers');
+                if (transfersCount) transfersCount.innerText = \`\${data.activeTransfers.length} active\`;
                 transfersList.innerHTML = data.activeTransfers.map(t => {
                     const name = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
                     const isUpload = t.type === 'upload';
@@ -2627,7 +2657,6 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 }).join('');
             } else {
                 transfersCard.style.display = 'none';
-                if (dashboardGrid) dashboardGrid.classList.remove('has-transfers');
             }
 
             // Update pause button state
@@ -2795,6 +2824,24 @@ function getHtmlContent(isFodMode: boolean = false): string {
                 await fetch('/api/logout', { method: 'POST' });
                 alert('Logged out successfully.');
                 location.reload();
+            }
+        }
+
+        async function stopDaemon() {
+            if (!confirm('Stop the sync daemon? This dashboard will disconnect. Restart it manually with ./drive.sh start')) return;
+            try {
+                await fetch('/api/daemon/stop', { method: 'POST' });
+            } catch {}
+        }
+
+        async function restartDaemon() {
+            if (!confirm('Restart the sync daemon? This dashboard will briefly disconnect then reconnect.')) return;
+            try {
+                await fetch('/api/daemon/restart', { method: 'POST' });
+                // Reconnect after a short delay
+                setTimeout(() => location.reload(), 3000);
+            } catch {
+                setTimeout(() => location.reload(), 3000);
             }
         }
 
