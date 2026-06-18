@@ -155,6 +155,16 @@ systemctl --user daemon-reload
 systemctl --user enable "$SERVICE_NAME"
 systemctl --user start  "$SERVICE_NAME"
 
+# Give the service a moment to settle, then verify it actually came up
+sleep 2
+if ! systemctl --user is-active --quiet "$SERVICE_NAME"; then
+    echo ""
+    echo "ERROR: Service started but is not running. Check logs:"
+    echo "  journalctl --user -u ${SERVICE_NAME} -n 30 --no-pager"
+    systemctl --user status "$SERVICE_NAME" --no-pager 2>/dev/null || true
+    exit 1
+fi
+
 echo ""
 echo "============================================="
 if [ "$ALREADY_INSTALLED" -eq 1 ]; then

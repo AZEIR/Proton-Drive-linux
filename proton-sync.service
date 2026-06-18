@@ -3,10 +3,11 @@ Description=Proton Drive Sync Client Daemon
 After=network.target
 
 [Service]
-ExecStart=%h/Proton-Drive-linux/sdk/js/cli/release/proton-sync
+ExecStart=/usr/bin/env node %h/Proton-Drive-linux/sdk/js/cli/release/proton-sync
 Restart=on-failure
 RestartSec=10
 Environment=PROTON_SYNC_PORT=8085
+Environment=PROTON_SYNC_MODE=full
 
 [Install]
 WantedBy=default.target
