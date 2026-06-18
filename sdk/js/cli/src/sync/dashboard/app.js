@@ -66,17 +66,17 @@
         // Get Material Icon for Sync Status
         function getMascotIcon(status) {
             if (status === 'synced' || status === 'idle') {
-                return \`<span class="material-symbols-outlined status-hero-icon text-success">cloud_done</span>\`;
+                return `<span class="material-symbols-outlined status-hero-icon text-success">cloud_done</span>`;
             } else if (status === 'syncing') {
-                return \`<span class="material-symbols-outlined status-hero-icon text-primary spin-animation">sync</span>\`;
+                return `<span class="material-symbols-outlined status-hero-icon text-primary spin-animation">sync</span>`;
             } else if (status === 'scanning') {
-                return \`<span class="material-symbols-outlined status-hero-icon text-warning pulse-animation">search</span>\`;
+                return `<span class="material-symbols-outlined status-hero-icon text-warning pulse-animation">search</span>`;
             } else if (status === 'paused') {
-                return \`<span class="material-symbols-outlined status-hero-icon text-muted">pause_circle</span>\`;
+                return `<span class="material-symbols-outlined status-hero-icon text-muted">pause_circle</span>`;
             } else if (status === 'bulk_deletion_warning') {
-                return \`<span class="material-symbols-outlined status-hero-icon text-warning pulse-animation">warning</span>\`;
+                return `<span class="material-symbols-outlined status-hero-icon text-warning pulse-animation">warning</span>`;
             } else {
-                return \`<span class="material-symbols-outlined status-hero-icon text-danger">cloud_off</span>\`;
+                return `<span class="material-symbols-outlined status-hero-icon text-danger">cloud_off</span>`;
             }
         }
 
@@ -93,7 +93,7 @@
             const pane = document.getElementById('tab-' + tabId);
             if (pane) pane.classList.add('active');
 
-            const item = document.querySelector(\`.menu-item[data-tab="\${tabId}"]\`);
+            const item = document.querySelector(`.menu-item[data-tab="${tabId}"]`);
             if (item) item.classList.add('active');
 
             currentTab = tabId;
@@ -178,13 +178,13 @@
                 const action     = l.direction.replace('_', ' ');
                 const statusClass= 'status-' + l.status;
                 const path       = l.file_path;
-                const msg        = l.message ? \`<span class="log-message">\${l.message}</span>\` : '';
-                return \`<tr>
-                    <td class="time-col">\${time}</td>
-                    <td class="log-direction" style="color: \${l.direction.startsWith('up') ? '#a78bfa' : '#10b981'}">\${action}</td>
-                    <td><span class="log-status \${statusClass}">\${l.status}</span></td>
-                    <td><strong class="file-path-text">\${path}</strong>\${msg}</td>
-                </tr>\`;
+                const msg        = l.message ? `<span class="log-message">${l.message}</span>` : '';
+                return `<tr>
+                    <td class="time-col">${time}</td>
+                    <td class="log-direction" style="color: ${l.direction.startsWith('up') ? '#a78bfa' : '#10b981'}">${action}</td>
+                    <td><span class="log-status ${statusClass}">${l.status}</span></td>
+                    <td><strong class="file-path-text">${path}</strong>${msg}</td>
+                </tr>`;
             }).join('');
         }
 
@@ -239,18 +239,18 @@
                 const isLocal = f.is_local;
                 const uid     = f.node_uid;
                 const status  = isLocal
-                    ? \`<span class="log-status status-completed"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">check_circle</span>Local</span>\`
-                    : \`<span class="log-status" style="color:var(--text-muted);background:rgba(255,255,255,0.05);"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">cloud_queue</span>Stub</span>\`;
-                const actions = uid ? \`
-                    \${isLocal ? \`<button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="evictFile('\${uid}')">Evict</button>\` : ''}
-                    \${!isLocal ? \`<button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="pinFile('\${uid}')">Pin</button>\` : ''}
-                \` : '';
-                return \`<tr>
-                    <td><strong class="file-path-text" title="\${name}">\${name}</strong></td>
-                    <td style="color:var(--text-muted);">\${size}</td>
-                    <td>\${status}</td>
-                    <td style="display:flex;gap:6px;">\${actions}</td>
-                </tr>\`;
+                    ? `<span class="log-status status-completed"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">check_circle</span>Local</span>`
+                    : `<span class="log-status" style="color:var(--text-muted);background:rgba(255,255,255,0.05);"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">cloud_queue</span>Stub</span>`;
+                const actions = uid ? `
+                    ${isLocal ? `<button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="evictFile('${uid}')">Evict</button>` : ''}
+                    ${!isLocal ? `<button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="pinFile('${uid}')">Pin</button>` : ''}
+                ` : '';
+                return `<tr>
+                    <td><strong class="file-path-text" title="${name}">${name}</strong></td>
+                    <td style="color:var(--text-muted);">${size}</td>
+                    <td>${status}</td>
+                    <td style="display:flex;gap:6px;">${actions}</td>
+                </tr>`;
             }).join('');
         }
 
@@ -289,9 +289,9 @@
             if (data.status === 'bulk_deletion_warning') {
                 warningCard.style.display = 'block';
                 if (data.bulkDeletionCount > 0) {
-                    warningDesc.innerText = \`The sync engine detected that \${data.bulkDeletionCount} local files were deleted. Synchronization has been paused to protect your remote files in the cloud from being deleted.\`;
+                    warningDesc.innerText = `The sync engine detected that ${data.bulkDeletionCount} local files were deleted. Synchronization has been paused to protect your remote files in the cloud from being deleted.`;
                 } else {
-                    warningDesc.innerText = \`The sync engine detected that your local sync folder was emptied. Synchronization has been paused to protect your remote files in the cloud from being deleted.\`;
+                    warningDesc.innerText = `The sync engine detected that your local sync folder was emptied. Synchronization has been paused to protect your remote files in the cloud from being deleted.`;
                 }
             } else {
                 warningCard.style.display = 'none';
@@ -384,21 +384,21 @@
                     const progressClass = isUpload ? 'upload-color' : 'download-color';
                     const percent = t.percent || 0;
                     const progressText = t.size > 0
-                        ? \`\${formatBytes(t.transferred)} / \${formatBytes(t.size)} (\${percent}%)\`
-                        : \`\${isUpload ? 'Uploading' : 'Downloading'}…\`;
+                        ? `${formatBytes(t.transferred)} / ${formatBytes(t.size)} (${percent}%)`
+                        : `${isUpload ? 'Uploading' : 'Downloading'}…`;
 
-                    return \`<li class="transfer-item">
+                    return `<li class="transfer-item">
                         <div class="transfer-header">
                             <span class="transfer-name-wrapper">
-                                <span class="material-symbols-outlined transfer-type-icon \${progressClass}">\${iconName}</span>
-                                <span class="transfer-name" title="\${t.filePath || t.localPath || ''}">\${name}</span>
+                                <span class="material-symbols-outlined transfer-type-icon ${progressClass}">${iconName}</span>
+                                <span class="transfer-name" title="${t.filePath || t.localPath || ''}">${name}</span>
                             </span>
-                            <span class="transfer-meta">\${progressText}</span>
+                            <span class="transfer-meta">${progressText}</span>
                         </div>
                         <div class="transfer-bar-bg">
-                            <div class="transfer-bar-fill \${isUpload ? 'upload-bar' : 'download-bar'}" style="width: \${percent}%"></div>
+                            <div class="transfer-bar-fill ${isUpload ? 'upload-bar' : 'download-bar'}" style="width: ${percent}%"></div>
                         </div>
-                    </li>\`;
+                    </li>`;
                 }).join('');
             } else {
                 transfersCard.style.display = 'none';
@@ -440,7 +440,7 @@
                 const data = await res.json();
                 document.getElementById('quotaPercent').innerText    = data.percent + '%';
                 document.getElementById('quotaBar').style.width       = data.percent + '%';
-                document.getElementById('quotaText').innerText        = \`\${data.usedSpaceFormatted} of \${data.maxSpaceFormatted}\`;
+                document.getElementById('quotaText').innerText        = `${data.usedSpaceFormatted} of ${data.maxSpaceFormatted}`;
             } catch (err) {
                 console.error('Failed to fetch quota:', err);
             }
@@ -474,7 +474,7 @@
                 const statsEl = document.getElementById('cacheSizeDisplay');
 
                 if (data.stats) {
-                    statsEl.innerText = \`\${data.stats.totalFiles} files cached — \${formatBytes(data.stats.totalBytes)} used on disk\`;
+                    statsEl.innerText = `${data.stats.totalFiles} files cached — ${formatBytes(data.stats.totalBytes)} used on disk`;
                 }
 
                 cachedCacheFiles = data.files || [];
