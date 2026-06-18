@@ -612,53 +612,78 @@
 
         .transfers-list {
             list-style: none;
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-            gap: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
             padding: 0;
             margin: 0;
-            min-width: 0;
         }
 
         .transfer-item {
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            padding: 10px 14px 10px 10px;
             background: var(--input-bg);
-            padding: 1rem;
-            border-radius: 10px;
             border: 1px solid var(--border-color);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            min-width: 0;
+            border-radius: 14px;
+            min-width: 190px;
+            max-width: 300px;
             box-sizing: border-box;
-            width: 100%;
         }
 
-        .transfer-header {
+        .transfer-ring-wrap {
+            position: relative;
+            width: 42px;
+            height: 42px;
+            flex-shrink: 0;
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            gap: 12px;
-            min-width: 0;
+            justify-content: center;
         }
 
-        .transfer-name-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex: 1;
-            min-width: 0;
+        .transfer-ring {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: rotate(-90deg);
         }
+
+        .transfer-ring-track {
+            fill: none;
+            stroke: rgba(108, 71, 255, 0.12);
+            stroke-width: 3;
+        }
+
+        .transfer-ring-fill {
+            fill: none;
+            stroke-width: 3;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.4s ease;
+        }
+
+        .upload-ring   { stroke: #8b5cf6; }
+        .download-ring { stroke: var(--success); }
 
         .transfer-type-icon {
-            font-size: 18px;
-            flex-shrink: 0;
+            font-size: 16px;
+            position: relative;
+            z-index: 1;
         }
 
-        .upload-color { color: #a78bfa; }
+        .upload-color   { color: #a78bfa; }
         .download-color { color: var(--success); }
 
+        .transfer-info {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 0;
+            flex: 1;
+        }
+
         .transfer-name {
-            font-size: 0.88rem;
+            font-size: 0.85rem;
             font-weight: 500;
             color: var(--text-main);
             white-space: nowrap;
@@ -667,33 +692,9 @@
         }
 
         .transfer-meta {
-            font-size: 0.78rem;
+            font-size: 0.74rem;
             color: var(--text-muted);
-            font-weight: 500;
             white-space: nowrap;
-            flex-shrink: 0;
-        }
-
-        .transfer-bar-bg {
-            height: 6px;
-            background: rgba(108, 71, 255, 0.08);
-            border-radius: 9999px;
-            overflow: hidden;
-        }
-
-        .transfer-bar-fill {
-            height: 100%;
-            border-radius: 9999px;
-            width: 0%;
-            transition: width 0.3s ease;
-        }
-
-        .upload-bar {
-            background-color: #8b5cf6;
-        }
-
-        .download-bar {
-            background-color: var(--success);
         }
 
         /* Settings configuration page */
@@ -1231,8 +1232,10 @@
                 width: 100%;
             }
 
-            .transfers-list {
-                grid-template-columns: 1fr;
+            .transfer-item {
+                min-width: 0;
+                max-width: 100%;
+                flex: 1 1 100%;
             }
 
             .topbar {

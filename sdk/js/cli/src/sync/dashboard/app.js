@@ -379,22 +379,28 @@
                     const name = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
                     const isUpload = t.type === 'upload';
                     const iconName = isUpload ? 'upload' : 'download';
-                    const progressClass = isUpload ? 'upload-color' : 'download-color';
+                    const ringClass = isUpload ? 'upload-ring' : 'download-ring';
+                    const iconClass = isUpload ? 'upload-color' : 'download-color';
                     const percent = t.percent || 0;
                     const progressText = t.size > 0
                         ? `${formatBytes(t.transferred)} / ${formatBytes(t.size)} (${percent}%)`
                         : `${isUpload ? 'Uploading' : 'Downloading'}…`;
+                    const circ = 2 * Math.PI * 16;
+                    const dashoffset = circ * (1 - percent / 100);
 
                     return `<li class="transfer-item">
-                        <div class="transfer-header">
-                            <span class="transfer-name-wrapper">
-                                <span class="material-symbols-outlined transfer-type-icon ${progressClass}">${iconName}</span>
-                                <span class="transfer-name" title="${t.filePath || t.localPath || ''}">${name}</span>
-                            </span>
-                            <span class="transfer-meta">${progressText}</span>
+                        <div class="transfer-ring-wrap">
+                            <svg class="transfer-ring" viewBox="0 0 42 42" width="42" height="42">
+                                <circle class="transfer-ring-track" cx="21" cy="21" r="16"/>
+                                <circle class="transfer-ring-fill ${ringClass}" cx="21" cy="21" r="16"
+                                    stroke-dasharray="${circ.toFixed(2)}"
+                                    stroke-dashoffset="${dashoffset.toFixed(2)}"/>
+                            </svg>
+                            <span class="material-symbols-outlined transfer-type-icon ${iconClass}">${iconName}</span>
                         </div>
-                        <div class="transfer-bar-bg">
-                            <div class="transfer-bar-fill ${isUpload ? 'upload-bar' : 'download-bar'}" style="width: ${percent}%"></div>
+                        <div class="transfer-info">
+                            <span class="transfer-name" title="${t.filePath || t.localPath || ''}">${name}</span>
+                            <span class="transfer-meta">${progressText}</span>
                         </div>
                     </li>`;
                 }).join('');
