@@ -51,7 +51,7 @@ jobs:
           bun run compile:fuse
           bun run compile:sync
 
-      - name: Verify Daemon Binaries # <-- ADD THIS
+      - name: Verify Daemon Binaries
         run: |
           ls -lh sdk/js/cli/release/proton-fuse sdk/js/cli/release/proton-sync
           test -f sdk/js/cli/release/proton-sync || (echo "ERROR: proton-sync missing" && exit 1)
