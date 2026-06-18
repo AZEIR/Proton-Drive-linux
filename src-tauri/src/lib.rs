@@ -102,11 +102,8 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
 pub fn run() {
     #[cfg(target_os = "linux")]
     {
-        // Force X11 backend to avoid EGL/DMABuf crashes on Wayland (works via XWayland).
-        if std::env::var("GDK_BACKEND").is_err() {
-            std::env::set_var("GDK_BACKEND", "x11");
-        }
-        // Prevent WebKit DMABuf renderer from attempting EGL initialisation.
+        // Safety net for older/headless GPU stacks: skip the DMABuf renderer's
+        // EGL path. Harmless on modern Mesa, lets the compositor fall back cleanly.
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
