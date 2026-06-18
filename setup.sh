@@ -47,7 +47,7 @@ _do_build() {
 
     echo "Using bun: ${BUN_BIN}"
     (cd "${SCRIPT_DIR}/sdk/js/cli" && "$BUN_BIN" install --frozen-lockfile)
-    (cd "${SCRIPT_DIR}/sdk/js/cli" && "$BUN_BIN" run build)
+    (cd "${SCRIPT_DIR}/sdk/js/cli" && "$BUN_BIN" run build:sync)
 
     if [ ! -f "$BINARY" ]; then
         echo "ERROR: Build finished but binary still missing at: ${BINARY}"
