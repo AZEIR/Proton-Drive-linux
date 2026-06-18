@@ -1371,16 +1371,15 @@ export class SyncEngine extends EventEmitter {
     if (this.watcher) return;
 
     this.watcher = chokidar.watch(this.localSyncRoot, {
-      // Ignore dotfiles and any path matched by the IgnoreMatcher
-      ignored: (absolutePath: string, stats?: import("node:fs").Stats) => {
-        const basename = path.basename(absolutePath);
-        // Always ignore dotfiles (fast path)
-        if (basename.startsWith(".") && basename !== PROTONIGNORE_FILENAME)
-          return true;
+      // Only block chokidar from recursing into known large/VCS root-level
+      // directories. Chokidar v5 no longer passes stats to the ignored callback
+      // so fine-grained per-file filtering is unreliable here — all of that is
+      // handled in handleLocalChange via IgnoreMatcher instead.
+      ignored: (absolutePath: string) => {
         const relPath = path.relative(this.localSyncRoot, absolutePath);
         if (!relPath || relPath.startsWith("..")) return false;
-        const isDir = stats ? stats.isDirectory() : false;
-        return this.ignoreMatcher.shouldIgnore(relPath, isDir);
+        const topLevel = relPath.split(path.sep)[0];
+        return this.ignoreMatcher.shouldIgnore(topLevel, true);
       },
       persistent: true,
       ignoreInitial: true,
@@ -1995,11 +1994,13 @@ export class SyncEngine extends EventEmitter {
           }
         };
 
-        const stream = file.stream();
+        // Track the current stream so abort() can cancel it regardless of which
+        // retry attempt is in progress.
+        let currentStream: ReturnType<typeof file.stream> | null = null;
         this.activeUploads.set(relativePath, {
           abort: async () => {
             try {
-              await stream.cancel();
+              await currentStream?.cancel();
             } catch (e) {}
           },
         });
@@ -2009,6 +2010,10 @@ export class SyncEngine extends EventEmitter {
             if (this.isPaused || !this.isStarted) {
               throw new Error("Sync paused or stopped");
             }
+            // Create a fresh stream on every attempt — a ReadableStream can
+            // only be consumed once, so reusing it across retries causes a
+            // "ReadableStream is locked" error.
+            currentStream = file.stream();
             let uploadController;
             if (mapped) {
               this.logger.info(
@@ -2019,7 +2024,7 @@ export class SyncEngine extends EventEmitter {
                 metadata,
               );
               uploadController = await uploader.uploadFromStream(
-                stream,
+                currentStream,
                 [],
                 progressCallback,
               );
@@ -2035,13 +2040,31 @@ export class SyncEngine extends EventEmitter {
               this.logger.info(
                 `Uploading new file ${fileName} under parent ${parentUid}`,
               );
-              const uploader = await this.sdk.getFileUploader(
-                parentUid,
-                fileName,
-                metadata,
-              );
+              let uploader;
+              try {
+                uploader = await this.sdk.getFileUploader(
+                  parentUid,
+                  fileName,
+                  metadata,
+                );
+              } catch (err: any) {
+                // Remote already has a file with this name (orphaned node from
+                // a previous partial upload or interrupted move). Treat it as
+                // an existing revision to avoid a permanent "name conflict" stall.
+                if (err.existingNodeUid) {
+                  this.logger.warn(
+                    `Remote name conflict for ${relativePath} (uid ${err.existingNodeUid}). Uploading as new revision.`,
+                  );
+                  uploader = await this.sdk.getFileRevisionUploader(
+                    err.existingNodeUid,
+                    metadata,
+                  );
+                } else {
+                  throw err;
+                }
+              }
               uploadController = await uploader.uploadFromStream(
-                stream,
+                currentStream,
                 [],
                 progressCallback,
               );

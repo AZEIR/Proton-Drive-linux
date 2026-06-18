@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import subprocess
 import sys
 import time
 import threading
@@ -65,6 +66,12 @@ class ProtonDriveTrayApp:
         
         self.menu.append(Gtk.SeparatorMenuItem())
         
+        self.menu_stop_daemon = Gtk.MenuItem(label="Stop Daemon")
+        self.menu_stop_daemon.connect("activate", self.stop_daemon)
+        self.menu.append(self.menu_stop_daemon)
+
+        self.menu.append(Gtk.SeparatorMenuItem())
+
         self.menu_exit = Gtk.MenuItem(label="Exit Tray")
         self.menu_exit.connect("activate", self.quit_app)
         self.menu.append(self.menu_exit)
@@ -154,6 +161,7 @@ class ProtonDriveTrayApp:
         self.menu_resume.set_sensitive(is_running and is_paused)
         self.menu_sync.set_sensitive(is_running and not is_paused and mode == "full")
         self.menu_open_folder.set_sensitive(is_running)
+        self.menu_stop_daemon.set_sensitive(is_running)
 
     # Context Menu Callbacks
     def open_dashboard(self, widget):
@@ -177,6 +185,15 @@ class ProtonDriveTrayApp:
                 requests.post(f"http://localhost:{PORT}{endpoint}", json={}, timeout=2)
             except Exception as e:
                 print(f"Error calling {endpoint}: {e}", file=sys.stderr)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def stop_daemon(self, widget):
+        drive_sh = os.path.join(BASE_DIR, "drive.sh")
+        def worker():
+            try:
+                subprocess.run([drive_sh, "stop"], check=False)
+            except Exception as e:
+                print(f"Error stopping daemon: {e}", file=sys.stderr)
         threading.Thread(target=worker, daemon=True).start()
 
     def quit_app(self, widget):

@@ -16,3 +16,4 @@ sdk/js/cli/*.sqlite
 sdk/js/cli/*.json
 !sdk/js/cli/package.json
 !sdk/js/cli/tsconfig.json
+.claude/

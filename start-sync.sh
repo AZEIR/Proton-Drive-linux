@@ -31,6 +31,7 @@ SYNC_MODE="${PROTON_SYNC_MODE:-full}"
 start_daemon() {
     cd "$SCRIPT_DIR"
 
+    # Check PID file first
     if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
         if ps -p "$PID" > /dev/null 2>&1; then
@@ -39,12 +40,40 @@ start_daemon() {
         fi
     fi
 
+    # Guard against a second instance started alongside a systemd-managed one
+    if systemctl --user is-active --quiet proton-sync.service 2>/dev/null; then
+        echo "Proton Drive is already running as a systemd service."
+        echo "Use 'systemctl --user stop proton-sync.service' to stop it first."
+        exit 1
+    fi
+
+    # Guard against port conflict (another process already bound to the dashboard port)
+    if ss -tlnp 2>/dev/null | grep -q ":${PORT} " || \
+       lsof -ti:"${PORT}" >/dev/null 2>&1; then
+        echo "WARNING: Port ${PORT} is already in use — another instance may be running."
+        echo "Run './drive.sh status' to investigate."
+        exit 1
+    fi
+
     # Clean up stale mount points before mkdir -p (since mkdir -p on a stale mount will fail/hang)
     if [ "$SYNC_MODE" != "full" ]; then
         if mountpoint -q "$MOUNT_POINT" 2>/dev/null || { [ -d "$MOUNT_POINT" ] && ! ls "$MOUNT_POINT" >/dev/null 2>&1; }; then
             echo "Detected stale FUSE mount at ${MOUNT_POINT}. Cleaning up..."
             fusermount3 -u "$MOUNT_POINT" 2>/dev/null || fusermount -u "$MOUNT_POINT" 2>/dev/null || true
         fi
+    fi
+
+    # Warn if the sync folder already contains files — avoids silently merging
+    # existing local content with remote on a fresh setup.
+    if [ -d "$MOUNT_POINT" ] && [ -n "$(ls -A "$MOUNT_POINT" 2>/dev/null)" ]; then
+        echo "WARNING: Sync folder '${MOUNT_POINT}' is not empty."
+        echo "  Existing local files will be merged/synced with your Proton Drive."
+        printf "  Continue? [y/N]: "
+        read -r _confirm
+        case "$_confirm" in
+            [yY]|[yY][eE][sS]) ;;
+            *) echo "Aborted."; exit 0 ;;
+        esac
     fi
 
     mkdir -p "$MOUNT_POINT"
@@ -87,6 +116,9 @@ start_daemon() {
 }
 
 stop_daemon() {
+    local stopped=0
+
+    # Stop PID-file-managed daemon (started via drive.sh / start-sync.sh)
     if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
         if ps -p "$PID" > /dev/null 2>&1; then
@@ -102,36 +134,67 @@ stop_daemon() {
 
             rm -f "$PIDFILE"
             echo "Daemon stopped."
+            stopped=1
         else
-            echo "Proton Drive daemon is not running (stale PID file removed)."
+            echo "Stale PID file removed."
             rm -f "$PIDFILE"
         fi
-    else
-        echo "Proton Drive daemon is not running."
     fi
+
+    # Stop systemd-managed daemon as fallback
+    if systemctl --user is-active --quiet proton-sync.service 2>/dev/null; then
+        echo "Stopping proton-sync.service (systemd)..."
+        systemctl --user stop proton-sync.service
+        echo "Daemon stopped."
+        stopped=1
+    fi
+
+    [ "$stopped" -eq 0 ] && echo "Proton Drive daemon is not running."
+}
+
+_print_pid_status() {
+    local PID="$1"
+    echo "Proton Drive daemon is RUNNING (PID: $PID)"
+    if tr '\0' '\n' < /proc/$PID/environ 2>/dev/null | grep -q "^PROTON_SYNC_MODE=full"; then
+        echo "  Mode        : Full Sync"
+        echo "  Local Path  : ${MOUNT_POINT}"
+    else
+        echo "  Mode        : File-On-Demand (FUSE)"
+        echo "  Mount point : ${MOUNT_POINT}"
+        if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+            echo "  FUSE mount  : Active ✓"
+        else
+            echo "  FUSE mount  : Not mounted ✗"
+        fi
+    fi
+    echo "  Dashboard   : http://localhost:${PORT}"
 }
 
 status_daemon() {
+    # 1. Check PID file (daemon started via drive.sh / start-sync.sh)
     if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
         if ps -p "$PID" > /dev/null 2>&1; then
-            echo "Proton Drive daemon is RUNNING (PID: $PID)"
-            if tr '\0' '\n' < /proc/$PID/environ 2>/dev/null | grep -q "^PROTON_SYNC_MODE=full"; then
-                echo "  Mode        : Full Sync"
-                echo "  Local Path  : ${MOUNT_POINT}"
-            else
-                echo "  Mode        : File-On-Demand (FUSE)"
-                echo "  Mount point : ${MOUNT_POINT}"
-                if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
-                    echo "  FUSE mount  : Active ✓"
-                else
-                    echo "  FUSE mount  : Not mounted ✗"
-                fi
-            fi
-            echo "  Dashboard   : http://localhost:${PORT}"
+            _print_pid_status "$PID"
             exit 0
         fi
     fi
+
+    # 2. Check systemd user service as fallback (daemon started via systemctl)
+    if systemctl --user is-active --quiet proton-sync.service 2>/dev/null; then
+        SYSTEMD_PID=$(systemctl --user show -p MainPID --value proton-sync.service 2>/dev/null || echo "")
+        echo "Proton Drive daemon is RUNNING (systemd)"
+        [ -n "$SYSTEMD_PID" ] && echo "  PID         : ${SYSTEMD_PID}"
+        echo "  Managed by  : systemctl --user"
+        SSTATE=$(systemctl --user show -p SubState --value proton-sync.service 2>/dev/null || echo "running")
+        echo "  State       : ${SSTATE}"
+        echo "  Dashboard   : http://localhost:${PORT}"
+        echo ""
+        echo "  Logs  : journalctl --user -u proton-sync.service -f"
+        echo "  Stop  : systemctl --user stop proton-sync.service"
+        exit 0
+    fi
+
     echo "Proton Drive daemon is STOPPED."
 }
 
