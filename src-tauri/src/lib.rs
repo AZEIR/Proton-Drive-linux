@@ -102,12 +102,15 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
 pub fn run() {
     #[cfg(target_os = "linux")]
     {
-        // Fix blank white screen and EGL display crashes on Linux/Wayland
+        // Force X11 backend to avoid EGL/DMABuf crashes on Wayland (works via XWayland).
+        if std::env::var("GDK_BACKEND").is_err() {
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+        // Prevent WebKit DMABuf renderer from attempting EGL initialisation.
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-        // Disable WebKit sandbox to prevent Bubblewrap/EGL crashes inside AppImages.
-        // WEBKIT_FORCE_SANDBOX was removed in newer WebKit — use the replacement.
+        // Disable WebKit sandbox — WEBKIT_FORCE_SANDBOX was removed in newer WebKit.
         if std::env::var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS").is_err() {
             std::env::set_var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
         }
