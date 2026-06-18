@@ -68,6 +68,10 @@ if [ "$FORCE_REBUILD" -eq 1 ]; then
     else
         echo "(Service not running — start it with: ./drive.sh start)"
     fi
+    # Restart tray so it reconnects to the restarted daemon
+    "${SCRIPT_DIR}/drive.sh" stop-tray 2>/dev/null || true
+    sleep 1
+    "${SCRIPT_DIR}/drive.sh" tray
     echo "Done."
     exit 0
 fi
@@ -119,9 +123,10 @@ fi
 # ── 2. Install the systemd service ───────────────────────────────────────────
 mkdir -p "$SYSTEMD_DIR"
 
-# Substitute the real home path into ExecStart (%h works for systemd but an
-# explicit path is more portable across editors and tools).
-sed "s|%h|${HOME}|g" "$SERVICE_SRC" > "$SERVICE_DST"
+# Substitute the actual project directory into ExecStart.
+# The template uses __INSTALL_DIR__ so the service works regardless of where
+# the repo is cloned (~/Code/..., ~/Projects/..., etc.)
+sed "s|__INSTALL_DIR__|${SCRIPT_DIR}|g" "$SERVICE_SRC" > "$SERVICE_DST"
 
 echo "Installed: ${SERVICE_DST}"
 
@@ -164,6 +169,11 @@ if ! systemctl --user is-active --quiet "$SERVICE_NAME"; then
     systemctl --user status "$SERVICE_NAME" --no-pager 2>/dev/null || true
     exit 1
 fi
+
+# ── 5. Start / restart tray icon ─────────────────────────────────────────────
+"${SCRIPT_DIR}/drive.sh" stop-tray 2>/dev/null || true
+sleep 1
+"${SCRIPT_DIR}/drive.sh" tray
 
 echo ""
 echo "============================================="
