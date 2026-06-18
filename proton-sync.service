@@ -1,13 +1,14 @@
 [Unit]
 Description=Proton Drive Sync Client Daemon
-After=network.target
+After=network.target graphical-session.target
+Wants=graphical-session.target
 
 [Service]
-ExecStart=/usr/bin/env node __INSTALL_DIR__/sdk/js/cli/release/proton-sync
+ExecStart=__INSTALL_DIR__/sdk/js/cli/release/proton-sync
 Restart=on-failure
 RestartSec=10
 Environment=PROTON_SYNC_PORT=8085
 Environment=PROTON_SYNC_MODE=full
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
