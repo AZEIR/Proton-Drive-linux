@@ -3,25 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Proton Drive - Desktop Sync</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <title>Proton Drive — Desktop Sync</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 20 106 95'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M49.9553 33.7554H95.0391C101.095 33.7554 106 38.6208 106 44.6278V101.117C106 107.124 101.095 111.989 95.0391 111.989H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V35.8722C0 29.8654 4.90503 25 10.9609 25H31.5307C33.6089 25 35.6313 25.6539 37.2961 26.873L44.1788 31.8824C45.8547 33.1015 47.8771 33.7554 49.9553 33.7554Z' fill='%23a78bfa'/%3E%3Cpath d='M74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V101.128C0 107.135 4.90503 112 10.9609 112H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999Z' fill='%236d4aff'/%3E%3C/svg%3E">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-body: #0b0a12;
-            --bg-card: rgba(22, 21, 38, 0.55);
-            --border-color: rgba(108, 71, 255, 0.25);
-            --primary: #6c47ff;
-            --primary-gradient: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
-            --text-main: #f3f3f5;
-            --text-muted: #8f8da8;
-            --shadow-premium: 0 16px 40px rgba(0, 0, 0, 0.4);
+            --bg-body:      #1e202b;
+            --bg-sidebar:   #141620;
+            --bg-card:      #252839;
+            --border-color: #2e3248;
+            --primary:      #6c47ff;
+            --text-main:    #f1f5f9;
+            --text-muted:   #94a3b8;
         }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
             font-family: 'Inter', sans-serif;
@@ -29,261 +25,272 @@
             color: var(--text-main);
             height: 100vh;
             display: flex;
-            align-items: center;
-            justify-content: center;
             overflow: hidden;
-            position: relative;
         }
 
-        /* Abstract ambient gradient glow blobs */
-        .ambient-glow-1 {
-            position: absolute;
-            top: -10%;
-            left: -10%;
-            width: 50%;
-            height: 50%;
-            background: radial-gradient(circle, rgba(124, 58, 237, 0.18) 0%, transparent 70%);
-            z-index: 1;
-            filter: blur(40px);
+        /* Sidebar — matches the dashboard sidebar */
+        .sidebar {
+            width: 280px;
+            background: var(--bg-sidebar);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            padding: 1.5rem 1rem;
+            flex-shrink: 0;
         }
 
-        .ambient-glow-2 {
-            position: absolute;
-            bottom: -10%;
-            right: -10%;
-            width: 50%;
-            height: 50%;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.18) 0%, transparent 70%);
-            z-index: 1;
-            filter: blur(40px);
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 2rem;
+            padding-left: 0.5rem;
         }
 
-        /* Glassmorphism Container */
-        .splash-container {
-            width: 440px;
-            padding: 3rem;
+        .proton-logo { width: 32px; height: 32px; flex-shrink: 0; }
+
+        .brand-name {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .sub-brand {
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--primary);
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .nav-skeleton {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .nav-skeleton-item {
+            height: 44px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 10px;
+            animation: shimmer 1.6s ease-in-out infinite;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .storage-skeleton {
+            height: 72px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 12px;
+            animation: shimmer 1.6s ease-in-out infinite;
+        }
+
+        .user-skeleton {
+            height: 56px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 12px;
+            animation: shimmer 1.6s ease-in-out 0.2s infinite;
+        }
+
+        @keyframes shimmer {
+            0%   { opacity: 0.5; }
+            50%  { opacity: 0.8; }
+            100% { opacity: 0.5; }
+        }
+
+        /* Main content area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .topbar {
+            height: 70px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 2rem;
+            gap: 1rem;
+        }
+
+        .topbar-title {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text-main);
+            letter-spacing: -0.3px;
+        }
+
+        .content-area {
+            flex: 1;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        /* Loading card */
+        .loading-card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
-            border-radius: 24px;
-            box-shadow: var(--shadow-premium);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            text-align: center;
-            z-index: 2;
-            animation: containerAppear 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
-        }
-
-        @keyframes containerAppear {
-            from {
-                opacity: 0;
-                transform: scale(0.92) translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: scale(1) translateY(0);
-            }
-        }
-
-        /* Brand Elements */
-        .brand-header {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            margin-bottom: 2.5rem;
-        }
-
-        .logo-wrapper {
-            position: relative;
-            width: 72px;
-            height: 72px;
-            margin-bottom: 1.25rem;
+            border-radius: 16px;
+            padding: 2rem;
             display: flex;
             align-items: center;
-            justify-content: center;
+            gap: 1.5rem;
         }
 
-        .logo-glow {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            background: var(--primary-gradient);
-            border-radius: 50%;
-            filter: blur(14px);
-            opacity: 0.35;
-            animation: pulseGlow 3s infinite alternate;
-        }
-
-        .logo-svg {
+        .spinner-wrap {
+            width: 52px;
+            height: 52px;
             position: relative;
-            width: 60px;
-            height: 60px;
-            color: #ffffff;
-            z-index: 2;
-        }
-
-        @keyframes pulseGlow {
-            0% { transform: scale(0.9); opacity: 0.25; }
-            100% { transform: scale(1.15); opacity: 0.45; }
-        }
-
-        .brand-title {
-            font-family: 'Outfit', sans-serif;
-            font-size: 1.85rem;
-            font-weight: 800;
-            letter-spacing: -0.5px;
-            background: linear-gradient(135deg, #ffffff 30%, #a78bfa 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 0.25rem;
-        }
-
-        .brand-subtitle {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 2px;
-            font-weight: 600;
-        }
-
-        /* Spinner Component */
-        .spinner-wrapper {
-            position: relative;
-            width: 56px;
-            height: 56px;
-            margin-bottom: 1.5rem;
+            flex-shrink: 0;
         }
 
         .spinner-track {
             position: absolute;
-            width: 100%;
-            height: 100%;
-            border: 3px solid rgba(255, 255, 255, 0.03);
+            inset: 0;
+            border: 3px solid rgba(108, 71, 255, 0.12);
             border-radius: 50%;
         }
 
-        .spinner-handle {
+        .spinner-arc {
             position: absolute;
-            width: 100%;
-            height: 100%;
+            inset: 0;
             border: 3px solid transparent;
-            border-top: 3px solid var(--primary);
-            border-right: 3px solid #7c3aed;
+            border-top-color: var(--primary);
+            border-right-color: #a78bfa;
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            animation: spin 0.9s linear infinite;
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            to { transform: rotate(360deg); }
         }
 
-        /* Status messages */
-        .status-message {
-            font-size: 0.95rem;
+        .loading-text h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
             color: var(--text-main);
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-            transition: opacity 0.3s;
+            margin-bottom: 4px;
         }
 
-        .status-detail {
-            font-size: 0.8rem;
+        .loading-text p {
+            font-size: 0.88rem;
             color: var(--text-muted);
-            transition: opacity 0.3s;
         }
 
-        /* Fade-out transition */
-        .fade-out {
-            animation: containerDisappear 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        /* Skeleton placeholder cards */
+        .skeleton-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
         }
 
-        @keyframes containerDisappear {
-            to {
-                opacity: 0;
-                transform: scale(0.95) translateY(-10px);
-            }
+        .skeleton-line {
+            height: 12px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 6px;
+            animation: shimmer 1.6s ease-in-out infinite;
+            margin-bottom: 12px;
         }
+
+        .skeleton-line.w-40 { width: 40%; }
+        .skeleton-line.w-60 { width: 60%; }
+        .skeleton-line.w-80 { width: 80%; }
+        .skeleton-line.w-100 { width: 100%; }
     </style>
 </head>
 <body>
-    <div class="ambient-glow-1"></div>
-    <div class="ambient-glow-2"></div>
+    <!-- Sidebar skeleton — matches dashboard layout -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <svg class="proton-logo" viewBox="0 20 106 95" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M49.9553 33.7554H95.0391C101.095 33.7554 106 38.6208 106 44.6278V101.117C106 107.124 101.095 111.989 95.0391 111.989H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V35.8722C0 29.8654 4.90503 25 10.9609 25H31.5307C33.6089 25 35.6313 25.6539 37.2961 26.873L44.1788 31.8824C45.8547 33.1015 47.8771 33.7554 49.9553 33.7554Z" fill="#a78bfa"/>
+                <path d="M74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V101.128C0 107.135 4.90503 112 10.9609 112H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999Z" fill="#6d4aff"/>
+            </svg>
+            <span class="brand-name">Proton Drive<span class="sub-brand">Sync</span></span>
+        </div>
 
-    <div class="splash-container" id="splash-card">
-        <div class="brand-header">
-            <div class="logo-wrapper">
-                <div class="logo-glow"></div>
-                <!-- Proton Shield Logo Concept -->
-                <svg class="logo-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 2L4 5V11C4 16.52 7.42 20.74 12 22C16.58 20.74 20 16.52 20 11V5L12 2Z" fill="url(#shield-grad)" stroke="#ffffff" stroke-width="1" stroke-linejoin="round"/>
-                    <path d="M12 5.5L7 7.25V11C7 14.5 9.2 17.8 12 18.8C14.8 17.8 17 14.5 17 11V7.25L12 5.5Z" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>
-                    <path d="M12 8V15" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M10 10L12 8L14 10" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <defs>
-                        <linearGradient id="shield-grad" x1="4" y1="2" x2="20" y2="22" gradientUnits="userSpaceOnUse">
-                            <stop stop-color="#7c3aed"/>
-                            <stop offset="1" stop-color="#4f46e5"/>
-                        </linearGradient>
-                    </defs>
-                </svg>
+        <div class="nav-skeleton">
+            <div class="nav-skeleton-item"></div>
+            <div class="nav-skeleton-item" style="opacity:0.5;"></div>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="storage-skeleton"></div>
+            <div class="user-skeleton"></div>
+        </div>
+    </aside>
+
+    <!-- Main content skeleton -->
+    <main class="main-content">
+        <div class="topbar">
+            <span class="topbar-title">Sync Dashboard</span>
+        </div>
+
+        <div class="content-area">
+            <!-- Spinner card -->
+            <div class="loading-card">
+                <div class="spinner-wrap">
+                    <div class="spinner-track"></div>
+                    <div class="spinner-arc"></div>
+                </div>
+                <div class="loading-text">
+                    <h2 id="status-text">Starting sync service…</h2>
+                    <p id="status-sub">Connecting to background daemon</p>
+                </div>
             </div>
-            <h1 class="brand-title">Proton Drive</h1>
-            <div class="brand-subtitle">Desktop Client</div>
-        </div>
 
-        <div class="spinner-wrapper">
-            <div class="spinner-track"></div>
-            <div class="spinner-handle"></div>
+            <!-- Skeleton placeholder for the log card -->
+            <div class="skeleton-card">
+                <div class="skeleton-line w-40" style="height:16px;margin-bottom:1.5rem;"></div>
+                <div class="skeleton-line w-100"></div>
+                <div class="skeleton-line w-80"></div>
+                <div class="skeleton-line w-60"></div>
+                <div class="skeleton-line w-100"></div>
+                <div class="skeleton-line w-40" style="margin-bottom:0;"></div>
+            </div>
         </div>
-
-        <div class="status-message" id="status-text">Initializing sync service...</div>
-        <div class="status-detail" id="status-sub">Please wait, connecting to backend daemon</div>
-    </div>
+    </main>
 
     <script>
         const statusText = document.getElementById('status-text');
-        const statusSub = document.getElementById('status-sub');
-        const splashCard = document.getElementById('splash-card');
-        
+        const statusSub  = document.getElementById('status-sub');
         let attempts = 0;
-        const maxAttempts = 15;
 
         async function checkDaemon() {
-            try {
-                attempts++;
-                if (attempts > 5) {
-                    statusText.innerText = "Launching sync engine...";
-                    statusSub.innerText = `Connecting (Attempt ${attempts})...`;
-                }
+            attempts++;
+            if (attempts > 4) {
+                statusText.innerText = 'Launching sync engine…';
+                statusSub.innerText  = `Attempt ${attempts} — daemon may still be starting`;
+            }
 
+            try {
                 const res = await fetch('http://localhost:8085/api/status');
                 if (res.ok) {
-                    statusText.innerText = "Service connected!";
-                    statusSub.innerText = "Loading synchronization dashboard...";
-                    setTimeout(() => {
-                        splashCard.classList.add('fade-out');
-                        setTimeout(() => {
-                            window.location.href = 'http://localhost:8085/';
-                        }, 400);
-                    }, 500);
+                    statusText.innerText = 'Connected!';
+                    statusSub.innerText  = 'Loading dashboard…';
+                    setTimeout(() => { window.location.href = 'http://localhost:8085/'; }, 300);
                     return;
                 }
-            } catch (err) {
-                // Ignore and retry
-            }
-
-            if (attempts >= maxAttempts) {
-                statusText.innerText = "Connection taking longer than usual";
-                statusSub.innerText = "Checking if the daemon process is still launching...";
-            }
+            } catch {}
 
             setTimeout(checkDaemon, 1000);
         }
 
-        // Start checking after 500ms
         setTimeout(checkDaemon, 500);
     </script>
 </body>
