@@ -25,44 +25,7 @@ echo "============================================="
 echo "    Proton Drive Linux — Setup"
 echo "============================================="
 
-# ── Detect existing install ───────────────────────────────────────────────────
-ALREADY_INSTALLED=0
-WAS_RUNNING=0
-
-if [ -f "$SERVICE_DST" ] || systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-    ALREADY_INSTALLED=1
-    echo ""
-    echo "Existing installation detected."
-
-    # Show current sync folder if readable from service file
-    if [ -f "$SERVICE_DST" ]; then
-        CURRENT_SYNC=$(grep "^Environment=PROTON_MOUNT_POINT=" "$SERVICE_DST" 2>/dev/null | cut -d= -f3-)
-        [ -n "$CURRENT_SYNC" ] && echo "  Current sync folder : ${CURRENT_SYNC}"
-    fi
-
-    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        WAS_RUNNING=1
-        echo "  Service status      : running"
-    else
-        echo "  Service status      : stopped"
-    fi
-
-    echo ""
-    printf "Reconfigure? This will restart the daemon. [y/N]: "
-    read -r _confirm
-    case "$_confirm" in
-        [yY]|[yY][eE][sS]) ;;
-        *) echo "Aborted — no changes made."; exit 0 ;;
-    esac
-
-    # Stop the daemon before touching the service file
-    if [ "$WAS_RUNNING" -eq 1 ]; then
-        echo "Stopping daemon..."
-        systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
-    fi
-fi
-
-# ── 1. Build binary ───────────────────────────────────────────────────────────
+# ── Build helper (defined early so --rebuild can call it) ────────────────────
 _do_build() {
     BUN_BIN=""
     if command -v bun >/dev/null 2>&1; then
@@ -94,16 +57,63 @@ _do_build() {
     echo ""
 }
 
+# ── --rebuild: recompile only, then restart if running ───────────────────────
+if [ "$FORCE_REBUILD" -eq 1 ]; then
+    echo "Rebuilding binary..."
+    echo ""
+    _do_build
+    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        echo "Restarting daemon to pick up new binary..."
+        systemctl --user restart "$SERVICE_NAME"
+    else
+        echo "(Service not running — start it with: ./drive.sh start)"
+    fi
+    echo "Done."
+    exit 0
+fi
+
+# ── Detect existing install ───────────────────────────────────────────────────
+ALREADY_INSTALLED=0
+WAS_RUNNING=0
+
+if [ -f "$SERVICE_DST" ] || systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    ALREADY_INSTALLED=1
+    echo ""
+    echo "Existing installation detected."
+
+    if [ -f "$SERVICE_DST" ]; then
+        CURRENT_SYNC=$(grep "^Environment=PROTON_MOUNT_POINT=" "$SERVICE_DST" 2>/dev/null | cut -d= -f3-)
+        [ -n "$CURRENT_SYNC" ] && echo "  Current sync folder : ${CURRENT_SYNC}"
+    fi
+
+    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        WAS_RUNNING=1
+        echo "  Service status      : running"
+    else
+        echo "  Service status      : stopped"
+    fi
+
+    echo ""
+    printf "Reconfigure? This will restart the daemon. [y/N]: "
+    read -r _confirm
+    case "$_confirm" in
+        [yY]|[yY][eE][sS]) ;;
+        *) echo "Aborted — no changes made."; exit 0 ;;
+    esac
+
+    if [ "$WAS_RUNNING" -eq 1 ]; then
+        echo "Stopping daemon..."
+        systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+    fi
+fi
+
+# ── 1. Build binary (first-time only) ────────────────────────────────────────
 if [ ! -f "$BINARY" ]; then
     echo "Binary not found — building now..."
     echo ""
     _do_build
-elif [ "$FORCE_REBUILD" -eq 1 ]; then
-    echo "Rebuilding binary (--rebuild)..."
-    echo ""
-    _do_build
 else
-    echo "Binary found — skipping build. Use --rebuild to force recompile."
+    echo "Binary found — skipping build. Use --rebuild to recompile."
 fi
 
 # ── 2. Install the systemd service ───────────────────────────────────────────
