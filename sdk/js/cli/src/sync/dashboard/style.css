@@ -451,10 +451,10 @@
             padding-bottom: 0.6rem;
         }
 
-        /* Dashboard Grid Layout (Desktop 2-columns) */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: 1fr;
+        /* Dashboard Layout */
+        .dashboard-main-col {
+            display: flex;
+            flex-direction: column;
             gap: 1.5rem;
         }
 
@@ -600,93 +600,39 @@
             color: #ffffff;
         }
 
-        /* Active Transfers Panel */
-        .transfers-list {
-            list-style: none;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            max-height: 350px;
-            overflow-y: auto;
-            padding-right: 4px;
-            min-width: 0;
+        /* Active transfer rows pinned to top of the log table */
+        .transfer-active-row td {
+            background: rgba(108, 71, 255, 0.04);
         }
 
-        .transfer-item {
-            background: var(--input-bg);
-            padding: 1rem;
-            border-radius: 10px;
-            border: 1px solid var(--border-color);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            min-width: 0;
-            box-sizing: border-box;
-            width: 100%;
-        }
-
-        .transfer-header {
-            display: flex;
-            justify-content: space-between;
+        .transfer-progress-cell {
+            display: inline-flex;
             align-items: center;
-            gap: 12px;
-            min-width: 0;
-        }
-
-        .transfer-name-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex: 1;
-            min-width: 0;
-        }
-
-        .transfer-type-icon {
-            font-size: 18px;
-            flex-shrink: 0;
-        }
-
-        .upload-color { color: #a78bfa; }
-        .download-color { color: var(--success); }
-
-        .transfer-name {
-            font-size: 0.88rem;
-            font-weight: 500;
-            color: var(--text-main);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .transfer-meta {
-            font-size: 0.78rem;
+            gap: 6px;
+            font-size: 0.82rem;
             color: var(--text-muted);
-            font-weight: 500;
-            white-space: nowrap;
+        }
+
+        .transfer-mini-ring {
+            transform: rotate(-90deg);
             flex-shrink: 0;
         }
 
-        .transfer-bar-bg {
-            height: 6px;
-            background: rgba(108, 71, 255, 0.08);
-            border-radius: 9999px;
-            overflow: hidden;
+        .transfer-ring-track {
+            fill: none;
+            stroke: rgba(108, 71, 255, 0.15);
+            stroke-width: 2.5;
         }
 
-        .transfer-bar-fill {
-            height: 100%;
-            border-radius: 9999px;
-            width: 0%;
-            transition: width 0.3s ease;
+        .transfer-ring-fill {
+            fill: none;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.4s ease;
         }
 
-        .upload-bar {
-            background-color: #8b5cf6;
-        }
-
-        .download-bar {
-            background-color: var(--success);
-        }
+        .upload-ring   { stroke: #8b5cf6; }
+        .download-ring { stroke: var(--success); }
 
         /* Settings configuration page */
         .settings-group {
@@ -1141,14 +1087,7 @@
         }
 
         @media (min-width: 1200px) {
-            .dashboard-grid.has-transfers {
-                grid-template-columns: 2fr 1.1fr;
-            }
             .dashboard-main-col {
-                display: flex;
-                flex-direction: column;
-            }
-            .dashboard-side-col {
                 display: flex;
                 flex-direction: column;
             }
@@ -1224,17 +1163,12 @@
                 min-width: 0;
             }
 
-            .dashboard-grid {
-                grid-template-columns: 1fr !important;
+            .dashboard-main-col {
                 gap: 0.75rem;
-                min-width: 0;
-            }
-
-            .dashboard-main-col,
-            .dashboard-side-col {
                 min-width: 0;
                 width: 100%;
             }
+
 
             .topbar {
                 height: 56px;
