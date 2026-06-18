@@ -24,6 +24,11 @@ jobs:
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Install Linux System Dependencies
         run: |
           sudo apt-get update
@@ -33,7 +38,8 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libfuse2
+            libfuse2 \
+            rpm
 
       - name: Install Root Dependencies
         run: bun install
@@ -66,8 +72,16 @@ jobs:
       - name: Upload AppImage Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ProtonDrive-linux-x86_64
+          name: ProtonDrive-linux-x86_64.AppImage
           path: src-tauri/target/release/bundle/appimage/*.AppImage
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload RPM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProtonDrive-linux-x86_64.rpm
+          path: src-tauri/target/release/bundle/rpm/*.rpm
           compression-level: 0
           if-no-files-found: error
 
@@ -77,10 +91,16 @@ jobs:
         with:
           tag_name: latest
           name: "Latest Development Build"
-          body: "Latest automatically compiled AppImage from the main branch."
+          body: |
+            Latest automatically compiled build from the main branch.
+
+            - **Fedora/RHEL**: download the `.rpm` and install with `sudo dnf install ./ProtonDrive.rpm`
+            - **Ubuntu/Debian and others**: download the `.AppImage`, mark executable, and run
           prerelease: true
           make_latest: true
-          files: src-tauri/target/release/bundle/appimage/*.AppImage
+          files: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/rpm/*.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
