@@ -601,6 +601,10 @@
         }
 
         /* Active Transfers Panel */
+        #transfersCard {
+            transition: opacity 0.25s ease;
+        }
+
         .transfers-list {
             list-style: none;
             display: flex;
@@ -1141,7 +1145,7 @@
         }
 
         @media (min-width: 1200px) {
-            .dashboard-grid.has-transfers {
+            .dashboard-grid {
                 grid-template-columns: 2fr 1.1fr;
             }
             .dashboard-main-col {

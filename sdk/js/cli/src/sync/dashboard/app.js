@@ -373,10 +373,8 @@
             // Active transfers section
             const transfersCard = document.getElementById('transfersCard');
             const transfersList = document.getElementById('transfersList');
-            const dashboardGrid = document.querySelector('.dashboard-grid');
             if (data.activeTransfers && data.activeTransfers.length > 0) {
                 transfersCard.style.display = 'block';
-                if (dashboardGrid) dashboardGrid.classList.add('has-transfers');
                 transfersList.innerHTML = data.activeTransfers.map(t => {
                     const name = t.filePath ? t.filePath.split('/').pop() : t.localPath?.split('/').pop() || 'file';
                     const isUpload = t.type === 'upload';
@@ -402,7 +400,6 @@
                 }).join('');
             } else {
                 transfersCard.style.display = 'none';
-                if (dashboardGrid) dashboardGrid.classList.remove('has-transfers');
             }
 
             // Update pause button state
