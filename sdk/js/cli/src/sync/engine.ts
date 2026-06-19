@@ -548,8 +548,21 @@ export class SyncEngine extends EventEmitter {
         }
       }
 
-      // 3. Process deletions first
-      for (const mapped of pendingDeletes) {
+      // 3. Process deletions first — only top-level nodes.
+      // Trashing a folder on the remote implicitly covers its children, so calling
+      // trashNodes individually for each child would cause them to appear as separate
+      // entries in the remote trash (matching webapp behaviour requires folder-only trash).
+      const deletedDirPaths = new Set(
+        pendingDeletes.filter((m) => m.is_dir === 1).map((m) => m.local_path),
+      );
+      const topLevelDeletes = pendingDeletes.filter((mapped) => {
+        const parts = mapped.local_path.split("/");
+        for (let i = 1; i < parts.length; i++) {
+          if (deletedDirPaths.has(parts.slice(0, i).join("/"))) return false;
+        }
+        return true;
+      });
+      for (const mapped of topLevelDeletes) {
         if (this.isPaused || !this.isStarted) break;
         await this.deleteRemoteNode(mapped.node_uid, mapped.local_path);
       }
@@ -1134,10 +1147,33 @@ export class SyncEngine extends EventEmitter {
       return; // Abort reconciliation to prevent trashing remote files
     }
 
+    // Collect the set of directory paths that are locally deleted (remote exists, mapping exists,
+    // local does not). Their descendants must not be individually trashed — trashing the parent
+    // folder on the remote already covers all children implicitly, matching webapp behaviour.
+    const locallyDeletedDirPaths = new Set<string>();
+    for (const relPath of allPaths) {
+      const local = localFiles.get(relPath);
+      const remote = remoteFiles.get(relPath);
+      const mapped = mappingsCache.get(relPath);
+      if (!local && remote && mapped && mapped.is_dir === 1) {
+        locallyDeletedDirPaths.add(relPath);
+      }
+    }
+    const hasDeletedAncestor = (relPath: string): boolean => {
+      const parts = relPath.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        if (locallyDeletedDirPaths.has(parts.slice(0, i).join("/"))) return true;
+      }
+      return false;
+    };
+
     const directoryPaths: string[] = [];
     const filePaths: string[] = [];
 
     for (const relPath of allPaths) {
+      // Skip descendants of locally-deleted directories — the parent trash covers them.
+      if (hasDeletedAncestor(relPath)) continue;
+
       const local = localFiles.get(relPath);
       const remote = remoteFiles.get(relPath);
       const mapped = mappingsCache.get(relPath);
@@ -1758,6 +1794,21 @@ export class SyncEngine extends EventEmitter {
 
               // Remove from pending and execute
               this.pendingLocalDeletes.delete(relativePath);
+
+              // If this is a directory, proactively cancel any pending child deletes.
+              // Trashing the folder on the remote implicitly covers its children — calling
+              // trashNodes for each child separately causes them to appear as individual
+              // entries in the remote trash, deviating from webapp behaviour.
+              if (isDir) {
+                const prefix = `${relativePath}/`;
+                for (const childPath of [...this.pendingLocalDeletes.keys()]) {
+                  if (childPath.startsWith(prefix)) {
+                    this.pendingLocalDeletes.delete(childPath);
+                    this.db.deleteMapping(childPath);
+                  }
+                }
+              }
+
               if (!this.activeReconciles.has(relativePath)) {
                 await this.deleteRemoteNode(pending.nodeUid, relativePath);
               }
