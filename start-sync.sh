@@ -95,11 +95,18 @@ start_daemon() {
     echo "  Dashboard   : http://localhost:${PORT}"
     echo "  Log file    : ${LOGFILE}"
 
-    NODE_BIN=$(command -v node || echo "node")
-
-    PROTON_MOUNT_POINT="$MOUNT_POINT" PROTON_SYNC_PORT="$PORT" PROTON_SYNC_MODE="$SYNC_MODE" \
-        setsid "$NODE_BIN" "$BINARY" --mount-point "$MOUNT_POINT" --port "$PORT" \
-        < /dev/null > "$LOGFILE" 2>&1 &
+    # proton-sync is a Bun standalone binary (run directly);
+    # proton-fuse is a Node.js bundle (needs `node`).
+    if [[ "$(basename "$BINARY")" == "proton-sync" ]]; then
+        PROTON_MOUNT_POINT="$MOUNT_POINT" PROTON_SYNC_PORT="$PORT" PROTON_SYNC_MODE="$SYNC_MODE" \
+            setsid "$BINARY" --mount-point "$MOUNT_POINT" --port "$PORT" \
+            < /dev/null > "$LOGFILE" 2>&1 &
+    else
+        NODE_BIN=$(command -v node || echo "node")
+        PROTON_MOUNT_POINT="$MOUNT_POINT" PROTON_SYNC_PORT="$PORT" PROTON_SYNC_MODE="$SYNC_MODE" \
+            setsid "$NODE_BIN" "$BINARY" --mount-point "$MOUNT_POINT" --port "$PORT" \
+            < /dev/null > "$LOGFILE" 2>&1 &
+    fi
 
     PID=$!
     sleep 1.5
