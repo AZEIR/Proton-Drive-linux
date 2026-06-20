@@ -160,7 +160,7 @@ This stops the service, removes the systemd unit, and removes the tray icon. You
 
 This is an unofficial, personal project. Use it at your own risk. Always keep important files backed up.
 
-I've tested this pretty hard — including accidentally nuking my entire Proton Drive folder and recovering from it. It's working fine for my daily use, but I can't guarantee it'll work perfectly for everyone.
+I've tested this pretty hard including accidentally nuking my entire Proton Drive folder. It's working fine for my daily use, but I can't guarantee it'll work perfectly for everyone.
 
 ---
 
