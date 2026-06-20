@@ -1,99 +1,169 @@
-# Proton Drive Linux Sync Client
+# Proton Drive Linux
 
-A fully featured, offline-first, two-way sync client daemon for Proton Drive on Linux, resembling the behavior of the official Windows client. 
+> An unofficial Proton Drive Linux sync client using offical SDK.
 
-<img width="2880" height="1525" alt="Screenshot_20260617_113416" src="https://github.com/user-attachments/assets/353b755f-cc6d-4371-88b1-63d9fc736daa" />
+<img width="2880" height="1525" alt="image" src="https://github.com/user-attachments/assets/aabc9eec-3e09-401f-8273-188566932d58" />
 
-It runs a background synchronization daemon that keeps a local directory in sync with your Proton Drive cloud, and exposes a beautiful web-based dashboard UI locally.
+This is a personal project. I'm not a professional developer — I built this because Proton doesn't have an official Linux client and I needed one that works like the Windows version does: install it, forget about it, files just stay in sync.
+
+---
+
+## What it does
+
+It runs a background daemon that keeps a local folder on your computer in sync with your Proton Drive cloud. Both directions — changes you make locally show up in the cloud, and changes you make in the web app or on another device show up locally.
+
+**The daemon starts on login automatically** (via systemd) and runs silently in the background. You don't have to think about it.
+
+---
+
+## Getting started
+
+### 1. Install [Bun](https://bun.sh) (required to build)
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+### 2. Run setup
+
+```bash
+./setup.sh
+```
+
+This builds the sync binary, installs it as a systemd service that auto-starts on login, installs the system tray icon, and asks you which local folder to sync to (default: `~/P-Drive`).
+
+### 3. Sign in
+
+Once setup finishes, your browser will open the dashboard at `http://localhost:8085`. If you are not yet signed in, the dashboard shows a login screen — click **Sign in with Proton** and it will open a Proton authentication page in your browser. Sign in there, come back, and syncing starts automatically.
+
+A **system tray icon** also appears in your taskbar. You can use it to open the dashboard, pause sync, or check status without opening a terminal.
+
+That's it. Your files sync in the background from now on.
+
+> **Already set up and want to rebuild after an update?**
+> ```bash
+> ./setup.sh --rebuild
+> ```
+
+---
 
 ## Features
 
-- **Offline Folder Workable**: Keeps a full copy of your cloud files locally so you can view, edit, and create files offline.
-- **Two-Way Autosync**: Incremental remote events listener and local file watcher (`chokidar`) ensure changes propagate both ways instantly.
-- **Double-Guard Loop Protection**: Utilizes a local SQLite database to map file revision UIDs, sizes, and mtimes, preventing infinite sync loops.
-- **Conflict Handling**: Safely resolves edit conflicts by creating conflict copies (`filename (Conflict <timestamp>).ext`) instead of overwriting edits.
-- **Web Dashboard**: An ultra-premium, modern dark-mode glassmorphism interface to monitor status, storage quota, activity logs, and configure settings.
-- **Systemd Integration**: Can be registered as a user service to autostart silently on Linux boot.
+- **Two-way sync** — local changes upload, remote changes download
+- **Real-time** — uses a file watcher + Proton's event stream, no polling
+- **Works offline** — keeps a full local copy; queued changes sync when you reconnect
+- **Conflict handling** — if the same file is edited on two devices simultaneously, the older version becomes a conflict copy (`file (Conflict 2026-06-20).txt`) instead of losing your work
+- **Bulk-delete protection** — if something looks like an accidental mass wipe (e.g. wrong folder deleted, empty sync folder), the daemon pauses and asks you to confirm before touching the cloud
+- **Web dashboard** — see sync status, active transfers, storage quota, activity log, pause/resume, and settings at `http://localhost:8085`
+- **System tray icon** — shows sync state and lets you open the dashboard without opening a terminal
+- **Ignore rules** — create a `.protonignore` file in your sync folder (same syntax as `.gitignore`) to exclude files/folders from syncing
+
+### Built-in ignores (always skipped, no configuration needed)
+
+| Pattern | What it is |
+|---|---|
+| `.DS_Store` | macOS metadata junk |
+| `Thumbs.db`, `desktop.ini` | Windows metadata junk |
+| `~*` | Office / LibreOffice lock files |
+| `*.swp`, `*.swo` | Vim swap files |
+| `*.tmp-*` | Proton internal temp files |
 
 ---
 
-> [!WARNING]
-> **File-On-Demand (FUSE) Mode is currently broken.** Please use the default **Full Sync Mode** (`PROTON_SYNC_MODE=full`) for synchronization.
+## Day-to-day commands
 
-## Getting Started
+All management goes through `./drive.sh`:
 
-### 1. Initial Authentication
-Authenticate your Proton account:
 ```bash
-./drive.sh login
-```
-*This will launch Proton Drive authentication in your browser to securely store session keys in your OS keyring.*
-
-### 2. Run the Sync Daemon
-Control the background synchronization service:
-- **Start the sync daemon**:
-  ```bash
-  ./drive.sh start
-  ```
-- **Check the daemon status**:
-  ```bash
-  ./drive.sh status
-  ```
-- **Stop the daemon**:
-  ```bash
-  ./drive.sh stop
-  ```
-
-### 3. Open the Dashboard UI
-Access the premium interface:
-👉 **[http://localhost:8085](http://localhost:8085)**
-
-You can also launch it directly from the CLI:
-```bash
-./drive.sh ui
+./drive.sh status          # Is the daemon running?
+./drive.sh logs            # Tail live sync logs
+./drive.sh stop            # Stop the daemon
+./drive.sh start           # Start it again
+./drive.sh restart         # Restart (e.g. after changing settings)
+./drive.sh ui              # Open the dashboard in your browser
+./drive.sh reset           # Wipe local sync database (forces a full re-sync on next start)
 ```
 
-From the UI, you can monitor quota usage, pause/resume sync, force a manual sync, and configure custom folder paths.
+---
+
+## Dashboard
+
+Open `http://localhost:8085` in any browser (or run `./drive.sh ui`).
+
+From the dashboard you can:
+- See what's currently uploading or downloading and the progress
+- Pause and resume sync
+- Force a full re-scan
+- View the recent activity log (what was uploaded, downloaded, renamed, deleted)
+- See your storage quota
+- Sign out / sign in with a different account
+- Change the local sync folder path
 
 ---
 
-## Autostart with Systemd
+## Custom ignore rules
 
-To run the client in the background automatically when you log into Linux:
+Create a file called `.protonignore` in your sync root folder. It works like `.gitignore`:
 
-1. Copy the service template into your user systemd directory:
-   ```bash
-   mkdir -p ~/.config/systemd/user
-   cp proton-sync.service ~/.config/systemd/user/proton-sync.service
-   ```
-2. Reload systemd:
-   ```bash
-   systemctl --user daemon-reload
-   ```
-3. Enable and start:
-   ```bash
-   systemctl --user enable proton-sync.service
-   systemctl --user start proton-sync.service
-   ```
+```
+# Ignore a specific folder
+node_modules/
+
+# Ignore all log files
+*.log
+
+# Ignore a specific file
+secrets.env
+
+# Un-ignore something that the defaults would block
+!.git/
+```
+
+The daemon picks up changes to `.protonignore` automatically — no restart needed.
 
 ---
 
-## Future Roadmap: Packaging into an AppImage / Native App
+## Uninstall
 
-To eliminate the need for opening a browser tab at `localhost:3000`, we plan to wrap the client into a single, native Linux desktop application (**AppImage** or **Flatpak**) using **Tauri** or **Electron**:
+```bash
+./uninstall.sh
+```
 
-### 1. Tauri Wrapper (Recommended)
-Tauri allows building tiny, exceptionally fast desktop apps by using the system's native Webview (WebKitGTK on Linux) for the UI, and Rust/Node for backend logic.
-- **Sidecar Execution**: The compiled `proton-sync` binary runs silently in the background as a Tauri sidecar.
-- **System Tray Icon**: Adds a system tray icon showing sync status (green dot for synced, animated indicator for syncing) with right-click actions (Pause, Resume, Settings, Open Folder).
-- **Native Window**: Spawns a dedicated frameless glassmorphic window to display the dashboard directly.
-- **AppImage Bundle**: Packages the sync binary, the webview frontend assets, and dependencies into a single, self-contained `ProtonSync.AppImage` executable.
+This stops the service, removes the systemd unit, and removes the tray icon. Your local sync folder and the files in it are left untouched.
 
-### 2. Electron / NeutralinoJS Alternative
-- Spawns a Chromium-based shell loading the local web interface directly in a desktop window frame, supporting native notifications on sync completions.
+---
+
+## Requirements
+
+- Linux (x86_64)
+- [Bun](https://bun.sh) — only needed for the initial build
+
+---
+
+## Roadmap
+
+- **File-On-Demand (FUSE) mode** — instead of downloading everything, files are listed locally but only downloaded when you open them. Planned, not yet working.
+- **AppImage** — a self-contained single file you can double-click to install with no terminal needed. Planned.
+
+---
+
+## Limitations & known issues
+
+- This is an unofficial client and is not affiliated with Proton AG in any way
+- Only tested on x86_64 Linux. ARM is untested
+- Very large files (multi-GB) may take a while — the upload streams the full file, same as the web app
+- FUSE / File-On-Demand mode is currently broken — use Full Sync (the default) for now
 
 ---
 
 ## Disclaimer
 
-This is an unofficial, community-led client project. It is not affiliated with, sponsored by, or endorsed by Proton AG. All trademarks and product names are the property of their respective owners.
+This is an unofficial, personal project. Use it at your own risk. Always keep important files backed up.
+
+I've tested this pretty hard — including accidentally nuking my entire Proton Drive folder and recovering from it. It's working fine for my daily use, but I can't guarantee it'll work perfectly for everyone.
+
+---
+
+## AI declaration
+
+This project was built with AI coding assistance from Claude and Gemini. As a non-developer, I couldn't have built this without them.
