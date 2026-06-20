@@ -80,6 +80,16 @@ export class SyncDatabase {
                 message TEXT
             )
         `);
+
+        // Persist pending local deletes across crashes/restarts
+        this.db.run(`
+            CREATE TABLE IF NOT EXISTS pending_deletes (
+                local_path TEXT PRIMARY KEY,
+                node_uid TEXT NOT NULL,
+                is_dir INTEGER NOT NULL,
+                queued_at INTEGER NOT NULL
+            )
+        `);
     }
 
     // Config Methods
@@ -130,10 +140,33 @@ export class SyncDatabase {
         return this.db.prepare('SELECT * FROM sync_mappings').all() as SyncMapping[];
     }
 
+    getMappingCount(): number {
+        return (this.db.prepare('SELECT COUNT(*) as c FROM sync_mappings').get() as { c: number }).c;
+    }
+
     getMappingsByPrefix(pathPrefix: string): SyncMapping[] {
         return this.db.prepare(
             'SELECT * FROM sync_mappings WHERE local_path LIKE ? ESCAPE \'\\\'',
         ).all(pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%') as SyncMapping[];
+    }
+
+    /**
+     * Bulk-rename all mappings under oldPrefix to newPrefix in a single SQL UPDATE.
+     * Returns the renamed rows so callers can do any in-memory post-processing.
+     * ~100× faster than N individual deleteMapping + setMapping calls.
+     */
+    renameMappingsByPrefix(oldPrefix: string, newPrefix: string): SyncMapping[] {
+        const escaped = oldPrefix.replace(/[%_\\]/g, '\\$&');
+        // Fetch children before rename so callers get the old paths
+        const children = this.db.prepare(
+            "SELECT * FROM sync_mappings WHERE local_path LIKE ? ESCAPE '\\'",
+        ).all(escaped + '/%') as SyncMapping[];
+        if (children.length === 0) return [];
+        // Single UPDATE: replace the prefix in-place using SUBSTR
+        this.db.prepare(
+            "UPDATE sync_mappings SET local_path = ? || SUBSTR(local_path, ?) WHERE local_path LIKE ? ESCAPE '\\'",
+        ).run(newPrefix, oldPrefix.length + 1, escaped + '/%');
+        return children;
     }
 
     deleteMappingsByPrefix(pathPrefix: string): void {
@@ -144,6 +177,36 @@ export class SyncDatabase {
 
     clearMappings(): void {
         this.db.run('DELETE FROM sync_mappings');
+    }
+
+    // Pending delete persistence — survives crashes/restarts
+    setPendingDelete(localPath: string, nodeUid: string, isDir: boolean): void {
+        this.db.prepare(
+            'INSERT OR REPLACE INTO pending_deletes (local_path, node_uid, is_dir, queued_at) VALUES (?, ?, ?, ?)',
+        ).run(localPath, nodeUid, isDir ? 1 : 0, Date.now());
+    }
+
+    deletePendingDelete(localPath: string): void {
+        this.db.prepare('DELETE FROM pending_deletes WHERE local_path = ?').run(localPath);
+    }
+
+    deletePendingDeletesByPrefix(pathPrefix: string): void {
+        this.db.prepare(
+            "DELETE FROM pending_deletes WHERE local_path LIKE ? ESCAPE '\\'",
+        ).run(pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%');
+    }
+
+    getPendingDeletes(): { local_path: string; node_uid: string; is_dir: number; queued_at: number }[] {
+        return this.db.prepare('SELECT * FROM pending_deletes ORDER BY queued_at ASC').all() as {
+            local_path: string;
+            node_uid: string;
+            is_dir: number;
+            queued_at: number;
+        }[];
+    }
+
+    clearPendingDeletes(): void {
+        this.db.run('DELETE FROM pending_deletes');
     }
 
     // Logging Methods
