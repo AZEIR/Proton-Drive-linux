@@ -46,7 +46,7 @@ export class SyncEngine extends EventEmitter {
   private isBulkDeletionConfirmed: boolean = false;
   private isOffline: boolean = false;
   private checkConnectionInterval: any = null;
-  private concurrencyLimit: number = 3;
+  private concurrencyLimit: number = 5;
   private activeReconciles: Set<string> = new Set();
   private offlineMonitorPromise: Promise<void> | null = null;
   private unsubscribeOffline: (() => void)[] = [];
@@ -59,6 +59,34 @@ export class SyncEngine extends EventEmitter {
     new Map();
   private activeUploads: Map<string, { abort: () => Promise<void> }> =
     new Map();
+  /**
+   * Node UIDs that this client recently trashed, mapped to their expiry timestamp.
+   * Used to suppress spurious remote events that fire after we call trashNodes —
+   * the SDK may return stale cached data where trashTime is still null for recently
+   * trashed nodes, causing handleRemoteEvent to re-download them.
+   * TTL is 15 s, which covers normal event propagation delays.
+   */
+  private recentlyTrashedNodeUids: Map<string, number> = new Map();
+  /**
+   * Node UIDs that this client recently uploaded (folder created or file uploaded),
+   * mapped to expiry timestamp. Used to suppress the SDK's echo of our own uploads —
+   * the remote event subscription fires a creation event for every node we create,
+   * which would otherwise trigger a no-op syncRemoteToLocal on the uploading client.
+   * TTL is 90 s (SDK can deliver delayed events 30+ seconds after upload).
+   */
+  private recentlyUploadedNodeUids: Map<string, number> = new Map();
+  /**
+   * Node UIDs that this client recently deleted (trashed), mapped to expiry timestamp.
+   * Used to prevent the Guard B deferred re-check from re-creating folders whose SDK
+   * cache still shows trashTime=null after we trashed them. TTL is 90 s.
+   */
+  private recentlyDeletedByUsNodeUids: Map<string, number> = new Map();
+  /**
+   * Relative paths this client recently deleted (trashed), mapped to expiry timestamp.
+   * Path-keyed complement to recentlyDeletedByUsNodeUids — immune to any UID encoding
+   * differences between createFolder / DB / event streams. TTL is 90 s.
+   */
+  private recentlyDeletedPaths: Map<string, number> = new Map();
   private pendingLocalDeletes: Map<
     string,
     { timestamp: number; isDir: boolean; nodeUid: string }
@@ -214,6 +242,20 @@ export class SyncEngine extends EventEmitter {
       `Sync engine started at ${this.localSyncRoot}`,
     );
 
+    // Restore any pending deletes that survived a crash/restart
+    for (const row of this.db.getPendingDeletes()) {
+      if (!this.pendingLocalDeletes.has(row.local_path)) {
+        this.pendingLocalDeletes.set(row.local_path, {
+          timestamp: row.queued_at,
+          isDir: row.is_dir === 1,
+          nodeUid: row.node_uid,
+        });
+        // Re-arm the suppress set so remote events don't re-download the file
+        // before the pending delete is executed.
+        this.recentlyTrashedNodeUids.set(row.node_uid, Date.now() + 15_000);
+      }
+    }
+
     try {
       // Get Proton Drive remote root folder
       const rootFolder = await this.sdk.getMyFilesRootFolder();
@@ -333,37 +375,7 @@ export class SyncEngine extends EventEmitter {
     this.db.log("system", "system", "completed", "Synchronization resumed");
 
     // Process all pending deletions that were paused
-    const pendingDeletes = Array.from(this.pendingLocalDeletes.entries());
-    const pendingDeletePaths = new Set(pendingDeletes.map(([p]) => p));
-    this.pendingLocalDeletes.clear();
-    for (const [relPath, pending] of pendingDeletes) {
-      try {
-        // Check if any ancestor is also in the list of pending deletes
-        let ancestorPending = false;
-        const parts = relPath.split("/");
-        let current = "";
-        for (let i = 0; i < parts.length - 1; i++) {
-          current = current ? `${current}/${parts[i]}` : parts[i];
-          if (pendingDeletePaths.has(current)) {
-            ancestorPending = true;
-            break;
-          }
-        }
-
-        if (ancestorPending) {
-          this.db.deleteMapping(relPath);
-        } else {
-          if (!this.activeReconciles.has(relPath)) {
-            await this.deleteRemoteNode(pending.nodeUid, relPath);
-          }
-        }
-      } catch (err) {
-        this.logger.error(
-          `Failed to execute confirmed deletion for ${relPath}:`,
-          err,
-        );
-      }
-    }
+    await this.drainPendingDeletes();
 
     await this.start();
     this.emit("statusChanged");
@@ -445,7 +457,7 @@ export class SyncEngine extends EventEmitter {
   // Performs full scan and reconciliation on startup
   async startupSync(): Promise<void> {
     await this.cleanupTempFiles(this.localSyncRoot);
-    const mappingsCount = this.db.getAllMappings().length;
+    const mappingsCount = this.db.getMappingCount();
     if (mappingsCount === 0) {
       this.logger.info(
         "Performing initial full repository scan and reconciliation.",
@@ -565,6 +577,37 @@ export class SyncEngine extends EventEmitter {
       for (const mapped of topLevelDeletes) {
         if (this.isPaused || !this.isStarted) break;
         await this.deleteRemoteNode(mapped.node_uid, mapped.local_path);
+      }
+
+      // After individual file deletions, check if any had orphan parent folders — i.e. a parent
+      // directory exists on remote but has no local presence and no DB mapping (so it was never
+      // included in topLevelDeletes). Those parent folders remain on remote as empty orphans.
+      // Schedule a forceSync to clean them up via the orphan-detection pass in reconcile().
+      let hasOrphanParents = false;
+      for (const mapped of topLevelDeletes) {
+        if (mapped.is_dir === 0) {
+          const parentRelPath = path.dirname(mapped.local_path);
+          if (
+            parentRelPath !== "." &&
+            !mappingsCache.has(parentRelPath) &&
+            !localFiles.has(parentRelPath)
+          ) {
+            hasOrphanParents = true;
+            break;
+          }
+        }
+      }
+      if (hasOrphanParents) {
+        this.logger.info(
+          "Orphan remote parent folders detected after fast sync deletions — scheduling forceSync to clean up.",
+        );
+        setTimeout(() => {
+          if (this.isStarted && !this.isPaused && !this.isScanning) {
+            this.forceSync().catch((e) =>
+              this.logger.error("Orphan-cleanup forceSync failed:", e),
+            );
+          }
+        }, 3000);
       }
 
       // 4. Process uploads (folders first, then files in parallel)
@@ -1189,6 +1232,16 @@ export class SyncEngine extends EventEmitter {
       }
     }
 
+    // Pre-compute which remote folder paths are non-empty (have at least one child in the scan).
+    // Used below to detect orphan empty remote folders that have no local presence and no mapping.
+    const remoteParentPaths = new Set<string>();
+    for (const relPath of remoteFiles.keys()) {
+      const parts = relPath.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        remoteParentPaths.add(parts.slice(0, i).join("/"));
+      }
+    }
+
     // 1. Process directories sequentially, sorted by depth (shallowest first)
     // This ensures parent directories exist before any files are processed/reconciled.
     directoryPaths.sort((a, b) => a.split("/").length - b.split("/").length);
@@ -1202,12 +1255,23 @@ export class SyncEngine extends EventEmitter {
         );
         return;
       }
-      await this.reconcilePath(
-        relPath,
-        localFiles.get(relPath),
-        remoteFiles.get(relPath),
-        mappingsCache.get(relPath),
-      );
+
+      const local = localFiles.get(relPath);
+      const remote = remoteFiles.get(relPath);
+      const mapped = mappingsCache.get(relPath);
+
+      // Detect orphan empty remote folders: exists on remote, not local, no DB mapping,
+      // and has no children in the remote scan (i.e. the folder is empty). These are
+      // artifacts of previous incomplete operations — trash them rather than re-downloading.
+      if (!local && remote && !mapped && remote.type === NodeType.Folder && !remoteParentPaths.has(relPath)) {
+        this.logger.warn(
+          `Trashing orphan empty remote folder ${relPath} — no local, no mapping, no children`,
+        );
+        await this.deleteRemoteNode(remote.uid, relPath);
+        continue;
+      }
+
+      await this.reconcilePath(relPath, local, remote, mapped);
     }
 
     // 2. Process file operations in parallel with a concurrency limit
@@ -1429,8 +1493,8 @@ export class SyncEngine extends EventEmitter {
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: {
-        stabilityThreshold: 1500,
-        pollInterval: 300,
+        stabilityThreshold: 800,
+        pollInterval: 200,
       },
     });
 
@@ -1589,7 +1653,9 @@ export class SyncEngine extends EventEmitter {
               const oldMapped = this.db.getMapping(oldPath);
               if (oldMapped) {
                 const isSameNameMove =
-                  oldName === newName && oldMapped.size === size;
+                  oldName === newName &&
+                  oldMapped.size === size &&
+                  (!addSha1 || !oldMapped.sha1 || oldMapped.sha1 === addSha1);
                 const isRenameOrHashMove =
                   addSha1 && oldMapped.sha1 === addSha1;
                 if (isSameNameMove || isRenameOrHashMove) {
@@ -1646,7 +1712,7 @@ export class SyncEngine extends EventEmitter {
             const oldMapped = this.db.getMapping(matchedOldPath);
             this.db.deleteMapping(matchedOldPath);
 
-            const folderMtime = stat ? stat.mtimeMs : Date.now();
+            const folderMtime = fileStat ? fileStat.mtimeMs : Date.now();
             this.db.setMapping({
               local_path: relativePath,
               node_uid: matchedNodeUid,
@@ -1662,20 +1728,18 @@ export class SyncEngine extends EventEmitter {
                 : (oldMapped?.remote_mtime ?? folderMtime),
             });
 
-            // C. If directory, recursively rename child mappings in DB
+            // C. If directory, recursively rename child mappings in DB.
+            // renameMappingsByPrefix() does this in a single SQL UPDATE instead
+            // of N×(DELETE+INSERT). It returns the old rows so we can cancel
+            // in-memory pending deletes and suppress watcher noise on new paths.
             if (isDir) {
-              const childMappings = this.db.getMappingsByPrefix(matchedOldPath);
-              for (const m of childMappings) {
+              const oldChildren = this.db.renameMappingsByPrefix(
+                matchedOldPath,
+                relativePath,
+              );
+              for (const m of oldChildren) {
                 const suffix = m.local_path.slice(matchedOldPath.length);
                 const newChildPath = `${relativePath}${suffix}`;
-
-                this.db.deleteMapping(m.local_path);
-                this.db.setMapping({
-                  ...m,
-                  local_path: newChildPath,
-                });
-
-                // Cancel any pending delete for child files
                 this.pendingLocalDeletes.delete(m.local_path);
                 this.ignorePathTemporarily(
                   this.resolveLocalPath(newChildPath),
@@ -1724,12 +1788,23 @@ export class SyncEngine extends EventEmitter {
             isDir,
             nodeUid: mapped.node_uid,
           });
+          // Persist immediately so the pending delete survives a crash.
+          this.db.setPendingDelete(relativePath, mapped.node_uid, isDir);
+          // Pre-populate suppress set so any remote event arriving in the 2.5s
+          // debounce window (before deleteRemoteNode is called) is not treated
+          // as a signal to re-download the file.
+          this.recentlyTrashedNodeUids.set(
+            mapped.node_uid,
+            Date.now() + 2500 + 15_000,
+          );
 
           setTimeout(async () => {
             const pending = this.pendingLocalDeletes.get(relativePath);
             if (pending) {
-              // If bulk deletion warning or manual pause is active, keep it in pendingLocalDeletes
-              if (this.isPaused || this.bulkDeletionWarning) {
+              // Hold if paused, bulk-deletion warning active, or currently offline.
+              // The pending entry stays in memory + DB; it will be drained on
+              // resume() or handleOnlineEvent().
+              if (this.isPaused || this.bulkDeletionWarning || this.isOffline) {
                 return;
               }
 
@@ -1747,6 +1822,7 @@ export class SyncEngine extends EventEmitter {
 
               if (ancestorPending) {
                 this.pendingLocalDeletes.delete(relativePath);
+                this.db.deletePendingDelete(relativePath);
                 this.db.deleteMapping(relativePath);
                 return;
               }
@@ -1754,14 +1830,17 @@ export class SyncEngine extends EventEmitter {
               // Safeguard: Check if this deletion triggers bulk deletion warning
               const localFilesCount = this.cachedLocalFileCount;
               const mappedCount = this.cachedMappingCount;
-              const isEmptyWipe = localFilesCount <= 1 && mappedCount > 5;
+              const isEmptyWipe = localFilesCount === 0 && mappedCount > 5;
 
               this.recentDeletions.push({
                 timestamp: Date.now(),
                 path: relativePath,
                 nodeUid: pending.nodeUid,
               });
-              const cutoff = Date.now() - 15000;
+              // Use a 60-second window so that slow bulk deletes (e.g. 2/second
+              // over 30 seconds) are still caught — the original 15s window was
+              // too narrow and could be bypassed by spacing deletions out.
+              const cutoff = Date.now() - 60000;
               while (
                 this.recentDeletions.length > 0 &&
                 this.recentDeletions[0].timestamp < cutoff
@@ -1794,6 +1873,7 @@ export class SyncEngine extends EventEmitter {
 
               // Remove from pending and execute
               this.pendingLocalDeletes.delete(relativePath);
+              this.db.deletePendingDelete(relativePath);
 
               // If this is a directory, proactively cancel any pending child deletes.
               // Trashing the folder on the remote implicitly covers its children — calling
@@ -1804,9 +1884,11 @@ export class SyncEngine extends EventEmitter {
                 for (const childPath of [...this.pendingLocalDeletes.keys()]) {
                   if (childPath.startsWith(prefix)) {
                     this.pendingLocalDeletes.delete(childPath);
+                    this.db.deletePendingDelete(childPath);
                     this.db.deleteMapping(childPath);
                   }
                 }
+                this.db.deletePendingDeletesByPrefix(relativePath);
               }
 
               if (!this.activeReconciles.has(relativePath)) {
@@ -1918,6 +2000,126 @@ export class SyncEngine extends EventEmitter {
       return;
     }
 
+    // Guard A — hierarchy trashTime: if any ancestor node already has trashTime
+    // set in the returned hierarchy, treat this as a trash event for the child.
+    // Handles the case where the SDK does return up-to-date state.
+    if (hierarchy.some((n) => (n as any).trashTime)) {
+      const mapped = this.db.getMappingByNodeUid(nodeUid);
+      if (mapped) {
+        this.logger.info(
+          `Remote ancestor trashed, deleting local path: ${mapped.local_path}`,
+        );
+        await this.deleteLocalFile(mapped.local_path);
+      }
+      return;
+    }
+
+    // Guard B — recently trashed by us: the SDK may return stale cached data
+    // where trashTime is still null immediately after we call trashNodes.
+    // If this node or any ancestor was trashed by this client in the last 15 s,
+    // suppress the event. Schedule a deferred re-check so that a genuine webapp
+    // restore that happens within the TTL window is still caught.
+    {
+      const now = Date.now();
+      // Purge expired entries opportunistically
+      for (const [uid, expiry] of this.recentlyTrashedNodeUids) {
+        if (now > expiry) this.recentlyTrashedNodeUids.delete(uid);
+      }
+      const suppressedAncestor = hierarchy.find((n) => {
+        const expiry = this.recentlyTrashedNodeUids.get(n.uid);
+        return expiry !== undefined && now < expiry;
+      });
+      if (suppressedAncestor) {
+        this.logger.debug(
+          `Suppressing remote event for node ${nodeUid} — inside a recently trashed subtree`,
+        );
+        // Schedule a re-check once the TTL expires. If the user restored the item
+        // from the webapp within the TTL window, the deferred check will catch it.
+        const ttlRemaining = this.recentlyTrashedNodeUids.get(suppressedAncestor.uid)! - now;
+        const checkDelay = ttlRemaining + 500;
+        setTimeout(async () => {
+          if (!this.isStarted || this.isPaused) return;
+          // If we deleted this node ourselves, the SDK cache may still show
+          // trashTime=null for many seconds — skip the re-check entirely to
+          // prevent re-creating a folder that we just trashed.
+          const deletedByUsExpiry = this.recentlyDeletedByUsNodeUids.get(nodeUid);
+          if (deletedByUsExpiry !== undefined && Date.now() < deletedByUsExpiry) {
+            this.logger.debug(
+              `Deferred restore check skipped for node ${nodeUid} — recently deleted by this client`,
+            );
+            return;
+          }
+          try {
+            const freshNode = await this.sdk.getNode(nodeUid);
+            if (freshNode.trashTime) return; // still trashed — nothing to do
+            const freshHierarchy = await this.sdk.getNodeHierarchy(nodeUid);
+            if (
+              freshHierarchy.length === 0 ||
+              freshHierarchy[0].uid !== this.remoteRootUid
+            )
+              return;
+            if (freshHierarchy.some((n: any) => n.trashTime)) return;
+            const relPath = freshHierarchy
+              .slice(1)
+              .map((n: any) => (n.name.ok ? n.name.value : ""))
+              .join("/");
+            if (!relPath) return;
+            this.logger.info(
+              `Deferred restore check: node ${nodeUid} was restored — syncing ${relPath}`,
+            );
+            await this.syncRemoteToLocal(relPath, freshNode);
+          } catch (err: any) {
+            this.logger.debug(
+              `Deferred restore check failed for ${nodeUid}: ${err?.message ?? err}`,
+            );
+          }
+        }, checkDelay);
+        return;
+      }
+    }
+
+    // Guard C — recently uploaded by us: suppress the SDK's echo of our own creations.
+    // Every folder create / file upload triggers a remote NodeCreated event on the same
+    // subscription, which would otherwise bounce back as a spurious syncRemoteToLocal call.
+    {
+      const now = Date.now();
+      for (const [uid, expiry] of this.recentlyUploadedNodeUids) {
+        if (now > expiry) this.recentlyUploadedNodeUids.delete(uid);
+      }
+      const uploadExpiry = this.recentlyUploadedNodeUids.get(nodeUid);
+      if (uploadExpiry !== undefined && now < uploadExpiry) {
+        this.recentlyUploadedNodeUids.delete(nodeUid);
+        this.logger.debug(
+          `Suppressing remote event for node ${nodeUid} — recently uploaded by this client`,
+        );
+        return;
+      }
+    }
+
+    // Guard D — recently deleted by us (long-window): recentlyTrashedNodeUids has a
+    // 15s TTL and recentlyUploadedNodeUids has a 30s TTL, but the SDK can deliver
+    // delayed remote events for trashed nodes 30+ seconds after the trash completes.
+    // recentlyDeletedByUsNodeUids (90s TTL, set in deleteRemoteNode) closes that gap.
+    {
+      const now = Date.now();
+      for (const [uid, expiry] of this.recentlyDeletedByUsNodeUids) {
+        if (now > expiry) this.recentlyDeletedByUsNodeUids.delete(uid);
+      }
+      for (const [p, expiry] of this.recentlyDeletedPaths) {
+        if (now > expiry) this.recentlyDeletedPaths.delete(p);
+      }
+      const deletedAncestor = hierarchy.find((n) => {
+        const expiry = this.recentlyDeletedByUsNodeUids.get(n.uid);
+        return expiry !== undefined && now < expiry;
+      });
+      if (deletedAncestor) {
+        this.logger.debug(
+          `Suppressing remote event for node ${nodeUid} — recently deleted by this client (Guard D)`,
+        );
+        return;
+      }
+    }
+
     // Build relative path
     const relativePath = hierarchy
       .slice(1)
@@ -1968,7 +2170,9 @@ export class SyncEngine extends EventEmitter {
 
     try {
       if (isDir) {
+        let createdNodeUid = "";
         await this.runWithRetry(async () => {
+          createdNodeUid = ""; // reset before each attempt so stale UID never leaks
           const fileStat = await stat(localPath);
 
           // Ensure parent exists remotely and get its UID
@@ -1993,6 +2197,10 @@ export class SyncEngine extends EventEmitter {
             }
           }
 
+          createdNodeUid = nodeUid;
+          // Suppress the remote creation event that the SDK will fire for this folder
+          this.recentlyUploadedNodeUids.set(nodeUid, Date.now() + 90_000);
+
           this.db.setMapping({
             local_path: relativePath,
             node_uid: nodeUid,
@@ -2011,6 +2219,18 @@ export class SyncEngine extends EventEmitter {
             "Local folder mapped to remote",
           );
         });
+
+        // Verify the folder still exists locally — if the user renamed it while
+        // the API call was in flight, the unlinkDir fired before the mapping
+        // existed and was silently dropped.  Trash the remote node now so it
+        // does not re-download.
+        if (createdNodeUid && !existsSync(localPath)) {
+          this.logger.warn(
+            `Folder ${relativePath} was renamed/deleted during upload. Trashing remote node.`,
+          );
+          await this.deleteRemoteNode(createdNodeUid, relativePath);
+          return;
+        }
       } else {
         // It is a file upload
         const fileStat = await stat(localPath);
@@ -2051,11 +2271,16 @@ export class SyncEngine extends EventEmitter {
         });
         this.emit("statusChanged");
 
+        let lastProgressEmit = 0;
         const progressCallback = (uploadedBytes: number) => {
           const transfer = this.activeTransfers.get(relativePath);
           if (transfer) {
             transfer.transferred = Math.min(uploadedBytes, size);
-            this.emit("statusChanged");
+            const now = Date.now();
+            if (now - lastProgressEmit >= 200) {
+              this.emit("statusChanged");
+              lastProgressEmit = now;
+            }
           }
         };
 
@@ -2139,6 +2364,9 @@ export class SyncEngine extends EventEmitter {
           },
         );
 
+        // Suppress the remote creation event that the SDK will fire for this file
+        this.recentlyUploadedNodeUids.set(nodeUid, Date.now() + 90_000);
+
         // Verify if it was deleted locally during the upload
         if (!existsSync(localPath)) {
           this.logger.warn(
@@ -2168,6 +2396,16 @@ export class SyncEngine extends EventEmitter {
         );
       }
     } catch (err: any) {
+      // File/folder was renamed or deleted between the existsSync guard and the
+      // actual read (chokidar fires add events with the OLD path after awaitWriteFinish
+      // when the parent folder was renamed during the stability window).  Treat it
+      // as a harmless skip rather than a user-visible error.
+      if (err.code === "ENOENT" || err.code === "ENOTDIR") {
+        this.logger.info(
+          `Upload skipped for ${relativePath} — file no longer exists (stale watcher path)`,
+        );
+        return;
+      }
       this.logger.error(`Upload failed for ${relativePath}:`, err);
       this.db.log(
         relativePath,
@@ -2188,6 +2426,28 @@ export class SyncEngine extends EventEmitter {
     relativePath: string,
     node: NodeEntity,
   ): Promise<void> {
+    // Guard: this client recently deleted this node. The SDK cache can return
+    // stale trashTime=null for up to ~90s after a trash call, which causes
+    // handleRemoteEvent, reconcilePath, and the Guard-B deferred re-check to
+    // call this function for nodes we ourselves just deleted. Bail out here so
+    // no code path can re-create a recently-deleted item.
+    // Two independent checks: UID-based and path-based (path covers any UID
+    // encoding difference between createFolder / DB / the SDK event stream).
+    {
+      const now = Date.now();
+      const deletedExpiryByUid = this.recentlyDeletedByUsNodeUids.get(node.uid);
+      const deletedExpiryByPath = this.recentlyDeletedPaths.get(relativePath);
+      if (
+        (deletedExpiryByUid !== undefined && now < deletedExpiryByUid) ||
+        (deletedExpiryByPath !== undefined && now < deletedExpiryByPath)
+      ) {
+        this.logger.info(
+          `syncRemoteToLocal: skipping recently-deleted node ${relativePath} (uid ${node.uid})`,
+        );
+        return;
+      }
+    }
+
     const localPath = this.resolveLocalPath(relativePath);
 
     // Pre-download check: Detect remote rename/move of folders and files
@@ -2231,21 +2491,10 @@ export class SyncEngine extends EventEmitter {
         local_path: relativePath,
       });
 
-      // If it is a directory, update child mappings in DB
+      // If it is a directory, update child mappings in DB using a targeted
+      // prefix query instead of a full table scan.
       if (mappedByUid.is_dir === 1) {
-        const allMappings = this.db.getAllMappings();
-        for (const m of allMappings) {
-          if (m.local_path.startsWith(`${oldRelPath}/`)) {
-            const suffix = m.local_path.slice(oldRelPath.length);
-            const newChildPath = `${relativePath}${suffix}`;
-
-            this.db.deleteMapping(m.local_path);
-            this.db.setMapping({
-              ...m,
-              local_path: newChildPath,
-            });
-          }
-        }
+        this.db.renameMappingsByPrefix(oldRelPath, relativePath);
       }
     }
 
@@ -2278,6 +2527,15 @@ export class SyncEngine extends EventEmitter {
 
     try {
       if (node.type === NodeType.Folder) {
+        // If this path is pending local deletion (user deleted/renamed it before the
+        // remote event arrived), skip re-creating it — the pending delete will handle it.
+        if (!existsSync(localPath) && this.pendingLocalDeletes.has(relativePath)) {
+          this.logger.debug(
+            `Skipping remote folder creation for ${relativePath} — pending local delete`,
+          );
+          return;
+        }
+
         await this.runWithRetry(async () => {
           // Ensure directory exists locally
           this.ignorePathTemporarily(localPath, 3000);
@@ -2356,11 +2614,16 @@ export class SyncEngine extends EventEmitter {
         });
         this.emit("statusChanged");
 
+        let lastProgressEmit = 0;
         const progressCallback = (downloadedBytes: number) => {
           const transfer = this.activeTransfers.get(relativePath);
           if (transfer) {
             transfer.transferred = downloadedBytes;
-            this.emit("statusChanged");
+            const now = Date.now();
+            if (now - lastProgressEmit >= 200) {
+              this.emit("statusChanged");
+              lastProgressEmit = now;
+            }
           }
         };
 
@@ -2381,7 +2644,6 @@ export class SyncEngine extends EventEmitter {
           await writableStream.abort();
           throw downloadErr;
         } finally {
-          this.activeDownloads.delete(relativePath);
           this.ignoredLocalChanges.delete(tmpPath);
         }
 
@@ -2465,9 +2727,10 @@ export class SyncEngine extends EventEmitter {
       `Conflict detected. Renaming local to: ${path.basename(conflictRelPath)}`,
     );
 
-    // Rename local file to conflict path
+    // Rename local file to conflict path (ensure parent exists in case it was concurrently deleted)
     this.ignoredLocalChanges.add(localPath);
     this.ignoredLocalChanges.add(conflictAbsPath);
+    mkdirSync(path.dirname(conflictAbsPath), { recursive: true });
     await Bun.write(conflictAbsPath, Bun.file(localPath));
     await unlink(localPath);
     this.ignorePathTemporarily(localPath, 2500);
@@ -2504,6 +2767,19 @@ export class SyncEngine extends EventEmitter {
               const doubleCheckMapped = this.db.getMapping(prefix);
               if (doubleCheckMapped) {
                 return doubleCheckMapped.node_uid;
+              }
+
+              // If this folder was recently deleted by us, don't re-create it —
+              // that would produce a ghost folder on the remote (the old name
+              // appearing again after a paste+rename).
+              const deletedExpiry = this.recentlyDeletedPaths.get(prefix);
+              if (deletedExpiry !== undefined && Date.now() < deletedExpiry) {
+                throw Object.assign(
+                  new Error(
+                    `Parent folder "${prefix}" was recently deleted by this client — aborting upload to prevent ghost folder`,
+                  ),
+                  { code: "ENOENT" },
+                );
               }
 
               // Check if directory already exists remotely but isn't mapped yet (batch lookups)
@@ -2603,17 +2879,45 @@ export class SyncEngine extends EventEmitter {
       "syncing",
       "Deleting file from cloud",
     );
+    // Arm the suppress set BEFORE the API call so that any SDK remote event
+    // fired during trashNodes (while its cache still shows trashTime=null) is
+    // immediately suppressed — avoids the race where handleRemoteEvent re-creates
+    // the folder before the trashNodes promise resolves.
+    this.recentlyTrashedNodeUids.set(nodeUid, Date.now() + 15_000);
     try {
       await this.runWithRetry(async () => {
         for await (const result of this.sdk.trashNodes([nodeUid])) {
           if (!result.ok) throw result.error;
         }
       });
+
       this.db.deleteMapping(relativePath);
+      this.db.deletePendingDelete(relativePath);
+      this.pendingLocalDeletes.delete(relativePath);
 
       // If it is a directory, recursively delete child mappings in the database
+      // and abort any in-flight uploads for children so they don't re-create
+      // the parent folder via ensureRemoteParentFolder.
       if (isDir) {
         this.db.deleteMappingsByPrefix(relativePath);
+        this.db.deletePendingDeletesByPrefix(relativePath);
+        const prefix = `${relativePath}/`;
+        for (const childPath of this.pendingLocalDeletes.keys()) {
+          if (childPath.startsWith(prefix)) this.pendingLocalDeletes.delete(childPath);
+        }
+        for (const [uploadPath, upload] of this.activeUploads.entries()) {
+          if (uploadPath.startsWith(prefix)) {
+            this.logger.debug(
+              `Aborting in-flight upload for ${uploadPath} — parent directory ${relativePath} was deleted`,
+            );
+            upload.abort().catch(() => {});
+            this.activeUploads.delete(uploadPath);
+            this.activeTransfers.delete(uploadPath);
+          }
+        }
+        if (this.activeUploads.size === 0 && this.activeTransfers.size === 0) {
+          this.emit("statusChanged");
+        }
       }
 
       this.db.log(
@@ -2622,6 +2926,11 @@ export class SyncEngine extends EventEmitter {
         "completed",
         "Cloud file moved to trash",
       );
+      // Track this deletion so the Guard B deferred re-check doesn't re-create
+      // the folder when the SDK cache still shows trashTime=null.
+      const deletionExpiry = Date.now() + 90_000;
+      this.recentlyDeletedByUsNodeUids.set(nodeUid, deletionExpiry);
+      this.recentlyDeletedPaths.set(relativePath, deletionExpiry);
     } catch (err: any) {
       this.logger.error(`Failed to delete remote node ${nodeUid}:`, err);
       this.db.log(
@@ -2681,10 +2990,29 @@ export class SyncEngine extends EventEmitter {
     this.bulkDeletionWarning = false;
     this.recentDeletions = [];
 
-    // Process all pending deletions that were paused
+    await this.drainPendingDeletes();
+    await this.resume();
+  }
+
+  async restoreBulkDeletions(): Promise<void> {
+    this.logger.info(
+      "User rejected bulk deletions. Restoring local files from remote cloud.",
+    );
+    this.bulkDeletionWarning = false;
+    this.recentDeletions = [];
+    this.db.clearMappings();
+    await this.resume();
+  }
+
+  /** Drain all in-memory pending local deletes, executing or discarding each one. */
+  private async drainPendingDeletes(): Promise<void> {
     const pendingDeletes = Array.from(this.pendingLocalDeletes.entries());
     const pendingDeletePaths = new Set(pendingDeletes.map(([p]) => p));
     this.pendingLocalDeletes.clear();
+    // Do NOT call db.clearPendingDeletes() here — deleteRemoteNode handles
+    // per-entry cleanup via db.deletePendingDelete(). Clearing upfront would
+    // lose entries that fail to delete (they'd never be retried on restart).
+
     for (const [relPath, pending] of pendingDeletes) {
       try {
         // Check if any ancestor is also in the list of pending deletes
@@ -2700,7 +3028,10 @@ export class SyncEngine extends EventEmitter {
         }
 
         if (ancestorPending) {
+          // Ancestor's deleteRemoteNode will trash this subtree remotely;
+          // just drop the orphaned DB entries.
           this.db.deleteMapping(relPath);
+          this.db.deletePendingDelete(relPath);
         } else {
           if (!this.activeReconciles.has(relPath)) {
             await this.deleteRemoteNode(pending.nodeUid, relPath);
@@ -2708,23 +3039,12 @@ export class SyncEngine extends EventEmitter {
         }
       } catch (err) {
         this.logger.error(
-          `Failed to execute confirmed deletion for ${relPath}:`,
+          `Failed to execute pending deletion for ${relPath}:`,
           err,
         );
+        // Entry remains in db.pending_deletes and will be retried on next restart.
       }
     }
-
-    await this.resume();
-  }
-
-  async restoreBulkDeletions(): Promise<void> {
-    this.logger.info(
-      "User rejected bulk deletions. Restoring local files from remote cloud.",
-    );
-    this.bulkDeletionWarning = false;
-    this.recentDeletions = [];
-    this.db.clearMappings();
-    await this.resume();
   }
 
   private async runWithRetry<T>(
@@ -2737,6 +3057,12 @@ export class SyncEngine extends EventEmitter {
       try {
         return await fn();
       } catch (error: any) {
+        // Never retry not-found errors — these are intentional (e.g. parent
+        // folder deleted while an upload was in flight).
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") {
+          throw error;
+        }
+
         const isNetworkError = this.isNetworkError(error);
         this.logger.warn(
           `Operation failed (attempt ${i + 1}/${retries}). Error: ${error.message || error}. NetworkError=${isNetworkError}`,
@@ -2821,6 +3147,13 @@ export class SyncEngine extends EventEmitter {
 
     this.isOffline = false;
     this.emit("statusChanged");
+
+    // Drain any pending deletes that were held while offline
+    if (this.pendingLocalDeletes.size > 0 && !this.isPaused && !this.bulkDeletionWarning) {
+      this.drainPendingDeletes().catch((err) => {
+        this.logger.error("Failed to drain pending deletes after reconnect:", err);
+      });
+    }
   }
 
   private ignorePathTemporarily(absolutePath: string, durationMs = 2500) {

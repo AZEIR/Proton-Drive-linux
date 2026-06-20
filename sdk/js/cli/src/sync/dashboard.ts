@@ -311,8 +311,10 @@ export function startDashboard(
                                     const localSyncRoot = engine.getLocalSyncRoot();
                                     payload = JSON.stringify({
                                         status,
+                                        mode: 'full',
                                         activeTransfers: transfers,
                                         bulkDeletionCount: bulkCount,
+                                        isPaused: status === 'paused',
                                         isAuthenticating,
                                         localSyncRoot,
                                         email: cachedEmail
