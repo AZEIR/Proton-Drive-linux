@@ -2232,19 +2232,18 @@ export class SyncEngine extends EventEmitter {
           return;
         }
       } else {
-        // It is a file upload
-        const fileStat = await stat(localPath);
-        const size = fileStat.size;
-        const mtime = fileStat.mtimeMs;
-        const sha1 = await getSha1(localPath);
+        // It is a file upload.
+        // size/mtime/sha1 are re-snapshotted on every upload attempt (see the
+        // retry loop below), so they are `let` — the values captured here are
+        // only used for the duplicate-skip pre-check and the initial transfer
+        // entry; the loop overwrites them with the values that actually match
+        // the bytes streamed in the successful attempt.
+        let fileStat = await stat(localPath);
+        let size = fileStat.size;
+        let mtime = fileStat.mtimeMs;
+        let sha1 = await getSha1(localPath);
 
         const file = Bun.file(localPath);
-        const metadata = {
-          mediaType: file.type || "application/octet-stream",
-          expectedSize: size,
-          expectedSha1: sha1,
-          modificationTime: new Date(mtime),
-        };
 
         const mapped = this.db.getMapping(relativePath);
         if (mapped && size === mapped.size && sha1 === mapped.sha1) {
@@ -2300,6 +2299,43 @@ export class SyncEngine extends EventEmitter {
             if (this.isPaused || !this.isStarted) {
               throw new Error("Sync paused or stopped");
             }
+
+            // Re-snapshot the file on every attempt so expectedSize / expectedSha1
+            // always describe the exact bytes we are about to stream. Editors like
+            // Obsidian re-save files rapidly; without this, a retry would stream the
+            // freshly-saved bytes while still claiming the original size, and the
+            // SDK's integrity check would fail permanently with
+            // "Some file bytes failed to upload".
+            fileStat = await stat(localPath);
+            size = fileStat.size;
+            mtime = fileStat.mtimeMs;
+            sha1 = await getSha1(localPath);
+
+            // Guard against a write that lands between the stat above and the
+            // hash completing: if the file changed while we were hashing, the
+            // stream would not match the metadata we just built. Re-stat and
+            // bail out so this attempt retries with a fresh, consistent snapshot.
+            const postHashStat = await stat(localPath);
+            if (
+              postHashStat.size !== size ||
+              postHashStat.mtimeMs !== mtime
+            ) {
+              throw new Error(
+                `File ${relativePath} changed during hashing — retrying with fresh snapshot`,
+              );
+            }
+
+            const metadata = {
+              mediaType: file.type || "application/octet-stream",
+              expectedSize: size,
+              expectedSha1: sha1,
+              modificationTime: new Date(mtime),
+            };
+
+            // Keep the dashboard transfer size in sync with the current snapshot.
+            const transfer = this.activeTransfers.get(relativePath);
+            if (transfer) transfer.size = size;
+
             // Create a fresh stream on every attempt — a ReadableStream can
             // only be consumed once, so reusing it across retries causes a
             // "ReadableStream is locked" error.

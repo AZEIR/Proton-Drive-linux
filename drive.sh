@@ -55,11 +55,22 @@ status)
     "$SYNC_SCRIPT" status
     ;;
 logs)
-    LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-fuse-daemon.log"
-    # Fall back to legacy log
-    [ ! -f "$LOGFILE" ] && LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-sync-daemon.log"
-    echo "Tailing logs (Ctrl+C to exit)..."
-    tail -f "$LOGFILE"
+    # If running under systemd, stream from journald
+    if systemctl --user is-active --quiet proton-sync.service 2>/dev/null || \
+       systemctl --user is-failed --quiet proton-sync.service 2>/dev/null; then
+        echo "Streaming logs from systemd (Ctrl+C to exit)..."
+        journalctl --user -u proton-sync.service -f --no-hostname -o short-iso
+    else
+        LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-fuse-daemon.log"
+        [ ! -f "$LOGFILE" ] && LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-sync-daemon.log"
+        if [ ! -f "$LOGFILE" ]; then
+            echo "No log file found and service is not running under systemd."
+            echo "Start with: ./drive.sh start  or  systemctl --user start proton-sync.service"
+            exit 1
+        fi
+        echo "Tailing logs (Ctrl+C to exit)..."
+        tail -f "$LOGFILE"
+    fi
     ;;
 ui)
     PORT="${PROTON_SYNC_PORT:-8085}"
