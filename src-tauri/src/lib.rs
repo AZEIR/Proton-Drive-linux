@@ -43,17 +43,10 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
     let sync_mode = std::env::var("PROTON_SYNC_MODE").unwrap_or_else(|_| "full".to_string());
     let binary_name = if sync_mode == "full" { "proton-sync" } else { "proton-fuse" };
 
-    // Check local developer path first
-    let dev_path = format!("/home/azeir/Code/drive-project/sdk/js/cli/release/{}", binary_name);
-    let bin_path = if std::fs::metadata(&dev_path).is_ok() {
-        dev_path
-    } else {
-        // Packed application resource path fallback
-        app.path()
-            .resource_dir()
-            .map(|p| p.join(binary_name).to_string_lossy().into_owned())
-            .map_err(|e| e.to_string())?
-    };
+    let bin_path = app.path()
+        .resource_dir()
+        .map(|p| p.join(binary_name).to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())?;
 
     println!("[Tauri] Spawning sync daemon at: {}", bin_path);
 
@@ -65,6 +58,17 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
         "[Tauri] Daemon Environment: PORT={}, MODE={}, MOUNT={}",
         sync_port, sync_mode, mount_point
     );
+
+    // Ensure the binary is executable (AppImage bundling can strip the execute bit)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&bin_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            let _ = std::fs::set_permissions(&bin_path, perms);
+        }
+    }
 
     // Run daemon as a child process
     let mut cmd = if sync_mode == "full" {
@@ -98,13 +102,14 @@ fn start_daemon(app: &AppHandle) -> Result<Child, String> {
 pub fn run() {
     #[cfg(target_os = "linux")]
     {
-        // Fix blank white screen and EGL display crashes on Linux/Wayland
+        // Safety net for older/headless GPU stacks: skip the DMABuf renderer's
+        // EGL path. Harmless on modern Mesa, lets the compositor fall back cleanly.
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-        // Disable WebKit sandbox to prevent Bubblewrap crashes inside AppImages on distros like Fedora
-        if std::env::var("WEBKIT_FORCE_SANDBOX").is_err() {
-            std::env::set_var("WEBKIT_FORCE_SANDBOX", "0");
+        // Disable WebKit sandbox — WEBKIT_FORCE_SANDBOX was removed in newer WebKit.
+        if std::env::var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS").is_err() {
+            std::env::set_var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
         }
     }
 

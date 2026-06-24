@@ -2,13 +2,14 @@ name: Continuous Integration
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build-tauri:
-    runs-on: ubuntu-22.04  # Standard stable runner that compiles with maximum system compatibility
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -23,10 +24,22 @@ jobs:
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Install Linux System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2 \
+            rpm
 
       - name: Install Root Dependencies
         run: bun install
@@ -39,25 +52,16 @@ jobs:
         working-directory: ./sdk/js/sdk
         run: bun install
 
-      - name: Print CLI package.json
-        run: |
-          cat sdk/js/cli/package.json
-
       - name: Build Sync and FUSE Daemons
         run: |
-          echo "=== Building FUSE Daemon ==="
           bun run compile:fuse
-          echo "=== Building Sync Daemon ==="
           bun run compile:sync
 
-      - name: Diagnostic - Find Daemons
+      - name: Verify Daemon Binaries
         run: |
-          echo "=== Finding compiled daemons ==="
-          find . -name "proton-fuse" -o -name "proton-sync"
-          echo "=== Root contents ==="
-          ls -la
-          echo "=== CLI release contents ==="
-          ls -la sdk/js/cli/release || echo "sdk/js/cli/release not found"
+          ls -lh sdk/js/cli/release/proton-fuse sdk/js/cli/release/proton-sync
+          test -f sdk/js/cli/release/proton-sync || (echo "ERROR: proton-sync missing" && exit 1)
+          test -f sdk/js/cli/release/proton-fuse || (echo "ERROR: proton-fuse missing" && exit 1)
 
       - name: Build Desktop Application
         env:
@@ -65,13 +69,21 @@ jobs:
           NO_STRIP: 1
         run: bun run tauri build
 
-      - name: Upload Desktop Packages
+      - name: Upload AppImage Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proton-drive-packages
-          path: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
+          name: ProtonDrive-linux-x86_64.AppImage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload RPM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProtonDrive-linux-x86_64.rpm
+          path: src-tauri/target/release/bundle/rpm/*.rpm
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Create or Update GitHub Release
         if: github.ref == 'refs/heads/main'
@@ -79,12 +91,16 @@ jobs:
         with:
           tag_name: latest
           name: "Latest Development Build"
-          body: "This pre-release contains the latest automatically compiled desktop client binaries from the main branch."
+          body: |
+            Latest automatically compiled build from the main branch.
+
+            - **Fedora/RHEL**: download the `.rpm` and install with `sudo dnf install ./ProtonDrive.rpm`
+            - **Ubuntu/Debian and others**: download the `.AppImage`, mark executable, and run
           prerelease: true
           make_latest: true
           files: |
             src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -104,5 +120,3 @@ jobs:
       - name: Run Test Suite
         run: bun run test
         working-directory: ./sdk/js/sdk
-
-
