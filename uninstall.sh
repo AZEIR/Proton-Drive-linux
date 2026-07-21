@@ -11,17 +11,19 @@ echo "    Proton Drive Linux — Uninstall"
 echo "============================================="
 
 # Stop and disable the service if it is managed by systemd
-if systemctl --user list-unit-files "$SERVICE_NAME" 2>/dev/null | grep -q "$SERVICE_NAME"; then
-    echo "Stopping and disabling ${SERVICE_NAME}..."
-    systemctl --user stop    "$SERVICE_NAME" 2>/dev/null || true
-    systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
-fi
+for S in "proton-sync.service" "proton-drive-tray.service"; do
+    if systemctl --user list-unit-files "$S" 2>/dev/null | grep -q "$S"; then
+        echo "Stopping and disabling ${S}..."
+        systemctl --user stop    "$S" 2>/dev/null || true
+        systemctl --user disable "$S" 2>/dev/null || true
+    fi
 
-# Remove the service file
-if [ -f "$SERVICE_DST" ]; then
-    rm -f "$SERVICE_DST"
-    echo "Removed: ${SERVICE_DST}"
-fi
+    # Remove the service file
+    if [ -f "${SYSTEMD_DIR}/${S}" ]; then
+        rm -f "${SYSTEMD_DIR}/${S}"
+        echo "Removed: ${SYSTEMD_DIR}/${S}"
+    fi
+done
 
 systemctl --user daemon-reload
 

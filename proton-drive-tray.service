@@ -1,13 +1,15 @@
 [Unit]
 Description=Proton Drive Sync System Tray Icon
-After=proton-sync.service
-Requisite=proton-sync.service
+After=proton-sync.service graphical-session.target
+Wants=proton-sync.service
 PartOf=graphical-session.target
+StartLimitIntervalSec=500
+StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=__INSTALL_DIR__/proton-drive-tray.py
-Restart=on-failure
+ExecStart=/usr/bin/env python3 __INSTALL_DIR__/proton-drive-tray.py
+Restart=always
 RestartSec=10
 
 [Install]

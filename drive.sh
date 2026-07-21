@@ -127,62 +127,30 @@ build)
     echo "Build complete: ${SCRIPT_DIR}/sdk/js/cli/release/proton-fuse"
     ;;
 tray)
-    echo "Starting Proton Drive system tray icon..."
-    TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
-    TRAY_LOGFILE="${HOME}/.local/state/proton-drive-cli/proton-tray.log"
-    mkdir -p "$(dirname "$TRAY_PIDFILE")"
-    mkdir -p "$(dirname "$TRAY_LOGFILE")"
-
-    if [ -f "$TRAY_PIDFILE" ]; then
-        T_PID=$(cat "$TRAY_PIDFILE")
-        if ps -p "$T_PID" >/dev/null 2>&1; then
-            echo "Tray icon is already running (PID: $T_PID)."
-            exit 0
-        fi
-        rm -f "$TRAY_PIDFILE"
-    fi
-
-    # Also catch instances launched outside of drive.sh (e.g. XDG autostart)
-    T_PID=$(pgrep -f "proton-drive-tray.py" | head -n 1)
-    if [ -n "$T_PID" ]; then
-        echo "Tray icon is already running (PID: $T_PID)."
-        echo "$T_PID" >"$TRAY_PIDFILE"
-        exit 0
-    fi
-
-    setsid "${SCRIPT_DIR}/proton-drive-tray.py" </dev/null >"$TRAY_LOGFILE" 2>&1 &
-    PID=$!
-    sleep 0.5
-    if ps -p "$PID" >/dev/null 2>&1; then
-        echo "$PID" >"$TRAY_PIDFILE"
-        disown $PID
-        echo "Tray icon started in background (PID: $PID). Logs: $TRAY_LOGFILE"
-    else
-        echo "ERROR: Failed to start tray icon. Logs: $TRAY_LOGFILE"
-        rm -f "$TRAY_PIDFILE"
-    fi
+    echo "Starting Proton Drive system tray icon (systemd)..."
+    systemctl --user start proton-drive-tray.service
     ;;
 stop-tray)
-    echo "Stopping Proton Drive system tray icon..."
-    TRAY_PIDFILE="${HOME}/.config/proton-drive-sync/tray.pid"
-    rm -f "$TRAY_PIDFILE"
-    if pkill -f "proton-drive-tray.py" 2>/dev/null; then
-        echo "Tray icon stopped."
-    else
-        echo "Tray icon is not running."
-    fi
+    echo "Stopping Proton Drive system tray icon (systemd)..."
+    systemctl --user stop proton-drive-tray.service
     ;;
 install-tray)
-    mkdir -p "${HOME}/.config/autostart"
+    echo "Installing systemd service for tray..."
+    mkdir -p "${HOME}/.config/systemd/user"
     sed "s|__INSTALL_DIR__|${SCRIPT_DIR}|g" \
-        "${SCRIPT_DIR}/proton-drive-tray.desktop" \
-        >"${HOME}/.config/autostart/proton-drive-tray.desktop"
-    chmod +x "${HOME}/.config/autostart/proton-drive-tray.desktop"
-    echo "Tray icon installed to ~/.config/autostart/ — will start automatically on desktop login."
+        "${SCRIPT_DIR}/proton-drive-tray.service" \
+        >"${HOME}/.config/systemd/user/proton-drive-tray.service"
+    systemctl --user daemon-reload
+    systemctl --user enable proton-drive-tray.service
+    
+    # Cleanup old autostart if it exists
+    rm -f "${HOME}/.config/autostart/proton-drive-tray.desktop"
     ;;
 uninstall-tray)
-    rm -f "${HOME}/.config/autostart/proton-drive-tray.desktop"
-    echo "Tray icon desktop entry removed from ~/.config/autostart/."
+    systemctl --user disable proton-drive-tray.service
+    rm -f "${HOME}/.config/systemd/user/proton-drive-tray.service"
+    systemctl --user daemon-reload
+    echo "Tray icon systemd service removed."
     ;;
 *)
     show_help
