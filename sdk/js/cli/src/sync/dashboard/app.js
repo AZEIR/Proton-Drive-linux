@@ -10,6 +10,8 @@
         let cachedLogs = [];
         let lastLogsJson = '';
         let cachedActiveTransfers = [];
+        let visibleLogsCount = 100;
+        let currentFilteredLength = 0;
 
         let cacheSearchQuery = '';
         let cacheFilterStatus = 'all';
@@ -37,6 +39,20 @@
                 if (syncNowBtn) syncNowBtn.style.display = 'none';
                 fetchCachedFiles();
                 setInterval(fetchCachedFiles, 5000);
+            }
+
+            // Infinite scroll for logs
+            const logsWrapper = document.querySelector('#tab-dashboard .logs-table-wrapper');
+            if (logsWrapper) {
+                logsWrapper.addEventListener('scroll', () => {
+                    // Trigger when within 40px of the bottom of scroll container
+                    if (logsWrapper.scrollHeight - logsWrapper.scrollTop - logsWrapper.clientHeight < 40) {
+                        if (visibleLogsCount < currentFilteredLength) {
+                            visibleLogsCount += 100;
+                            renderLogs();
+                        }
+                    }
+                });
             }
         }
 
@@ -126,6 +142,7 @@
         // Logs filter & rendering
         function setLogFilter(category) {
             logFilterCategory = category;
+            visibleLogsCount = 100;
             document.querySelectorAll('#logFilterPills .filter-pill').forEach(btn => {
                 const text = btn.innerText.trim().toLowerCase();
                 if (text === category.toLowerCase() || (category === 'failed' && text === 'errors')) {
@@ -139,6 +156,7 @@
 
         function filterLogs() {
             logSearchQuery = document.getElementById('logSearchInput').value.trim().toLowerCase();
+            visibleLogsCount = 100;
             renderLogs();
         }
 
@@ -199,6 +217,8 @@
                 return matchesSearch && matchesCategory;
             });
 
+            currentFilteredLength = filtered.length;
+
             if (activeRows.length === 0 && filtered.length === 0) {
                 const isEmpty = !cachedLogs || cachedLogs.length === 0;
                 body.innerHTML = isEmpty
@@ -207,7 +227,8 @@
                 return;
             }
 
-            body.innerHTML = activeRows.join('') + filtered.map(l => {
+            const visibleLogs = filtered.slice(0, visibleLogsCount);
+            let html = activeRows.join('') + visibleLogs.map(l => {
                 const time        = new Date(l.timestamp).toLocaleString();
                 const action      = l.direction.replace('_', ' ');
                 const statusClass = 'status-' + l.status;
@@ -220,7 +241,26 @@
                     <td><strong class="file-path-text">${path}</strong>${msg}</td>
                 </tr>`;
             }).join('');
+
+            if (filtered.length > visibleLogsCount) {
+                html += `<tr>
+                    <td colspan="4" style="text-align: center; padding: 1rem;">
+                        <button class="btn" style="font-size: 0.8rem; padding: 0.4rem 1rem;" onclick="loadMoreLogs(event)">
+                            <span class="material-symbols-outlined" style="font-size:16px; vertical-align:middle; margin-right:4px;">expand_more</span>
+                            Show More (showing ${visibleLogsCount} of ${filtered.length})
+                        </button>
+                    </td>
+                </tr>`;
+            }
+
+            body.innerHTML = html;
         }
+
+        window.loadMoreLogs = function(event) {
+            if (event) event.preventDefault();
+            visibleLogsCount += 100;
+            renderLogs();
+        };
 
         // Cache filter & rendering
         function setCacheFilter(status) {
@@ -451,7 +491,7 @@
 
         async function fetchLogs() {
             try {
-                const res  = await fetch('/api/logs?limit=50');
+                const res  = await fetch('/api/logs?limit=1000');
                 const rawText = await res.text();
                 if (rawText === lastLogsJson) {
                     return;
