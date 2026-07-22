@@ -22,6 +22,9 @@ export class CommandAuthLogin implements Command {
                 console.log(sanitizeTerminalText(JSON.stringify({ signInUrl })));
             } else {
                 console.log(
+                    'This is a third-party application not officially supported by Proton.',
+                );
+                console.log(
                     'Sign in in your browser. Keep the terminal open. Waiting for authentication to complete...',
                 );
                 console.log('Open following URL manually if browser did not open automatically:');
