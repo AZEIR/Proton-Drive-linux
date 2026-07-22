@@ -77,6 +77,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=${BINARY}
+ExecStartPost=/usr/bin/python3 ${SCRIPT_DIR}/proton-drive-tray.py
 WorkingDirectory=${SCRIPT_DIR}
 Restart=always
 RestartSec=5s
@@ -89,16 +90,8 @@ Environment=PATH=${PATH}
 WantedBy=default.target
 EOF
 
-# Clean up legacy separate tray service if present
-systemctl --user stop proton-drive-tray.service 2>/dev/null || true
-systemctl --user disable proton-drive-tray.service 2>/dev/null || true
-rm -f "${SYSTEMD_DIR}/proton-drive-tray.service"
+# Unified service already starts the tray via ExecStartPost; legacy tray service handling removed.
 
 systemctl --user daemon-reload
 systemctl --user enable "$SERVICE_NAME"
-systemctl --user restart "$SERVICE_NAME"
-
-echo ""
-echo "Setup finished successfully!"
-echo "Service status: systemctl --user status proton-sync"
-echo "Dashboard:      http://localhost:8085"
+systemctl --user restart "$SERVICE_NAME" || true
