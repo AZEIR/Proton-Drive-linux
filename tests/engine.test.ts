@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import { SyncEngine } from "../src/sync/engine";
 import { SyncDatabase } from "../src/sync/db";
-import { existsSync, unlinkSync, rmdirSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, unlinkSync, rmSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -102,7 +102,7 @@ describe("SyncEngine", () => {
         try { unlinkSync(dbPath); } catch {}
         try { unlinkSync(`${dbPath}-wal`); } catch {}
         try { unlinkSync(`${dbPath}-shm`); } catch {}
-        try { rmdirSync(syncRoot, { recursive: true }); } catch {}
+        try { rmSync(syncRoot, { recursive: true, force: true }); } catch {}
     });
 
     it("should initialize correctly", () => {
@@ -121,7 +121,7 @@ describe("SyncEngine", () => {
             const engine = new SyncEngine(db, mockSdk, mockAuth, { 
                 info: mock(), 
                 warn: mock(), 
-                error: (msg, err) => console.error(msg, err), 
+                error: (msg: any, err: any) => console.error(msg, err), 
                 debug: mock() 
             }, mockEventsManager);
             await engine.setLocalSyncRoot(syncRoot);
@@ -367,7 +367,7 @@ describe("SyncEngine", () => {
             });
 
             // Rename locally on disk
-            rmdirSync(path.join(syncRoot, "OldDir"), { recursive: true });
+            rmSync(path.join(syncRoot, "OldDir"), { recursive: true, force: true });
             mkdirSync(path.join(syncRoot, "NewDir"), { recursive: true });
             writeFileSync(path.join(syncRoot, "NewDir", "file.txt"), "hello world");
 

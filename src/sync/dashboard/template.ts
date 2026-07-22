@@ -1,4 +1,6 @@
+// @ts-ignore
 import css from './style.css' with { type: 'text' };
+// @ts-ignore
 import js from './app.js' with { type: 'text' };
 
 export function getHtmlContent(isFodMode: boolean = false): string {

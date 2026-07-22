@@ -1323,10 +1323,11 @@ export class SyncEngine extends EventEmitter {
     mapped: SyncMapping | undefined,
   ): Promise<void> {
     // Early check: if the path is ignored, clean up database mapping and skip reconciliation
-    const isDir =
+    const isDir = Boolean(
       (local && local.isDir) ||
-      (remote && remote.type === NodeType.Folder) ||
-      (mapped && mapped.is_dir === 1);
+        (remote && remote.type === NodeType.Folder) ||
+        (mapped && mapped.is_dir === 1),
+    );
     if (this.ignoreMatcher.shouldIgnore(relPath, isDir)) {
       if (mapped) {
         this.logger.info(`Path ${relPath} is now ignored. Removing mapping.`);
