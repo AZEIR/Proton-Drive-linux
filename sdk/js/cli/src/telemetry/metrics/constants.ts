@@ -1,3 +1,0 @@
-export const METRICS_BATCH_SIZE = 100;
-export const METRICS_REQUEST_FREQUENCY_MS = 6_000;
-export const METRICS_MAX_JAIL = 3;
