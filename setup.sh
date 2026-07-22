@@ -39,6 +39,8 @@ _do_build() {
         echo "ERROR: Build failed to produce binary at ${BINARY}"
         exit 1
     fi
+    mkdir -p "${SCRIPT_DIR}/src-tauri/binaries"
+    cp "$BINARY" "${SCRIPT_DIR}/src-tauri/binaries/proton-sync-x86_64-unknown-linux-gnu" 2>/dev/null || true
     echo "Build complete."
 }
 
