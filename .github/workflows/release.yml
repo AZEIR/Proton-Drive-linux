@@ -12,8 +12,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Checkout SDK Submodule
+        run: git submodule update --init sdk
 
       - name: Install System Dependencies for Tauri v2 & WebKitGTK 4.1
         run: |
