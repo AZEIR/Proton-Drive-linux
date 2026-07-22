@@ -66,45 +66,39 @@ echo "============================================="
 
 _do_build
 
-# Install systemd services for daemon and tray icon
+# Install single unified systemd service
 mkdir -p "${SYSTEMD_DIR}"
 cat <<EOF > "$SERVICE_DST"
 [Unit]
-Description=Proton Drive Linux Sync Daemon
-After=network-online.target
+Description=Proton Drive Linux Sync Client
+After=network-online.target graphical-session.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=${BINARY}
+WorkingDirectory=${SCRIPT_DIR}
 Restart=always
 RestartSec=5s
 Environment=PROTON_MOUNT_POINT=${HOME}/P-Drive
+Environment=DISPLAY=${DISPLAY:-:0}
+Environment=WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+Environment=PATH=${PATH}
 
 [Install]
 WantedBy=default.target
 EOF
 
-TRAY_SERVICE_NAME="proton-drive-tray.service"
-TRAY_SERVICE_DST="${SYSTEMD_DIR}/${TRAY_SERVICE_NAME}"
-
-if [ -f "${SCRIPT_DIR}/proton-drive-tray.service.template" ]; then
-    sed -e "s|{{SCRIPT_DIR}}|${SCRIPT_DIR}|g" \
-        -e "s|{{DISPLAY}}|${DISPLAY:-:0}|g" \
-        -e "s|{{WAYLAND_DISPLAY}}|${WAYLAND_DISPLAY:-wayland-0}|g" \
-        -e "s|{{PATH}}|${PATH}|g" \
-        -e "s|{{PORT}}|8085|g" \
-        "${SCRIPT_DIR}/proton-drive-tray.service.template" > "$TRAY_SERVICE_DST"
-fi
+# Clean up legacy separate tray service if present
+systemctl --user stop proton-drive-tray.service 2>/dev/null || true
+systemctl --user disable proton-drive-tray.service 2>/dev/null || true
+rm -f "${SYSTEMD_DIR}/proton-drive-tray.service"
 
 systemctl --user daemon-reload
 systemctl --user enable "$SERVICE_NAME"
-systemctl --user enable "$TRAY_SERVICE_NAME" 2>/dev/null || true
 systemctl --user restart "$SERVICE_NAME"
-systemctl --user restart "$TRAY_SERVICE_NAME" 2>/dev/null || true
 
 echo ""
 echo "Setup finished successfully!"
-echo "Daemon status: systemctl --user status proton-sync"
-echo "Tray status:   systemctl --user status proton-drive-tray"
-echo "Dashboard:     http://localhost:8085"
+echo "Service status: systemctl --user status proton-sync"
+echo "Dashboard:      http://localhost:8085"
