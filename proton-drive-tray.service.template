@@ -1,0 +1,19 @@
+[Unit]
+Description=Proton Drive Sync System Tray Icon
+After=proton-sync.service
+Requisite=proton-sync.service
+PartOf=proton-sync.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 {{SCRIPT_DIR}}/proton-drive-tray.py
+Restart=on-failure
+RestartSec=10s
+Environment=DISPLAY={{DISPLAY}}
+Environment=WAYLAND_DISPLAY={{WAYLAND_DISPLAY}}
+Environment=PATH={{PATH}}
+Environment=PROTON_SYNC_PORT={{PORT}}
+WorkingDirectory={{SCRIPT_DIR}}
+
+[Install]
+WantedBy=graphical-session.target
