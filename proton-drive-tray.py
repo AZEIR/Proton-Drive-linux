@@ -65,6 +65,10 @@ class ProtonDriveTrayApp:
         
         self.menu.append(Gtk.SeparatorMenuItem())
         
+        self.menu_restart = Gtk.MenuItem(label="Restart Service")
+        self.menu_restart.connect("activate", self.restart_service)
+        self.menu.append(self.menu_restart)
+        
         self.menu_exit = Gtk.MenuItem(label="Quit Proton Drive")
         self.menu_exit.connect("activate", self.quit_app)
         self.menu.append(self.menu_exit)
@@ -177,6 +181,11 @@ class ProtonDriveTrayApp:
                 requests.post(f"http://localhost:{PORT}{endpoint}", json={}, timeout=2)
             except Exception as e:
                 print(f"Error calling {endpoint}: {e}", file=sys.stderr)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def restart_service(self, widget):
+        def worker():
+            os.system("systemctl --user restart proton-sync.service 2>/dev/null")
         threading.Thread(target=worker, daemon=True).start()
 
     def quit_app(self, widget):

@@ -293,15 +293,16 @@ export class SyncEngine extends EventEmitter {
       // Start a liveness monitor to detect sleep/resume and stale connections
       this.startLivenessMonitor();
     } catch (error: any) {
-      this.logger.error("Failed to start Sync Engine:", error);
+      this.logger.warn("Failed to complete full Sync Engine startup (likely offline):", error);
       this.db.log(
         "system",
         "system",
         "failed",
-        `Start failed: ${error.message || error}`,
+        `Start offline: ${error.message || error}. Monitoring for connection...`,
       );
       this.emit("error", error);
-      this.isStarted = false;
+      this.isStarted = true;
+      this.startOfflineMonitor();
     }
     this.emit("statusChanged");
   }
@@ -3212,6 +3213,27 @@ export class SyncEngine extends EventEmitter {
     );
 
     this.isOffline = false;
+
+    // If initial startup was deferred because of offline status at boot time, complete initialization now
+    if (!this.remoteRootUid) {
+      (async () => {
+        try {
+          const rootFolder = await this.sdk.getMyFilesRootFolder();
+          this.remoteRootUid = rootFolder.uid;
+          this.setupWatcher();
+          this.startupSync().catch((err) => {
+            this.logger.error("Background startup sync failed:", err);
+          });
+          await this.subscribeToRemoteEvents(rootFolder.treeEventScopeId);
+          this.startLivenessMonitor();
+          this.logger.info("Deferred startup initialization completed successfully.");
+        } catch (err) {
+          this.logger.error("Failed to complete deferred startup after reconnect:", err);
+          this.startOfflineMonitor();
+        }
+      })();
+    }
+
     this.emit("statusChanged");
 
     // Drain any pending deletes that were held while offline
