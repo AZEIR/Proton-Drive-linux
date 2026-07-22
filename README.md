@@ -1,6 +1,6 @@
 # Proton Drive Linux
 
-> An unofficial Proton Drive Linux sync client built using the [Official Proton Drive SDK](https://github.com/ProtonMail/drive-sdk) in compliance with [Proton SDK Guidelines](https://github.com/ProtonMail/drive-sdk#usage-guidelines-for-personal-projects).
+> An unofficial Proton Drive Linux sync client built using the [Official Proton Drive SDK](https://github.com/ProtonDriveApps/sdk) in compliance with [Proton SDK Guidelines](https://github.com/ProtonDriveApps/sdk#usage-guidelines-for-personal-projects).
 
 <img width="2880" height="1525" alt="image" src="https://github.com/user-attachments/assets/aabc9eec-3e09-401f-8273-188566932d58" />
 
