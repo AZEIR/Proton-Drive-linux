@@ -29,6 +29,7 @@ export function startDashboard(
 
     const server = Bun.serve({
         port,
+        hostname: "127.0.0.1",
         async fetch(req) {
             const url = new URL(req.url);
 

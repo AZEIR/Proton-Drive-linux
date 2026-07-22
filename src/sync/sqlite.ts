@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 
 const isBun = typeof process !== 'undefined' && process.versions && (process.versions as any).bun;
@@ -20,6 +20,9 @@ export class Database {
             }
             this.inner = new BetterSqlite3(filename, nodeOptions);
         }
+        try {
+            chmodSync(filename, 0o600);
+        } catch {}
         try {
             this.run('PRAGMA journal_mode = WAL');
             this.run('PRAGMA busy_timeout = 5000');
