@@ -66,7 +66,7 @@ echo "============================================="
 
 _do_build
 
-# Install systemd service
+# Install systemd services for daemon and tray icon
 mkdir -p "${SYSTEMD_DIR}"
 cat <<EOF > "$SERVICE_DST"
 [Unit]
@@ -85,11 +85,26 @@ Environment=PROTON_MOUNT_POINT=${HOME}/P-Drive
 WantedBy=default.target
 EOF
 
+TRAY_SERVICE_NAME="proton-drive-tray.service"
+TRAY_SERVICE_DST="${SYSTEMD_DIR}/${TRAY_SERVICE_NAME}"
+
+if [ -f "${SCRIPT_DIR}/proton-drive-tray.service.template" ]; then
+    sed -e "s|{{SCRIPT_DIR}}|${SCRIPT_DIR}|g" \
+        -e "s|{{DISPLAY}}|${DISPLAY:-:0}|g" \
+        -e "s|{{WAYLAND_DISPLAY}}|${WAYLAND_DISPLAY:-wayland-0}|g" \
+        -e "s|{{PATH}}|${PATH}|g" \
+        -e "s|{{PORT}}|8085|g" \
+        "${SCRIPT_DIR}/proton-drive-tray.service.template" > "$TRAY_SERVICE_DST"
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable "$SERVICE_NAME"
+systemctl --user enable "$TRAY_SERVICE_NAME" 2>/dev/null || true
 systemctl --user restart "$SERVICE_NAME"
+systemctl --user restart "$TRAY_SERVICE_NAME" 2>/dev/null || true
 
 echo ""
 echo "Setup finished successfully!"
 echo "Daemon status: systemctl --user status proton-sync"
-echo "Dashboard: http://localhost:8085"
+echo "Tray status:   systemctl --user status proton-drive-tray"
+echo "Dashboard:     http://localhost:8085"

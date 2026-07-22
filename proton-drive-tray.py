@@ -65,7 +65,7 @@ class ProtonDriveTrayApp:
         
         self.menu.append(Gtk.SeparatorMenuItem())
         
-        self.menu_exit = Gtk.MenuItem(label="Exit Tray")
+        self.menu_exit = Gtk.MenuItem(label="Quit Proton Drive")
         self.menu_exit.connect("activate", self.quit_app)
         self.menu.append(self.menu_exit)
         
@@ -181,6 +181,7 @@ class ProtonDriveTrayApp:
 
     def quit_app(self, widget):
         self.stop_flag.set()
+        os.system("systemctl --user stop proton-sync.service 2>/dev/null")
         Gtk.main_quit()
 
 def main():

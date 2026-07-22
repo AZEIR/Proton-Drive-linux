@@ -42,14 +42,14 @@ case "$cmd" in
             export PROTON_MOUNT_POINT="$(realpath "$CUSTOM_PATH")"
             echo "Setting sync folder to: ${PROTON_MOUNT_POINT}"
         fi
-        echo "Starting sync daemon service..."
-        systemctl --user start "$SERVICE_NAME"
-        echo "Daemon status:"
-        systemctl --user status "$SERVICE_NAME" --no-pager
+        echo "Starting Proton Drive services (daemon + tray)..."
+        systemctl --user start "$SERVICE_NAME" "$TRAY_SERVICE_NAME"
+        echo "Status:"
+        systemctl --user status "$SERVICE_NAME" "$TRAY_SERVICE_NAME" --no-pager
         ;;
     stop)
-        echo "Stopping sync daemon service..."
-        systemctl --user stop "$SERVICE_NAME"
+        echo "Stopping Proton Drive services..."
+        systemctl --user stop "$SERVICE_NAME" "$TRAY_SERVICE_NAME"
         ;;
     restart)
         CUSTOM_PATH="$2"
@@ -57,8 +57,8 @@ case "$cmd" in
             export PROTON_MOUNT_POINT="$(realpath "$CUSTOM_PATH")"
             echo "Setting sync folder to: ${PROTON_MOUNT_POINT}"
         fi
-        echo "Restarting sync daemon service..."
-        systemctl --user restart "$SERVICE_NAME"
+        echo "Restarting Proton Drive services..."
+        systemctl --user restart "$SERVICE_NAME" "$TRAY_SERVICE_NAME"
         ;;
     status)
         systemctl --user status "$SERVICE_NAME" --no-pager
