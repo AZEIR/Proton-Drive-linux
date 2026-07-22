@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "bun build --compile src/cli/daemon.ts --outfile release/proton-sync && cp release/proton-sync release/proton-sync-x86_64-unknown-linux-gnu 2>/dev/null || true",
-    "test": "bun test",
+    "test": "bun test ./tests/*.test.ts",
     "check-types": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "bun run build && tauri dev",

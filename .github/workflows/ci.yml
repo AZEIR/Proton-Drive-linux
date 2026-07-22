@@ -26,7 +26,7 @@ jobs:
         run: bun install
 
       - name: Run Tests
-        run: bun test tests/
+        run: bun test ./tests/*.test.ts
 
       - name: Check TypeScript Types
         run: bun run check-types
