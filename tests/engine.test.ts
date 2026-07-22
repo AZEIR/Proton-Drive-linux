@@ -391,5 +391,137 @@ describe("SyncEngine", () => {
             // 4. getFileUploader should NOT have been called for file.txt (no re-uploading)
             expect(mockSdk.getFileUploader).not.toHaveBeenCalled();
         });
+
+        it("should upload local file if modified locally after remote deletion", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            writeFileSync(path.join(syncRoot, "updated_local.txt"), "modified content");
+
+            db.setMapping({
+                local_path: "updated_local.txt",
+                node_uid: "del-remote-uid",
+                is_dir: 0,
+                size: 5,
+                mtime: Date.now() - 10000,
+                sha1: "oldhash",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now() - 10000
+            });
+
+            mockSdk.iterateFolderChildrenNodeUids = async function* () {};
+            mockSdk.iterateNodes = async function* () {};
+
+            (engine as any).isStarted = true;
+            await engine.forceSync();
+
+            expect(mockSdk.getFileRevisionUploader).toHaveBeenCalled();
+        });
+
+        it("should silently merge unmapped identical files added locally and remotely", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            writeFileSync(path.join(syncRoot, "same.txt"), "identical content");
+            const now = Date.now();
+
+            mockSdk.iterateFolderChildrenNodeUids = async function* () { yield "same-uid"; };
+            mockSdk.iterateNodes = async function* (uids: string[]) {
+                for (const uid of uids) {
+                    if (uid === "same-uid") {
+                        yield {
+                            uid: "same-uid",
+                            name: { ok: true, value: "same.txt" },
+                            modificationTime: new Date(now),
+                            creationTime: new Date(now),
+                            size: 17,
+                            type: 1,
+                            mimeType: "text/plain"
+                        };
+                    }
+                }
+            };
+
+            (engine as any).isStarted = true;
+            await engine.forceSync();
+
+            expect(db.getMapping("same.txt")).not.toBeNull();
+            expect(db.getMapping("same.txt")?.node_uid).toBe("same-uid");
+            expect(mockSdk.getFileUploader).not.toHaveBeenCalled();
+            expect(mockSdk.getFileDownloader).not.toHaveBeenCalled();
+        });
+
+        it("should create conflict copy when unmapped files with differing content are added locally and remotely", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            writeFileSync(path.join(syncRoot, "diff.txt"), "local diff content");
+
+            mockSdk.iterateFolderChildrenNodeUids = async function* () { yield "diff-uid"; };
+            mockSdk.iterateNodes = async function* (uids: string[]) {
+                for (const uid of uids) {
+                    if (uid === "diff-uid") {
+                        yield {
+                            uid: "diff-uid",
+                            name: { ok: true, value: "diff.txt" },
+                            modificationTime: new Date(Date.now() + 50000),
+                            creationTime: new Date(Date.now() + 50000),
+                            size: 100,
+                            type: 1,
+                            mimeType: "text/plain",
+                            activeRevision: { ok: true, value: { id: "rev-diff", state: 1, claimedModificationTime: Date.now() + 50000, creationTime: new Date() } }
+                        };
+                    }
+                }
+            };
+
+            (engine as any).isStarted = true;
+            await engine.forceSync();
+
+            expect(mockSdk.getFileDownloader).toHaveBeenCalled();
+        });
+
+        it("should drop mapping and ignore path when matching .protonignore rule", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            writeFileSync(path.join(syncRoot, "ignored.tmp"), "temp file");
+            writeFileSync(path.join(syncRoot, ".protonignore"), "*.tmp\n");
+
+            db.setMapping({
+                local_path: "ignored.tmp",
+                node_uid: "ignored-uid",
+                is_dir: 0,
+                size: 9,
+                mtime: Date.now(),
+                sha1: "",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now()
+            });
+
+            (engine as any).isStarted = true;
+            await engine.forceSync();
+
+            expect(db.getMapping("ignored.tmp")).toBeNull();
+        });
+
+        it("should retry operations on temporary network failure via runWithRetry", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+
+            let attempts = 0;
+            const result = await (engine as any).runWithRetry(async () => {
+                attempts++;
+                if (attempts === 1) {
+                    const err: any = new Error("Network error 503");
+                    err.status = 503;
+                    throw err;
+                }
+                return "success";
+            }, 3, 10);
+
+            expect(attempts).toBe(2);
+            expect(result).toBe("success");
+        });
     });
 });
+
