@@ -1,11 +1,9 @@
-/// <reference types="ky" />
-
 declare module 'proton-drive-sdk-account' {
-  export type ApiClient = {
+  export interface ApiClient {
     baseUrlWithProtocol: string;
     authenticatedRequest: import('ky').KyInstance;
-  };
-  export const ApiClient: any;
+  }
+  export const ApiClient: new (...args: any[]) => ApiClient;
   export const initAccount: any;
   export type Auth = any;
   export const Auth: any;
