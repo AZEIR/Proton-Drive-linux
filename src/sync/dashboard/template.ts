@@ -16,7 +16,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
     <div class="app-layout">
         <!-- Left Sidebar -->
         <aside class="sidebar">
-            <div class="sidebar-header">
+            <a href="https://github.com/AZEIR/Proton-Drive-linux" target="_blank" rel="noopener" class="sidebar-header" style="text-decoration:none;">
                 <!-- Official Proton Drive Folder Icon SVG -->
                 <svg class="proton-logo" viewBox="0 20 106 95" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <!-- Background folder flap -->
@@ -25,7 +25,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                     <path d="M74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V101.128C0 107.135 4.90503 112 10.9609 112H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999Z" fill="#6d4aff"/>
                 </svg>
                 <span class="brand-name">Proton Drive<span class="sub-brand" id="modeLabel">Sync</span></span>
-            </div>
+            </a>
 
             <nav class="sidebar-menu">
                 <div class="menu-item active" data-tab="dashboard" onclick="showTab('dashboard')">
@@ -294,6 +294,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
             </svg>
             <h1 class="login-title">Welcome to Proton Drive</h1>
             <p class="login-desc">Sign in with your Proton account to configure local desktop synchronization and access your secure cloud files.</p>
+            <p class="login-desc" style="margin-top: -0.5rem; margin-bottom: 1.5rem; font-size: 0.8rem; opacity: 0.75;"><em>This is a third-party application not officially supported by Proton.</em></p>
             <button class="btn btn-primary login-btn btn-login-action" onclick="login()">Login to Proton Drive</button>
         </div>
     </div>
