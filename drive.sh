@@ -3,7 +3,6 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="proton-sync.service"
-TRAY_SERVICE_NAME="proton-drive-tray.service"
 SYNC_DB="${HOME}/.config/proton-drive/sync.db"
 
 show_help() {
@@ -17,12 +16,6 @@ show_help() {
     echo "  stop              - Stop the sync daemon"
     echo "  restart [path]    - Restart the daemon with optional custom path"
     echo "  status            - Check daemon status & view dashboard link"
-    echo ""
-    echo "Tray Icon Commands:"
-    echo "  tray              - Start the system tray icon"
-    echo "  stop-tray         - Stop the system tray icon"
-    echo "  install-tray      - Enable tray icon autostart on desktop login"
-    echo "  uninstall-tray    - Disable tray icon autostart"
     echo ""
     echo "Client & Maintenance Commands:"
     echo "  login             - Authenticate with Proton Drive"
@@ -92,35 +85,9 @@ case "$cmd" in
         rm -f "${SYNC_DB}-wal" "${SYNC_DB}-shm"
         echo "Done. Restart sync daemon with: ./drive.sh start"
         ;;
-    tray)
-        echo "Starting system tray icon..."
-        systemctl --user start "$TRAY_SERVICE_NAME" 2>/dev/null || python3 "${SCRIPT_DIR}/proton-drive-tray.py" &
-        ;;
-    stop-tray)
-        echo "Stopping system tray icon..."
-        systemctl --user stop "$TRAY_SERVICE_NAME" 2>/dev/null || pkill -f proton-drive-tray.py 2>/dev/null || true
-        ;;
-    install-tray)
-        echo "Installing systemd service for system tray..."
-        mkdir -p "${HOME}/.config/systemd/user"
-        if [ -f "${SCRIPT_DIR}/proton-drive-tray.service.template" ]; then
-            sed "s|__INSTALL_DIR__|${SCRIPT_DIR}|g" "${SCRIPT_DIR}/proton-drive-tray.service.template" > "${HOME}/.config/systemd/user/${TRAY_SERVICE_NAME}"
-            systemctl --user daemon-reload
-            systemctl --user enable "$TRAY_SERVICE_NAME"
-            systemctl --user start "$TRAY_SERVICE_NAME"
-            echo "System tray autostart enabled."
-        else
-            echo "Error: proton-drive-tray.service.template not found."
-        fi
-        ;;
-    uninstall-tray)
-        echo "Uninstalling system tray service..."
-        systemctl --user stop "$TRAY_SERVICE_NAME" 2>/dev/null || true
-        systemctl --user disable "$TRAY_SERVICE_NAME" 2>/dev/null || true
-        rm -f "${HOME}/.config/systemd/user/${TRAY_SERVICE_NAME}"
-        systemctl --user daemon-reload
-        echo "System tray service uninstalled."
-        ;;
+    show_help
+    exit 0
+    ;;
     test)
         echo "Running automated test suite..."
         cd "$SCRIPT_DIR" && bun test tests/unit tests/integration
