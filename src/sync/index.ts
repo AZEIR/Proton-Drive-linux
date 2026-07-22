@@ -13,7 +13,7 @@ export async function runSync(port: number = 8085) {
     // Initialize session
     const session = await init({
         clientUidPrefix,
-        appVersion: typeof APP_VERSION !== 'undefined' ? APP_VERSION : 'external-drive-proton_drive_linux@1.0.0-stable',
+        appVersion: typeof APP_VERSION !== 'undefined' ? APP_VERSION : 'external-drive-azeir_proton_drive_linux@1.0.0-stable',
         sdkVersion: typeof SDK_VERSION !== 'undefined' ? SDK_VERSION : 'js@0.0.0',
         enablePersistedEvents: true,
         enableConsoleLog: false,
