@@ -25,6 +25,11 @@ jobs:
       - name: Install Dependencies
         run: bun install
 
+      - name: Build SDK Package
+        run: |
+          (cd sdk/client/js && bun run build)
+          bun install
+
       - name: Run Tests
         run: bun test ./tests/*.test.ts
 
