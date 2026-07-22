@@ -1,0 +1,27 @@
+{
+  "name": "proton-drive-linux",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build --compile src/cli/daemon.ts --outfile release/proton-sync",
+    "test": "bun test",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@protontech/crypto": "2.0.0",
+    "@protontech/drive-sdk": "file:./sdk/client/js",
+    "@sentry/bun": "^10.67.0",
+    "better-sqlite3": "^13.0.1",
+    "chokidar": "^4.0.1",
+    "ky": "^1.14.3",
+    "openpgp": "^6.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.0"
+  },
+  "patchedDependencies": {
+    "@protontech/crypto@2.0.0": "./sdk/config/js/patches/@protontech%2Fcrypto@2.0.0.patch"
+  }
+}

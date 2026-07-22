@@ -1,0 +1,148 @@
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { SyncDatabase } from "../src/sync/db";
+import { unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+describe("SyncDatabase", () => {
+    let db: SyncDatabase;
+    let dbPath: string;
+
+    beforeEach(() => {
+        dbPath = path.join(tmpdir(), `test-sync-${Date.now()}-${Math.random()}.db`);
+        db = new SyncDatabase(dbPath);
+    });
+
+    afterEach(() => {
+        db.close();
+        try {
+            unlinkSync(dbPath);
+            unlinkSync(`${dbPath}-wal`);
+            unlinkSync(`${dbPath}-shm`);
+        } catch {}
+    });
+
+    describe("Config", () => {
+        it("should store and retrieve config values", () => {
+            db.setConfig("test_key", "test_value");
+            expect(db.getConfig("test_key")).toBe("test_value");
+        });
+
+        it("should return default value if key not found", () => {
+            expect(db.getConfig("missing_key", "default")).toBe("default");
+        });
+
+        it("should overwrite existing config values", () => {
+            db.setConfig("test_key", "value1");
+            db.setConfig("test_key", "value2");
+            expect(db.getConfig("test_key")).toBe("value2");
+        });
+    });
+
+    describe("Mappings", () => {
+        const mockMapping = {
+            local_path: "folder/file.txt",
+            node_uid: "uid-123",
+            is_dir: 0,
+            size: 1024,
+            mtime: 1234567890,
+            sha1: "abcdef",
+            remote_revision_uid: "rev-123",
+            remote_mtime: 1234567890,
+        };
+
+        it("should set and get a mapping", () => {
+            db.setMapping(mockMapping);
+            const retrieved = db.getMapping("folder/file.txt");
+            expect(retrieved).toEqual(mockMapping);
+        });
+
+        it("should get a mapping by node_uid", () => {
+            db.setMapping(mockMapping);
+            const retrieved = db.getMappingByNodeUid("uid-123");
+            expect(retrieved).toEqual(mockMapping);
+        });
+
+        it("should delete a mapping", () => {
+            db.setMapping(mockMapping);
+            db.deleteMapping("folder/file.txt");
+            expect(db.getMapping("folder/file.txt")).toBeFalsy();
+        });
+
+        it("should delete a mapping by node_uid", () => {
+            db.setMapping(mockMapping);
+            db.deleteMappingByNodeUid("uid-123");
+            expect(db.getMapping("folder/file.txt")).toBeFalsy();
+        });
+
+        it("should handle bulk prefix operations", () => {
+            db.setMapping({ ...mockMapping, local_path: "parent/child1.txt", node_uid: "uid-1" });
+            db.setMapping({ ...mockMapping, local_path: "parent/child2.txt", node_uid: "uid-2" });
+            db.setMapping({ ...mockMapping, local_path: "other/child3.txt", node_uid: "uid-3" });
+
+            // getMappingsByPrefix
+            const children = db.getMappingsByPrefix("parent");
+            expect(children.length).toBe(2);
+
+            // renameMappingsByPrefix
+            const renamed = db.renameMappingsByPrefix("parent", "renamed_parent");
+            expect(renamed.length).toBe(2);
+            expect(db.getMapping("renamed_parent/child1.txt")).toBeDefined();
+            expect(db.getMapping("parent/child1.txt")).toBeFalsy();
+
+            // deleteMappingsByPrefix
+            db.deleteMappingsByPrefix("renamed_parent");
+            expect(db.getMappingCount()).toBe(1); // Only other/child3.txt remains
+        });
+    });
+
+    describe("Pending Deletes", () => {
+        it("should store and retrieve pending deletes", () => {
+            db.setPendingDelete("folder/file.txt", "uid-123", false);
+            db.setPendingDelete("folder2", "uid-456", true);
+
+            const pending = db.getPendingDeletes();
+            expect(pending.length).toBe(2);
+            expect(pending[0].local_path).toBe("folder/file.txt");
+            expect(pending[0].is_dir).toBe(0);
+            expect(pending[1].local_path).toBe("folder2");
+            expect(pending[1].is_dir).toBe(1);
+        });
+
+        it("should delete pending deletes", () => {
+            db.setPendingDelete("folder/file.txt", "uid-123", false);
+            db.deletePendingDelete("folder/file.txt");
+            expect(db.getPendingDeletes().length).toBe(0);
+        });
+
+        it("should delete pending deletes by prefix", () => {
+            db.setPendingDelete("parent/file1.txt", "uid-1", false);
+            db.setPendingDelete("parent/file2.txt", "uid-2", false);
+            db.deletePendingDeletesByPrefix("parent");
+            expect(db.getPendingDeletes().length).toBe(0);
+        });
+    });
+
+    describe("Logs", () => {
+        it("should insert and retrieve logs", () => {
+            db.log("test.txt", "upload", "syncing", "Uploading test file");
+            const logs = db.getRecentLogs(10);
+            expect(logs.length).toBe(1);
+            expect(logs[0].file_path).toBe("test.txt");
+            expect(logs[0].direction).toBe("upload");
+            expect(logs[0].status).toBe("syncing");
+        });
+
+        it("should respect the log limit", () => {
+            for (let i = 0; i < 5; i++) {
+                db.log(`test${i}.txt`, "upload", "syncing");
+            }
+            const logs = db.getRecentLogs(3);
+            expect(logs.length).toBe(3);
+            // Verify we got the most recent ones (highest IDs)
+            expect(logs[0].file_path).toBe("test4.txt");
+            expect(logs[1].file_path).toBe("test3.txt");
+            expect(logs[2].file_path).toBe("test2.txt");
+        });
+    });
+});

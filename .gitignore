@@ -1,0 +1,11 @@
+node_modules
+release
+dist
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+~*
+*.swp
+*.swo
+*.tmp-*
