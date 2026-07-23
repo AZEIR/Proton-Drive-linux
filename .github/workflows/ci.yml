@@ -14,7 +14,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: true
+          persist-credentials: false
+
+      - name: Checkout SDK Repository
+        run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk && rm -rf sdk/.git
 
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
@@ -24,8 +27,13 @@ jobs:
       - name: Install Dependencies
         run: bun install
 
+      - name: Build SDK Package
+        run: |
+          (cd sdk/client/js && bun run build)
+          bun install
+
       - name: Run Tests
-        run: bun test tests/
+        run: bun test ./tests/*.test.ts
 
       - name: Check TypeScript Types
         run: bun run check-types

@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "bun build --compile src/cli/daemon.ts --outfile release/proton-sync && cp release/proton-sync release/proton-sync-x86_64-unknown-linux-gnu 2>/dev/null || true",
-    "test": "bun test",
-    "check-types": "tsc --noEmit",
+    "test": "bun test ./tests/*.test.ts",
+    "check-types": "tsc --noEmit -p tsconfig.json",
     "tauri": "tauri",
     "tauri:dev": "bun run build && tauri dev",
     "tauri:build": "bun run build && tauri build"
@@ -15,18 +15,21 @@
     "@protontech/crypto": "2.0.0",
     "@protontech/drive-sdk": "file:./sdk/client/js",
     "@sentry/bun": "^10.67.0",
-    "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/api": "^2.11.0",
     "better-sqlite3": "^13.0.1",
     "chokidar": "^4.0.1",
     "ky": "^1.14.3",
     "openpgp": "^6.3.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.2.0",
+    "@tauri-apps/cli": "^2.11.0",
     "@types/bun": "^1.2.0",
     "typescript": "^5.7.0"
   },
   "patchedDependencies": {
     "@protontech/crypto@2.0.0": "./sdk/config/js/patches/@protontech%2Fcrypto@2.0.0.patch"
+  },
+  "overrides": {
+    "@noble/hashes": "1.8.0"
   }
 }

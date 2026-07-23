@@ -9,11 +9,16 @@ on:
 jobs:
   build-linux:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: true
+          fetch-depth: 0
+
+      - name: Checkout SDK Repository
+        run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk && rm -rf sdk/.git
 
       - name: Install System Dependencies for Tauri v2 & WebKitGTK 4.1
         run: |
@@ -27,7 +32,17 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            librsvg2-bin \
+            libgdk-pixbuf2.0-bin \
+            libgdk-pixbuf2.0-dev \
+            libglib2.0-bin \
+            libgtk-3-bin \
+            desktop-file-utils \
+            hicolor-icon-theme \
+            patchelf \
+            squashfs-tools \
+            zsync
 
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
@@ -40,19 +55,54 @@ jobs:
       - name: Install JS Dependencies
         run: bun install
 
+      - name: Build SDK Package
+        run: |
+          (cd sdk/client/js && bun run build)
+          bun install
+
       - name: Build Proton Sync Daemon Binary (Sidecar)
         run: |
           bun run build
           mkdir -p src-tauri/binaries
           cp release/proton-sync src-tauri/binaries/proton-sync-x86_64-unknown-linux-gnu
+          mkdir -p src-tauri/target/release/bundle/appimage/proton-drive-linux.AppDir/usr/lib64
+
+      - name: Create ldd wrapper for Bun binary compatibility
+        run: |
+          # Bun compiled binaries crash when ldd runs them via LD_TRACE_LOADED_OBJECTS=1
+          # (Bun's JS engine initialization fails in that environment).
+          # All proton-sync deps are already deployed by the first linuxdeploy pass,
+          # so returning empty deps in the GTK plugin's recursive pass is safe.
+          mkdir -p "$HOME/.local/bin"
+          printf '%s\n' '#!/bin/bash' \
+            'for arg in "$@"; do' \
+            '  if [[ "$arg" == *"proton-sync"* ]]; then' \
+            '    exit 0' \
+            '  fi' \
+            'done' \
+            'exec /usr/bin/ldd "$@"' \
+            > "$HOME/.local/bin/ldd"
+          chmod +x "$HOME/.local/bin/ldd"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Build Tauri Desktop Application (.AppImage & .deb)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         with:
-          tagName: ${{ github.ref_name }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
           releaseName: 'Proton Drive Linux Desktop v__VERSION__'
           releaseBody: 'Official Proton Drive Linux Native Desktop Release'
           releaseDraft: true
           prerelease: false
+          args: --bundles deb,appimage
+
+      - name: Upload Linux Bundles as Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: proton-drive-linux-builds
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage

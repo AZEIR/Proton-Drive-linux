@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Proton Drive Linux",
+  "productName": "proton-drive-linux",
   "version": "1.0.0",
   "identifier": "com.azeir.protondrivelinux",
   "build": {
-    "devUrl": "http://localhost:8085",
-    "frontendDist": "http://localhost:8085"
+    "devUrl": "http://127.0.0.1:8085",
+    "frontendDist": "http://127.0.0.1:8085"
   },
   "app": {
     "windows": [
@@ -34,6 +34,11 @@
     ],
     "externalBin": [
       "binaries/proton-sync"
-    ]
+    ],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
   }
 }

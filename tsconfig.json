@@ -6,14 +6,20 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["bun-types"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@protontech/drive-sdk": ["sdk/client/js/dist/index.d.ts"],
+      "@protontech/drive-sdk/*": ["sdk/client/js/dist/*"],
+      "proton-drive-sdk-account": ["*"]
     }
   },
   "include": ["src/**/*", "tests/**/*"],
-  "exclude": ["node_modules", "sdk"]
+  "exclude": ["node_modules", "sdk", "sdk/**/*", "**/sdk/**"]
 }
 
