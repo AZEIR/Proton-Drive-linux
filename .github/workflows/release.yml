@@ -34,8 +34,6 @@ jobs:
             librsvg2-bin \
             libgdk-pixbuf2.0-bin \
             libgdk-pixbuf2.0-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
             patchelf \
             squashfs-tools
 
