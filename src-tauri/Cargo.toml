@@ -5,6 +5,10 @@ description = "Proton Drive Linux Client Native Desktop Application"
 authors = ["AZEIR"]
 edition = "2021"
 
+[lib]
+name = "proton_drive_linux_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "^2.0", features = [] }
 
