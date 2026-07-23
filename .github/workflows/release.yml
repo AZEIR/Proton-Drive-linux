@@ -30,7 +30,9 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            patchelf \
+            squashfs-tools
 
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
@@ -58,6 +60,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: "true"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Proton Drive Linux Desktop v__VERSION__'
