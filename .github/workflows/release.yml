@@ -15,8 +15,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout SDK Submodule
-        run: git -c fetch.recurseSubmodules=false submodule update --init sdk
+      - name: Checkout SDK Repository
+        run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk
 
       - name: Install System Dependencies for Tauri v2 & WebKitGTK 4.1
         run: |
