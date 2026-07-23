@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Proton Drive Linux",
+  "productName": "proton-drive-linux",
   "version": "1.0.0",
   "identifier": "com.azeir.protondrivelinux",
   "build": {
