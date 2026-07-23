@@ -31,6 +31,11 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            librsvg2-bin \
+            libgdk-pixbuf2.0-bin \
+            libgdk-pixbuf2.0-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
             patchelf \
             squashfs-tools
 
@@ -68,4 +73,4 @@ jobs:
           releaseBody: 'Official Proton Drive Linux Native Desktop Release'
           releaseDraft: true
           prerelease: false
-          args: --bundles deb,appimage
+          args: --verbose --bundles deb,appimage
