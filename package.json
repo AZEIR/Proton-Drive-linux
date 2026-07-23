@@ -15,14 +15,14 @@
     "@protontech/crypto": "2.0.0",
     "@protontech/drive-sdk": "file:./sdk/client/js",
     "@sentry/bun": "^10.67.0",
-    "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/api": "^2.11.0",
     "better-sqlite3": "^13.0.1",
     "chokidar": "^4.0.1",
     "ky": "^1.14.3",
     "openpgp": "^6.3.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.2.0",
+    "@tauri-apps/cli": "^2.11.0",
     "@types/bun": "^1.2.0",
     "typescript": "^5.7.0"
   },
