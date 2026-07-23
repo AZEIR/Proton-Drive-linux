@@ -68,3 +68,4 @@ jobs:
           releaseBody: 'Official Proton Drive Linux Native Desktop Release'
           releaseDraft: true
           prerelease: false
+          args: --bundles deb,appimage
