@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Checkout SDK Repository
         run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk
@@ -96,3 +98,11 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --bundles deb,appimage
+
+      - name: Upload Linux Bundles as Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: proton-drive-linux-builds
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
