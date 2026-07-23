@@ -16,7 +16,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout SDK Submodule
-        run: git submodule update --init sdk
+        run: git -c fetch.recurseSubmodules=false submodule update --init sdk
 
       - name: Install System Dependencies for Tauri v2 & WebKitGTK 4.1
         run: |
