@@ -15,6 +15,27 @@ pub fn run() {
                 let _ = sidecar_command.spawn();
             }
 
+            // Poll sidecar server port until ready, then load dashboard
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                use std::net::TcpStream;
+                use std::time::Duration;
+
+                for _ in 0..100 {
+                    if let Ok(addr) = "127.0.0.1:8085".parse() {
+                        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+                            // Give server 100ms to settle then refresh window
+                            std::thread::sleep(Duration::from_millis(100));
+                            if let Some(window) = handle.get_webview_window("main") {
+                                let _ = window.eval("window.location.href = 'http://127.0.0.1:8085';");
+                            }
+                            break;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            });
+
             // Build system tray menu items
             let open_item = MenuItemBuilder::with_id("open_dashboard", "Open Dashboard").build(app)?;
             let restart_item = MenuItemBuilder::with_id("restart_service", "Restart Service").build(app)?;
