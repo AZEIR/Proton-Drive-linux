@@ -61,6 +61,7 @@ jobs:
           bun run build
           mkdir -p src-tauri/binaries
           cp release/proton-sync src-tauri/binaries/proton-sync-x86_64-unknown-linux-gnu
+          mkdir -p src-tauri/target/release/bundle/appimage/proton-drive-linux.AppDir/usr/lib64
 
       - name: Build Tauri Desktop Application (.AppImage & .deb)
         uses: tauri-apps/tauri-action@v0
