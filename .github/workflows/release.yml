@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout SDK Repository
-        run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk
+        run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk && rm -rf sdk/.git
 
       - name: Install System Dependencies for Tauri v2 & WebKitGTK 4.1
         run: |

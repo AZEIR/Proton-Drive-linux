@@ -17,7 +17,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout SDK Repository
-        run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk
+        run: rm -rf sdk && git clone --depth 1 https://github.com/AZEIR/sdk.git sdk && rm -rf sdk/.git
 
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
