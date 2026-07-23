@@ -37,7 +37,8 @@ jobs:
             desktop-file-utils \
             hicolor-icon-theme \
             patchelf \
-            squashfs-tools
+            squashfs-tools \
+            zsync
 
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
