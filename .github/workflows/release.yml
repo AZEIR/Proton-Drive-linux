@@ -34,6 +34,8 @@ jobs:
             librsvg2-bin \
             libgdk-pixbuf2.0-bin \
             libgdk-pixbuf2.0-dev \
+            libglib2.0-bin \
+            libgtk-3-bin \
             desktop-file-utils \
             hicolor-icon-theme \
             patchelf \
