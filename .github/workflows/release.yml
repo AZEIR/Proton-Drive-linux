@@ -65,6 +65,24 @@ jobs:
           cp release/proton-sync src-tauri/binaries/proton-sync-x86_64-unknown-linux-gnu
           mkdir -p src-tauri/target/release/bundle/appimage/proton-drive-linux.AppDir/usr/lib64
 
+      - name: Create ldd wrapper for Bun binary compatibility
+        run: |
+          # Bun compiled binaries crash when ldd runs them via LD_TRACE_LOADED_OBJECTS=1
+          # (Bun's JS engine initialization fails in that environment).
+          # All proton-sync deps are already deployed by the first linuxdeploy pass,
+          # so returning empty deps in the GTK plugin's recursive pass is safe.
+          mkdir -p "$HOME/.local/bin"
+          printf '%s\n' '#!/bin/bash' \
+            'for arg in "$@"; do' \
+            '  if [[ "$arg" == *"proton-sync"* ]]; then' \
+            '    exit 0' \
+            '  fi' \
+            'done' \
+            'exec /usr/bin/ldd "$@"' \
+            > "$HOME/.local/bin/ldd"
+          chmod +x "$HOME/.local/bin/ldd"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Build Tauri Desktop Application (.AppImage & .deb)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -77,4 +95,4 @@ jobs:
           releaseBody: 'Official Proton Drive Linux Native Desktop Release'
           releaseDraft: true
           prerelease: false
-          args: --verbose --bundles deb,appimage
+          args: --bundles deb,appimage
