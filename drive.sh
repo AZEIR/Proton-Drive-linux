@@ -85,8 +85,10 @@ case "$cmd" in
     reset)
         echo "Stopping daemon..."
         stop_daemon
-        echo "Clearing local sync database at ${SYNC_DB}..."
-        echo "Installing systemd service for system tray..."
+        echo "Clearing local sync database..."
+        rm -rf "${HOME}/.config/proton-drive-sync/cache/default/proton_sync.db"*
+        rm -rf "${HOME}/.config/proton-drive/sync.db"*
+        echo "Local sync database cleared."
         mkdir -p "${HOME}/.config/systemd/user"
         if [ -f "${SCRIPT_DIR}/proton-drive-tray.service.template" ]; then
             sed -e "s|{{SCRIPT_DIR}}|${SCRIPT_DIR}|g" \
