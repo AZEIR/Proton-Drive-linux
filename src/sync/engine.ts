@@ -606,7 +606,40 @@ export class SyncEngine extends EventEmitter {
         }
       }
 
-      // 3. Process deletions first — only top-level nodes.
+      // 3. Mass Deletion & Disk Empty Wipe Safeguard for Fast Sync
+      const mappedCount = mappingsArr.length;
+      const localFilesCount = localFiles.size;
+      const isDiskEmptyWipe =
+        localFilesCount <= 1 &&
+        mappedCount > 5 &&
+        pendingDeletes.length > 0;
+      const isBulkDelete =
+        pendingDeletes.length >= 10 &&
+        pendingDeletes.length > mappedCount * 0.3;
+
+      if (!this.isBulkDeletionConfirmed && (isDiskEmptyWipe || isBulkDelete)) {
+        this.logger.warn(
+          `Fast sync bulk deletion safeguard triggered! pendingDeletes=${pendingDeletes.length}, mappedCount=${mappedCount}`,
+        );
+        this.recentDeletions = pendingDeletes.map((m) => ({
+          timestamp: Date.now(),
+          path: m.local_path,
+          nodeUid: m.node_uid,
+        }));
+        this.bulkDeletionWarning = true;
+        this.isPaused = true;
+        this.db.setConfig("is_sync_paused", "1");
+
+        const msg = isDiskEmptyWipe
+          ? `Local sync folder is empty but has ${mappedCount} tracked files. Sync paused to protect remote cloud files from accidental wipe.`
+          : `Accidental deletion safeguard: ${pendingDeletes.length} remote files are scheduled to be deleted. Sync paused.`;
+
+        this.db.log("system", "system", "failed", msg);
+        this.emit("statusChanged");
+        return;
+      }
+
+      // 4. Process deletions first — only top-level nodes.
       // Trashing a folder on the remote implicitly covers its children, so calling
       // trashNodes individually for each child would cause them to appear as separate
       // entries in the remote trash (matching webapp behaviour requires folder-only trash).

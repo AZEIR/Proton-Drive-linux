@@ -571,6 +571,32 @@ describe("SyncEngine", () => {
             // Sync Engine must have AUTO-PAUSED to protect the remote files from being deleted
             expect((engine as any).isPaused).toBe(true);
         });
+
+        it("should trigger fastSync bulk deletion safeguard and auto-pause if mapped files are missing locally", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            // Map 10 files in DB, but NO local files exist
+            for (let i = 1; i <= 10; i++) {
+                db.setMapping({
+                    local_path: `fast-file-${i}.txt`,
+                    node_uid: `fast-uid-${i}`,
+                    is_dir: 0,
+                    size: 10,
+                    mtime: Date.now(),
+                    sha1: "abc",
+                    remote_revision_uid: `rev-${i}`,
+                    remote_mtime: Date.now()
+                });
+            }
+
+            (engine as any).isStarted = true;
+            await engine.fastSync();
+
+            // fastSync must AUTO-PAUSE to protect remote files
+            expect((engine as any).isPaused).toBe(true);
+            expect((engine as any).bulkDeletionWarning).toBe(true);
+        });
     });
 });
 

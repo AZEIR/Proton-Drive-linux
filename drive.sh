@@ -44,7 +44,8 @@ start_daemon() {
         export PROTON_MOUNT_POINT="$TARGET_DIR"
     fi
     echo "Starting Proton Drive daemon (profile: ${PROFILE})..."
-    PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" &
+    mkdir -p "${HOME}/.config/proton-drive-sync"
+    PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" > "${HOME}/.config/proton-drive-sync/daemon.log" 2>&1 &
 }
 
 stop_daemon() {
@@ -75,8 +76,18 @@ case "$cmd" in
         echo "Web Dashboard: http://localhost:8085"
         ;;
     logs)
-        echo "Tailing daemon log (Ctrl+C to exit)..."
-        tail -F "${HOME}/.config/proton-drive/daemon.log"
+        LOG_FILE="${HOME}/.local/state/proton-drive-cli/proton-drive.log"
+        DAEMON_LOG="${HOME}/.config/proton-drive-sync/daemon.log"
+        echo "Tailing daemon logs (Ctrl+C to exit)..."
+        if [ -f "$LOG_FILE" ] && [ -f "$DAEMON_LOG" ]; then
+            tail -F "$DAEMON_LOG" "$LOG_FILE"
+        elif [ -f "$LOG_FILE" ]; then
+            tail -F "$LOG_FILE"
+        else
+            mkdir -p "${HOME}/.config/proton-drive-sync"
+            touch "$DAEMON_LOG"
+            tail -F "$DAEMON_LOG"
+        fi
         ;;
     ui|dashboard)
         PORT=8085
@@ -96,10 +107,13 @@ case "$cmd" in
     reset)
         echo "Stopping daemon and tray..."
         stop_daemon
-        echo "Clearing local sync database..."
-        rm -rf "${HOME}/.config/proton-drive-sync/cache/default/proton_sync.db"*
-        rm -rf "${HOME}/.config/proton-drive/sync.db"*
-        echo "Local sync database cleared."
+        echo "Clearing local sync databases, state, and caches..."
+        rm -rf "${HOME}/.config/proton-drive-sync"*
+        rm -rf "${HOME}/.config/proton-drive"*
+        rm -rf "${HOME}/.local/share/proton-drive-cli"*
+        rm -rf "${HOME}/.local/state/proton-drive-cli"*
+        rm -rf "${HOME}/.cache/proton-drive-cli"*
+        echo "Local sync state completely cleared."
         echo "Reset complete. Start daemon with: ./drive.sh start [path]"
         ;;
     uninstall-tray)
@@ -112,7 +126,7 @@ case "$cmd" in
         ;;
     test)
         echo "Running automated test suite..."
-        cd "$SCRIPT_DIR" && bun test tests/unit tests/integration
+        cd "$SCRIPT_DIR" && bun test tests/
         ;;
     help|--help|-h)
         show_help
