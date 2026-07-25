@@ -45,7 +45,14 @@ start_daemon() {
     fi
     echo "Starting Proton Drive daemon (profile: ${PROFILE})..."
     mkdir -p "${HOME}/.config/proton-drive-sync"
-    PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" > "${HOME}/.config/proton-drive-sync/daemon.log" 2>&1 &
+    nohup env PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" > "${HOME}/.config/proton-drive-sync/daemon.log" 2>&1 &
+    
+    if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+        if [ -f "$TRAY_SCRIPT" ]; then
+            echo "Starting system tray..."
+            nohup python3 "$TRAY_SCRIPT" > "${HOME}/.config/proton-drive-sync/tray.log" 2>&1 &
+        fi
+    fi
 }
 
 stop_daemon() {
@@ -71,7 +78,7 @@ case "$cmd" in
         start_daemon "$2"
         ;;
     status)
-        echo "Daemon status:"; pgrep -fl "${DAEMON_BIN}" || echo "Not running"
+        echo "Daemon status:"; pgrep -fl "proton-sync" || echo "Not running"
         echo "Tray status:"; pgrep -fl "proton-drive-tray.py" || echo "Not running"
         echo "Web Dashboard: http://localhost:8085"
         ;;

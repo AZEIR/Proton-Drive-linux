@@ -139,7 +139,11 @@ class ProtonDriveTrayApp:
 
         # Update icon path/name
         if has_indicator:
-            self.indicator.set_icon_full(icon_name, f"Proton Drive: {status}")
+            icon_file = os.path.join(ICONS_DIR, f"{icon_name}.png")
+            if os.path.isfile(icon_file):
+                self.indicator.set_icon_full(icon_file, f"Proton Drive: {status}")
+            else:
+                self.indicator.set_icon_full(icon_name, f"Proton Drive: {status}")
         else:
             self.status_icon.set_from_file(os.path.join(ICONS_DIR, f"{icon_name}.png"))
 
