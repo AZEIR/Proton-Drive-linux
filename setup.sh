@@ -91,10 +91,22 @@ Environment=PATH=${PATH}
 WantedBy=default.target
 EOF
 
-# Clean up any legacy separate tray service if present
-systemctl --user stop proton-drive-tray.service 2>/dev/null || true
-systemctl --user disable proton-drive-tray.service 2>/dev/null || true
-rm -f "${SYSTEMD_DIR}/proton-drive-tray.service"
+# Install desktop autostart entry dynamically
+AUTOSTART_DIR="${HOME}/.config/autostart"
+mkdir -p "${AUTOSTART_DIR}"
+cat <<EOF > "${SCRIPT_DIR}/proton-drive-tray.desktop"
+[Desktop Entry]
+Type=Application
+Name=Proton Drive Tray
+Comment=Proton Drive System Tray Status Icon
+Exec=${SCRIPT_DIR}/proton-drive-tray.py
+Icon=${SCRIPT_DIR}/src-tauri/icons/icon.png
+Terminal=false
+Categories=Network;FileTransfer;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+EOF
+cp "${SCRIPT_DIR}/proton-drive-tray.desktop" "${AUTOSTART_DIR}/proton-drive-tray.desktop"
 
 systemctl --user daemon-reload
 
