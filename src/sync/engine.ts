@@ -109,18 +109,37 @@ export class SyncEngine extends EventEmitter {
     this.logger = logger;
     this.eventsProvider = eventsProvider;
 
-    // Load config with environment variable override
+    const oldSyncPath = this.db.getConfig("local_sync_path", "");
+    const oldMode = this.db.getConfig("sync_mode", "");
+
     const envPath = process.env.PROTON_MOUNT_POINT;
+    let newSyncPath = oldSyncPath;
     if (envPath) {
-      this.db.setConfig("local_sync_path", path.resolve(envPath));
+      newSyncPath = path.resolve(envPath);
+      this.db.setConfig("local_sync_path", newSyncPath);
+    }
+    const defaultPath = path.join(homedir(), "P-Drive");
+    this.localSyncRoot = newSyncPath || defaultPath;
+
+    let newMode = oldMode;
+    if (process.env.PROTON_SYNC_MODE) {
+      newMode = process.env.PROTON_SYNC_MODE;
+      this.db.setConfig("sync_mode", newMode);
     }
 
-    const defaultPath = path.join(homedir(), "P-Drive");
-    this.localSyncRoot = path.resolve(
-      this.db.getConfig("local_sync_path", defaultPath),
-    );
+    if (oldSyncPath && oldSyncPath !== this.localSyncRoot) {
+      this.logger.warn(`Migration detected: localSyncRoot changed from ${oldSyncPath} to ${this.localSyncRoot}. Wiping local mappings to prevent remote trashing.`);
+      this.db.clearMappings();
+      this.db.clearPendingDeletes();
+    } else if (oldMode && oldMode !== newMode) {
+      this.logger.warn(`Migration detected: sync_mode changed from ${oldMode} to ${newMode}. Wiping local mappings to prevent remote trashing.`);
+      this.db.clearMappings();
+      this.db.clearPendingDeletes();
+    }
+
     this.isPaused = this.db.getConfig("is_sync_paused", "0") === "1";
     this.ignoreMatcher = new IgnoreMatcher(this.localSyncRoot);
+    this.setMaxListeners(100);
   }
 
   getLocalSyncRoot(): string {
@@ -228,8 +247,11 @@ export class SyncEngine extends EventEmitter {
 
     // Ensure local sync directory exists
     if (!existsSync(this.localSyncRoot)) {
+      this.logger.warn(`Local sync root folder ${this.localSyncRoot} is missing on startup! Recreating it and wiping local mappings to trigger full restore instead of remote deletion.`);
       this.wasRootDeleted = true;
       mkdirSync(this.localSyncRoot, { recursive: true });
+      this.db.clearMappings();
+      this.db.clearPendingDeletes();
     } else {
       this.wasRootDeleted = false;
     }
@@ -241,6 +263,29 @@ export class SyncEngine extends EventEmitter {
       "completed",
       `Sync engine started at ${this.localSyncRoot}`,
     );
+
+    // Cross-Account Profile Isolation & Migration Guard
+    try {
+      if (typeof this.auth.getUser === "function") {
+        const user = await this.auth.getUser();
+        const currentUid = user?.ID || user?.uid || "";
+        const currentEmail = user?.Email || "";
+        if (currentUid) {
+          const boundUid = this.db.getAccountUid();
+          if (boundUid && boundUid !== currentUid) {
+            const boundEmail = this.db.getAccountEmail() || boundUid;
+            this.logger.warn(`Account migration detected: Folder was bound to ${boundEmail}, but now logged into ${currentEmail}. Wiping local mappings to prevent remote trashing and adopting new account.`);
+            this.db.clearMappings();
+            this.db.clearPendingDeletes();
+            this.db.setAccountInfo(currentUid, currentEmail);
+          } else if (!boundUid) {
+            this.db.setAccountInfo(currentUid, currentEmail);
+          }
+        }
+      }
+    } catch (err: any) {
+      this.logger.error("Error in cross-account migration check:", err);
+    }
 
     // Restore any pending deletes that survived a crash/restart
     for (const row of this.db.getPendingDeletes()) {
@@ -1243,6 +1288,33 @@ export class SyncEngine extends EventEmitter {
       }
     }
 
+    // Safety Net: Mass Deletion Protection Threshold Guard
+    // Count how many files would be deleted on the remote server
+    let projectedDeletions = 0;
+    for (const relPath of allPaths) {
+      const local = localFiles.get(relPath);
+      const remote = remoteFiles.get(relPath);
+      const mapped = mappingsCache.get(relPath);
+      if (!local && remote && mapped) {
+        const remoteRevUid = remote.activeRevision?.ok ? remote.activeRevision.value.uid : "";
+        const remoteChanged = remoteRevUid !== "" && remoteRevUid !== mapped.remote_revision_uid;
+        if (!remoteChanged) {
+          projectedDeletions++;
+        }
+      }
+    }
+
+    const MASS_DELETION_LIMIT = 10;
+    if (projectedDeletions > MASS_DELETION_LIMIT) {
+      const msg = `MASS DELETION SAFETY GUARD TRIGGERED! Reconciliation detected ${projectedDeletions} local file deletions (threshold is ${MASS_DELETION_LIMIT}). Auto-pausing sync engine to prevent accidental cloud data loss.`;
+      this.logger.error(msg);
+      this.db.log("system", "system", "failed", msg);
+      this.isPaused = true;
+      this.db.setConfig("is_sync_paused", "1");
+      this.emit("statusChanged");
+      return;
+    }
+
     // 1. Process directories sequentially, sorted by depth (shallowest first)
     // This ensures parent directories exist before any files are processed/reconciled.
     directoryPaths.sort((a, b) => a.split("/").length - b.split("/").length);
@@ -1579,6 +1651,8 @@ export class SyncEngine extends EventEmitter {
       // Recreate local sync root safely
       mkdirSync(this.localSyncRoot, { recursive: true });
       this.wasRootDeleted = true;
+      this.db.clearMappings();
+      this.db.clearPendingDeletes();
 
       // Trigger a rebuild and restoration of files (guard against re-entry while scan is running)
       if (!this.isScanning) {

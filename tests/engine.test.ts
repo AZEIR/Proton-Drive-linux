@@ -522,6 +522,56 @@ describe("SyncEngine", () => {
             expect(attempts).toBe(2);
             expect(result).toBe("success");
         });
+
+        it("should trigger Mass Deletion Guard and auto-pause if > 10 mapped files are missing locally", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            // Map 15 files in DB, but NO local files exist
+            const remoteUids: string[] = [];
+            for (let i = 1; i <= 15; i++) {
+                const uid = `mass-uid-${i}`;
+                const relPath = `file-${i}.txt`;
+                remoteUids.push(uid);
+                db.setMapping({
+                    local_path: relPath,
+                    node_uid: uid,
+                    is_dir: 0,
+                    size: 10,
+                    mtime: Date.now(),
+                    sha1: "abc",
+                    remote_revision_uid: `rev-${i}`,
+                    remote_mtime: Date.now()
+                });
+            }
+
+            // Mock remote files matching the DB
+            mockSdk.iterateFolderChildrenNodeUids = async function* () {
+                for (const uid of remoteUids) yield uid;
+            };
+            mockSdk.iterateNodes = async function* (uids: string[]) {
+                for (const uid of uids) {
+                    const idx = uid.replace("mass-uid-", "");
+                    yield { 
+                        uid, 
+                        name: { ok: true, value: `file-${idx}.txt` }, 
+                        modificationTime: new Date(), 
+                        creationTime: new Date(), 
+                        size: 10, 
+                        type: 1, 
+                        mimeType: "text/plain",
+                        activeRevision: { ok: true, value: { uid: `rev-${idx}`, state: 1, claimedModificationTime: Date.now(), creationTime: new Date() } }
+                    };
+                }
+            };
+
+            (engine as any).isStarted = true;
+            await engine.forceSync();
+
+            // Sync Engine must have AUTO-PAUSED to protect the remote files from being deleted
+            expect((engine as any).isPaused).toBe(true);
+        });
     });
 });
+
 
