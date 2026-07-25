@@ -4,6 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DAEMON_BIN="${SCRIPT_DIR}/release/proton-sync"
 TRAY_SCRIPT="${SCRIPT_DIR}/proton-drive-tray.py"
+TRAY_SERVICE_NAME="proton-drive-tray.service"
 SYNC_DB="${HOME}/.config/proton-drive/sync.db"
 
 show_help() {
