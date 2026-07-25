@@ -28,21 +28,32 @@ show_help() {
     echo "============================================="
 }
 
-# Helper to start daemon (and tray if display available)
+# Helper to start daemon
 start_daemon() {
     CUSTOM_PATH="$1"
+    PROFILE="${2:-default}"
     if [ -n "$CUSTOM_PATH" ]; then
-        export PROTON_MOUNT_POINT="$(realpath "$CUSTOM_PATH")"
-        echo "Setting sync folder to: ${PROTON_MOUNT_POINT}"
+        RESOLVED_PATH="$(eval echo "$CUSTOM_PATH")"
+        fusermount -u "$RESOLVED_PATH" 2>/dev/null || umount -l "$RESOLVED_PATH" 2>/dev/null || true
+        TARGET_DIR="$(mkdir -p "$RESOLVED_PATH" && cd "$RESOLVED_PATH" && pwd)"
+        export PROTON_MOUNT_POINT="$TARGET_DIR"
+        echo "Setting sync folder to: ${TARGET_DIR}"
+    else
+        TARGET_DIR="${HOME}/P-Drive"
+        mkdir -p "$TARGET_DIR"
+        export PROTON_MOUNT_POINT="$TARGET_DIR"
     fi
-    echo "Starting Proton Drive daemon via systemd..."
-    systemctl --user start proton-sync.service
-    # Tray is bound to daemon, it will start automatically if needed
+    echo "Starting Proton Drive daemon (profile: ${PROFILE})..."
+    PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" &
 }
 
 stop_daemon() {
     echo "Stopping Proton Drive daemon and tray..."
-    systemctl --user stop proton-sync.service
+    pkill -f "proton-sync" 2>/dev/null || true
+    pkill -f "proton-fuse" 2>/dev/null || true
+    pkill -f "proton-drive-tray.py" 2>/dev/null || true
+    systemctl --user stop proton-sync.service 2>/dev/null || true
+    systemctl --user stop proton-drive-tray.service 2>/dev/null || true
     echo "Stopped."
 }
 
@@ -83,27 +94,13 @@ case "$cmd" in
         xdg-open "http://localhost:8085" 2>/dev/null || echo "Open http://localhost:8085 to sign in"
         ;;
     reset)
-        echo "Stopping daemon..."
+        echo "Stopping daemon and tray..."
         stop_daemon
         echo "Clearing local sync database..."
         rm -rf "${HOME}/.config/proton-drive-sync/cache/default/proton_sync.db"*
         rm -rf "${HOME}/.config/proton-drive/sync.db"*
         echo "Local sync database cleared."
-        mkdir -p "${HOME}/.config/systemd/user"
-        if [ -f "${SCRIPT_DIR}/proton-drive-tray.service.template" ]; then
-            sed -e "s|{{SCRIPT_DIR}}|${SCRIPT_DIR}|g" \
-                -e "s|{{DISPLAY}}|${DISPLAY:-:0}|g" \
-                -e "s|{{WAYLAND_DISPLAY}}|${WAYLAND_DISPLAY:-wayland-0}|g" \
-                -e "s|{{PATH}}|${PATH}|g" \
-                -e "s|{{PORT}}|8085|g" \
-                "${SCRIPT_DIR}/proton-drive-tray.service.template" > "${HOME}/.config/systemd/user/${TRAY_SERVICE_NAME}"
-            systemctl --user daemon-reload
-            systemctl --user enable "$TRAY_SERVICE_NAME"
-            systemctl --user restart "$TRAY_SERVICE_NAME" || true
-            echo "System tray autostart enabled."
-        else
-            echo "Error: proton-drive-tray.service.template not found."
-        fi
+        echo "Reset complete. Start daemon with: ./drive.sh start [path]"
         ;;
     uninstall-tray)
         echo "Uninstalling system tray service..."
