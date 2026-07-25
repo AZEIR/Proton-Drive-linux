@@ -16,7 +16,7 @@ STATUS_URL = f"http://localhost:{PORT}/api/status"
 
 # Set up icon paths
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-ICONS_DIR = os.path.join(BASE_DIR, "src-tauri", "icons")
+ICONS_DIR = os.path.join(BASE_DIR, "icons")
 
 # Try to import AppIndicator
 has_indicator = False
