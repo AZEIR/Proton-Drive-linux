@@ -97,12 +97,10 @@ systemctl --user disable proton-drive-tray.service 2>/dev/null || true
 rm -f "${SYSTEMD_DIR}/proton-drive-tray.service"
 
 systemctl --user daemon-reload
-systemctl --user enable "$SERVICE_NAME"
-systemctl --user restart "$SERVICE_NAME" || true
 
 echo ""
 echo "============================================="
 echo "  Setup complete!"
-echo "  Service status: systemctl --user status proton-sync"
-echo "  Dashboard:      http://localhost:8085"
+echo "  Start daemon manually with: ./drive.sh start"
+echo "  Dashboard will be at:      http://localhost:8085"
 echo "============================================="

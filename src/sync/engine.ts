@@ -1261,16 +1261,10 @@ export class SyncEngine extends EventEmitter {
       const remote = remoteFiles.get(relPath);
       const mapped = mappingsCache.get(relPath);
 
-      // Detect orphan empty remote folders: exists on remote, not local, no DB mapping,
-      // and has no children in the remote scan (i.e. the folder is empty). These are
-      // artifacts of previous incomplete operations — trash them rather than re-downloading.
-      if (!local && remote && !mapped && remote.type === NodeType.Folder && !remoteParentPaths.has(relPath)) {
-        this.logger.warn(
-          `Trashing orphan empty remote folder ${relPath} — no local, no mapping, no children`,
-        );
-        await this.deleteRemoteNode(remote.uid, relPath);
-        continue;
-      }
+      // REMOVED: Orphan empty remote folder auto-trashing was removed because it
+      // cannot reliably distinguish between genuinely orphaned folders and folders
+      // that simply haven't been synced yet (e.g. after a mapping wipe or fresh install).
+
 
       await this.reconcilePath(relPath, local, remote, mapped);
     }
