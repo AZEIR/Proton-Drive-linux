@@ -24,6 +24,10 @@ show_help() {
     echo "  ui                - Open Web Dashboard in browser (http://localhost:8085)"
     echo "  reset             - Clear local sync database (forces full re-sync)"
     echo "  test              - Run automated unit & integration test suite"
+    echo ""
+    echo "Network & Performance Commands:"
+    echo "  wifi-safe [on|off] - Enable/disable Wi-Fi Safe Mode (pacing & 1-file concurrency)"
+    echo "  limit [KB/s]       - Set maximum bandwidth speed limit (e.g. limit 1000)"
     echo "============================================="
 }
 
