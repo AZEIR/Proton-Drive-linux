@@ -4,8 +4,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DAEMON_BIN="${SCRIPT_DIR}/release/proton-sync"
 TRAY_SCRIPT="${SCRIPT_DIR}/proton-drive-tray.py"
-TRAY_SERVICE_NAME="proton-drive-tray.service"
-SYNC_DB="${HOME}/.config/proton-drive/sync.db"
 
 show_help() {
     echo "============================================="
@@ -44,16 +42,24 @@ start_daemon() {
         export PROTON_MOUNT_POINT="$TARGET_DIR"
     fi
     echo "Starting Proton Drive daemon (profile: ${PROFILE})..."
-    PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" &
+    mkdir -p "${HOME}/.config/proton-drive-sync"
+    nohup env PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" > "${HOME}/.config/proton-drive-sync/daemon.log" 2>&1 &
+    
+    if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+        if [ -f "$TRAY_SCRIPT" ]; then
+            if ! pgrep -f "proton-drive-tray.py" >/dev/null 2>&1; then
+                echo "Starting system tray..."
+                nohup python3 "$TRAY_SCRIPT" > "${HOME}/.config/proton-drive-sync/tray.log" 2>&1 &
+            fi
+        fi
+    fi
 }
 
 stop_daemon() {
     echo "Stopping Proton Drive daemon and tray..."
     pkill -f "proton-sync" 2>/dev/null || true
-    pkill -f "proton-fuse" 2>/dev/null || true
     pkill -f "proton-drive-tray.py" 2>/dev/null || true
     systemctl --user stop proton-sync.service 2>/dev/null || true
-    systemctl --user stop proton-drive-tray.service 2>/dev/null || true
     echo "Stopped."
 }
 
@@ -70,13 +76,23 @@ case "$cmd" in
         start_daemon "$2"
         ;;
     status)
-        echo "Daemon status:"; pgrep -fl "${DAEMON_BIN}" || echo "Not running"
+        echo "Daemon status:"; pgrep -fl "proton-sync" || echo "Not running"
         echo "Tray status:"; pgrep -fl "proton-drive-tray.py" || echo "Not running"
         echo "Web Dashboard: http://localhost:8085"
         ;;
     logs)
-        echo "Tailing daemon log (Ctrl+C to exit)..."
-        tail -F "${HOME}/.config/proton-drive/daemon.log"
+        LOG_FILE="${HOME}/.local/state/proton-drive-cli/proton-drive.log"
+        DAEMON_LOG="${HOME}/.config/proton-drive-sync/daemon.log"
+        echo "Tailing daemon logs (Ctrl+C to exit)..."
+        if [ -f "$LOG_FILE" ] && [ -f "$DAEMON_LOG" ]; then
+            tail -F "$DAEMON_LOG" "$LOG_FILE"
+        elif [ -f "$LOG_FILE" ]; then
+            tail -F "$LOG_FILE"
+        else
+            mkdir -p "${HOME}/.config/proton-drive-sync"
+            touch "$DAEMON_LOG"
+            tail -F "$DAEMON_LOG"
+        fi
         ;;
     ui|dashboard)
         PORT=8085
@@ -96,23 +112,18 @@ case "$cmd" in
     reset)
         echo "Stopping daemon and tray..."
         stop_daemon
-        echo "Clearing local sync database..."
-        rm -rf "${HOME}/.config/proton-drive-sync/cache/default/proton_sync.db"*
-        rm -rf "${HOME}/.config/proton-drive/sync.db"*
-        echo "Local sync database cleared."
+        echo "Clearing local sync databases, state, and caches..."
+        rm -rf "${HOME}/.config/proton-drive-sync"*
+        rm -rf "${HOME}/.config/proton-drive"*
+        rm -rf "${HOME}/.local/share/proton-drive-cli"*
+        rm -rf "${HOME}/.local/state/proton-drive-cli"*
+        rm -rf "${HOME}/.cache/proton-drive-cli"*
+        echo "Local sync state completely cleared."
         echo "Reset complete. Start daemon with: ./drive.sh start [path]"
-        ;;
-    uninstall-tray)
-        echo "Uninstalling system tray service..."
-        systemctl --user stop "$TRAY_SERVICE_NAME" 2>/dev/null || true
-        systemctl --user disable "$TRAY_SERVICE_NAME" 2>/dev/null || true
-        rm -f "${HOME}/.config/systemd/user/${TRAY_SERVICE_NAME}"
-        systemctl --user daemon-reload
-        echo "System tray service uninstalled."
         ;;
     test)
         echo "Running automated test suite..."
-        cd "$SCRIPT_DIR" && bun test tests/unit tests/integration
+        cd "$SCRIPT_DIR" && bun test tests/
         ;;
     help|--help|-h)
         show_help

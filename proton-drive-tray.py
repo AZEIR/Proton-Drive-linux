@@ -5,10 +5,24 @@ import time
 import threading
 import webbrowser
 import requests
+import fcntl
 
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib
+
+# Single-instance file lock
+LOCK_FILE = os.path.expanduser("~/.config/proton-drive-sync/tray.lock")
+
+def ensure_single_instance():
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+    try:
+        lock_fd = open(LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_fd
+    except (IOError, OSError):
+        # Tray process already running, exit cleanly
+        sys.exit(0)
 
 # Read environment variables
 PORT = int(os.environ.get("PROTON_SYNC_PORT", "8085"))
@@ -16,7 +30,7 @@ STATUS_URL = f"http://localhost:{PORT}/api/status"
 
 # Set up icon paths
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-ICONS_DIR = os.path.join(BASE_DIR, "src-tauri", "icons")
+ICONS_DIR = os.path.join(BASE_DIR, "icons")
 
 # Try to import AppIndicator
 has_indicator = False
@@ -190,10 +204,13 @@ class ProtonDriveTrayApp:
 
     def quit_app(self, widget):
         self.stop_flag.set()
-        os.system("systemctl --user stop proton-sync.service 2>/dev/null")
+        os.system("systemctl --user stop proton-sync.service 2>/dev/null || true")
+        os.system("pkill -f proton-sync 2>/dev/null || true")
         Gtk.main_quit()
 
 def main():
+    _lock = ensure_single_instance()
+
     # Allow KeyboardInterrupt (Ctrl+C) to terminate the Gtk main loop
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)

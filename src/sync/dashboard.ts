@@ -23,7 +23,7 @@ export function startDashboard(
     port: number = 8085,
     fod?: FodHooks,
 ) {
-    const logger = session.logger;
+    const logger = session?.logger ?? console;
     let isAuthenticating = false;
     let cachedEmail = 'Not Logged In';
 
@@ -37,7 +37,7 @@ export function startDashboard(
             if (url.pathname === '/api/status') {
                 let email = 'Not Logged In';
                 try {
-                    if (session.auth.isLoggedIn()) {
+                    if (session?.auth?.isLoggedIn()) {
                         const primaryAddress = await session.addresses.getOwnPrimaryAddress();
                         email = primaryAddress.email;
                         cachedEmail = email;
@@ -55,7 +55,7 @@ export function startDashboard(
                     // FOD mode status
                     const uploads = fod.getUploads();
                     return Response.json({
-                        status:          session.auth.isLoggedIn() ? 'synced' : 'auth_required',
+                        status:          session?.auth?.isLoggedIn() ? 'synced' : 'auth_required',
                         mode:            'fod',
                         mountPoint:      fod.mountPoint,
                         activeTransfers: uploads.map((u: any) => ({ ...u, type: 'upload' })),
@@ -69,12 +69,12 @@ export function startDashboard(
                 }
 
                 return Response.json({
-                    status:            engine!.getStatus(),
+                    status:            engine?.getStatus() ?? 'offline',
                     mode:              'full',
-                    activeTransfers:   engine!.getActiveTransfers(),
-                    localSyncRoot:     engine!.getLocalSyncRoot(),
-                    isPaused:          engine!.getStatus() === 'paused',
-                    bulkDeletionCount: engine!.getBulkDeletionCount(),
+                    activeTransfers:   engine?.getActiveTransfers() ?? [],
+                    localSyncRoot:     engine?.getLocalSyncRoot() ?? '',
+                    isPaused:          engine?.getStatus() === 'paused',
+                    bulkDeletionCount: engine?.getBulkDeletionCount() ?? 0,
                     email,
                     isAuthenticating,
                 }, {

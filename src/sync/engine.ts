@@ -477,13 +477,14 @@ export class SyncEngine extends EventEmitter {
       );
       await this.reconcile(localFiles, remoteFiles);
 
+      await this.postSyncCleanup();
       this.db.log(
         "system",
         "system",
         "completed",
         "Full synchronization complete",
       );
-      this.db.checkpoint();
+      this.db.setConfig("full_sync_completed", "1");
     } catch (error: any) {
       this.logger.error("Full sync reconciliation failed:", error);
       this.db.log(
@@ -504,9 +505,12 @@ export class SyncEngine extends EventEmitter {
   async startupSync(): Promise<void> {
     await this.cleanupTempFiles(this.localSyncRoot);
     const mappingsCount = this.db.getMappingCount();
-    if (mappingsCount === 0) {
+    const isFullSyncCompleted =
+      this.db.getConfig("full_sync_completed", "0") === "1";
+
+    if (mappingsCount === 0 || !isFullSyncCompleted) {
       this.logger.info(
-        "Performing initial full repository scan and reconciliation.",
+        "Performing full repository scan and reconciliation (initial or incomplete sync).",
       );
       await this.forceSync();
     } else {
@@ -606,7 +610,40 @@ export class SyncEngine extends EventEmitter {
         }
       }
 
-      // 3. Process deletions first — only top-level nodes.
+      // 3. Mass Deletion & Disk Empty Wipe Safeguard for Fast Sync
+      const mappedCount = mappingsArr.length;
+      const localFilesCount = localFiles.size;
+      const isDiskEmptyWipe =
+        localFilesCount <= 1 &&
+        mappedCount > 5 &&
+        pendingDeletes.length > 0;
+      const isBulkDelete =
+        pendingDeletes.length >= 10 &&
+        pendingDeletes.length > mappedCount * 0.3;
+
+      if (!this.isBulkDeletionConfirmed && (isDiskEmptyWipe || isBulkDelete)) {
+        this.logger.warn(
+          `Fast sync bulk deletion safeguard triggered! pendingDeletes=${pendingDeletes.length}, mappedCount=${mappedCount}`,
+        );
+        this.recentDeletions = pendingDeletes.map((m) => ({
+          timestamp: Date.now(),
+          path: m.local_path,
+          nodeUid: m.node_uid,
+        }));
+        this.bulkDeletionWarning = true;
+        this.isPaused = true;
+        this.db.setConfig("is_sync_paused", "1");
+
+        const msg = isDiskEmptyWipe
+          ? `Local sync folder is empty but has ${mappedCount} tracked files. Sync paused to protect remote cloud files from accidental wipe.`
+          : `Accidental deletion safeguard: ${pendingDeletes.length} remote files are scheduled to be deleted. Sync paused.`;
+
+        this.db.log("system", "system", "failed", msg);
+        this.emit("statusChanged");
+        return;
+      }
+
+      // 4. Process deletions first — only top-level nodes.
       // Trashing a folder on the remote implicitly covers its children, so calling
       // trashNodes individually for each child would cause them to appear as separate
       // entries in the remote trash (matching webapp behaviour requires folder-only trash).
@@ -686,13 +723,13 @@ export class SyncEngine extends EventEmitter {
       );
       await Promise.all(workers);
 
+      await this.postSyncCleanup();
       this.db.log(
         "system",
         "system",
         "completed",
         "Fast startup reconciliation complete",
       );
-      this.db.checkpoint();
     } catch (error: any) {
       this.logger.error("Fast sync failed:", error);
       this.db.log(
@@ -1389,10 +1426,11 @@ export class SyncEngine extends EventEmitter {
     mapped: SyncMapping | undefined,
   ): Promise<void> {
     // Early check: if the path is ignored, clean up database mapping and skip reconciliation
-    const isDir =
+    const isDir = Boolean(
       (local && local.isDir) ||
       (remote && remote.type === NodeType.Folder) ||
-      (mapped && mapped.is_dir === 1);
+      (mapped && mapped.is_dir === 1)
+    );
     if (this.ignoreMatcher.shouldIgnore(relPath, isDir)) {
       if (mapped) {
         this.logger.info(`Path ${relPath} is now ignored. Removing mapping.`);
@@ -2773,10 +2811,32 @@ export class SyncEngine extends EventEmitter {
               progressCallback,
             );
             await downloadController.completion();
+            await writer.end();
+
+            // 1. Pre-Swap Byte-Count Verification
+            const tmpStat = await stat(tmpPath);
+            if (size > 0 && tmpStat.size !== size) {
+              await unlink(tmpPath).catch(() => {});
+              throw new Error(
+                `Download size mismatch for ${relativePath}: expected ${size} bytes, got ${tmpStat.size} bytes`,
+              );
+            }
+
+            // 2. Pre-Swap SHA-1 Checksum Verification
+            const expectedSha1 = revision.claimedSha1 ?? (revision as any).sha1;
+            if (expectedSha1) {
+              const actualSha1 = await getSha1(tmpPath);
+              if (actualSha1 !== expectedSha1) {
+                await unlink(tmpPath).catch(() => {});
+                throw new Error(
+                  `SHA-1 checksum mismatch for ${relativePath}: expected ${expectedSha1}, got ${actualSha1}`,
+                );
+              }
+            }
           });
-          await writer.end();
         } catch (downloadErr) {
-          await writableStream.abort();
+          await writableStream.abort().catch(() => {});
+          await unlink(tmpPath).catch(() => {});
           throw downloadErr;
         } finally {
           this.ignoredLocalChanges.delete(tmpPath);
@@ -3319,25 +3379,73 @@ export class SyncEngine extends EventEmitter {
     }, durationMs);
   }
 
-  /** Removes orphaned .tmp-* files left by a previous crash during download */
+  /** Safely removes orphaned .tmp-<timestamp> files left by previous crashes or interrupted downloads */
   private async cleanupTempFiles(dir: string): Promise<void> {
     if (!existsSync(dir)) return;
     try {
       const entries = await readdir(dir, { withFileTypes: true });
+      const now = Date.now();
       await Promise.all(
         entries.map(async (entry) => {
           const fullPath = path.join(dir, entry.name);
           if (entry.isDirectory()) {
             await this.cleanupTempFiles(fullPath);
-          } else if (/\.tmp-\d+$/.test(entry.name)) {
-            this.logger.warn(`Removing orphaned temp file: ${entry.name}`);
-            await unlink(fullPath).catch(() => {});
+          } else {
+            // Target only daemon download temporary files ending in .tmp-<13+ digits>
+            const match = entry.name.match(/\.tmp-(\d{13,})$/);
+            if (match) {
+              const relPath = path.relative(this.localSyncRoot, fullPath);
+
+              // 1. Skip if file is currently being actively downloaded
+              if (this.activeDownloads.has(relPath) || this.activeDownloads.has(relPath.replace(/\.tmp-\d+$/, ''))) return;
+
+              // 2. Check timestamp: skip if created within last 2 minutes (< 120_000ms)
+              try {
+                const fnTs = parseInt(match[1], 10);
+                if (!isNaN(fnTs)) {
+                  const ageMs = now - fnTs;
+                  if (ageMs < 120_000) return;
+                }
+              } catch {}
+
+              // Safe to clean up orphaned daemon download temp file
+              this.logger.warn(`Removing stale daemon download temp file: ${entry.name}`);
+              await unlink(fullPath).catch(() => {});
+            }
           }
         }),
       );
     } catch (err) {
       this.logger.warn(`Failed to clean temp files in ${dir}:`, err);
     }
+  }
+
+  /** Performs safe post-sync cleanup and maintenance after full and fast sync passes */
+  private async postSyncCleanup(): Promise<void> {
+    // 1. Safe cleanup of orphaned daemon download temp files
+    await this.cleanupTempFiles(this.localSyncRoot);
+
+    // 2. Database maintenance: prune activity logs older than 30 days
+    try {
+      this.db.pruneOldLogs();
+    } catch (err) {
+      this.logger.warn("Failed to prune old activity logs:", err);
+    }
+
+    // 3. Prune expired in-memory suppression caches
+    const now = Date.now();
+    for (const [uid, expiry] of this.recentlyTrashedNodeUids.entries()) {
+      if (expiry < now) this.recentlyTrashedNodeUids.delete(uid);
+    }
+    for (const [uid, expiry] of this.recentlyUploadedNodeUids.entries()) {
+      if (expiry < now) this.recentlyUploadedNodeUids.delete(uid);
+    }
+    for (const [p, expiry] of this.recentlyDeletedPaths.entries()) {
+      if (expiry < now) this.recentlyDeletedPaths.delete(p);
+    }
+
+    // 4. SQLite WAL checkpointing
+    this.db.checkpoint();
   }
 
   /** 60-second liveness check — detects sleep/resume and dead remote subscriptions */
