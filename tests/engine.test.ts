@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import { SyncEngine } from "../src/sync/engine";
 import { SyncDatabase } from "../src/sync/db";
-import { existsSync, unlinkSync, rmdirSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, unlinkSync, rmSync, mkdirSync, writeFileSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -102,7 +102,7 @@ describe("SyncEngine", () => {
         try { unlinkSync(dbPath); } catch {}
         try { unlinkSync(`${dbPath}-wal`); } catch {}
         try { unlinkSync(`${dbPath}-shm`); } catch {}
-        try { rmdirSync(syncRoot, { recursive: true }); } catch {}
+        try { rmSync(syncRoot, { recursive: true, force: true }); } catch {}
     });
 
     it("should initialize correctly", () => {
@@ -116,12 +116,125 @@ describe("SyncEngine", () => {
         expect(engine.getLocalSyncRoot()).toBe(syncRoot);
     });
 
+    describe("startupSync", () => {
+        it("should trigger forceSync if full_sync_completed is 0 even when mappings exist", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+            
+            db.setMapping({
+                local_path: "file.txt",
+                node_uid: "uid-1",
+                is_dir: 0,
+                size: 10,
+                mtime: Date.now(),
+                sha1: "abc",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now(),
+            });
+            expect(db.getConfig("full_sync_completed", "0")).toBe("0");
+
+            let forceSyncCalled = false;
+            engine.forceSync = async () => { forceSyncCalled = true; };
+
+            await engine.startupSync();
+            expect(forceSyncCalled).toBe(true);
+        });
+
+        it("should trigger fastSync if full_sync_completed is 1", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+            
+            db.setMapping({
+                local_path: "file.txt",
+                node_uid: "uid-1",
+                is_dir: 0,
+                size: 10,
+                mtime: Date.now(),
+                sha1: "abc",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now(),
+            });
+            db.setConfig("full_sync_completed", "1");
+
+            let fastSyncCalled = false;
+            engine.fastSync = async () => { fastSyncCalled = true; };
+
+            await engine.startupSync();
+            expect(fastSyncCalled).toBe(true);
+        });
+
+        it("should execute fresh initial sync end-to-end when starting clean", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+            
+            // Clean database state
+            expect(db.getMappingCount()).toBe(0);
+            expect(db.getConfig("full_sync_completed", "0")).toBe("0");
+
+            // Mock empty remote folder
+            mockSdk.iterateFolderChildrenNodeUids = async function* () { };
+
+            // Create 1 local file
+            writeFileSync(path.join(syncRoot, "fresh.txt"), "fresh initial sync content");
+
+            (engine as any).isStarted = true;
+
+            // Run startupSync on fresh database
+            await engine.startupSync();
+
+            // Assert DB mapping created and full_sync_completed set to 1
+            expect(db.getMappingCount()).toBe(1);
+            expect(db.getMapping("fresh.txt")).toBeDefined();
+            expect(db.getConfig("full_sync_completed", "0")).toBe("1");
+        });
+    });
+
+    describe("postSyncCleanup & temp file safety", () => {
+        it("should remove stale daemon download temp files older than 2 mins", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            const fiveMinsAgoTs = Date.now() - 300_000;
+            const staleTemp = path.join(syncRoot, `archive.tar.tmp-${fiveMinsAgoTs}`);
+            writeFileSync(staleTemp, "stale temp content");
+            const fiveMinsAgo = new Date(fiveMinsAgoTs);
+            utimesSync(staleTemp, fiveMinsAgo, fiveMinsAgo);
+
+            await (engine as any).postSyncCleanup();
+            expect(existsSync(staleTemp)).toBe(false);
+        });
+
+        it("should preserve regular user files named *.tmp", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            const userTmp = path.join(syncRoot, "user_notes.tmp");
+            writeFileSync(userTmp, "user notes content");
+            const fiveMinsAgo = new Date(Date.now() - 300_000);
+            utimesSync(userTmp, fiveMinsAgo, fiveMinsAgo);
+
+            await (engine as any).postSyncCleanup();
+            expect(existsSync(userTmp)).toBe(true);
+        });
+
+        it("should preserve recent temp files modified within 2 mins", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            const recentTemp = path.join(syncRoot, `recent.tar.tmp-${Date.now()}`);
+            writeFileSync(recentTemp, "recent temp content");
+
+            await (engine as any).postSyncCleanup();
+            expect(existsSync(recentTemp)).toBe(true);
+        });
+    });
+
     describe("forceSync", () => {
         it("should perform initial scan and finish", async () => {
             const engine = new SyncEngine(db, mockSdk, mockAuth, { 
                 info: mock(), 
                 warn: mock(), 
-                error: (msg, err) => console.error(msg, err), 
+                error: (msg: any, err?: any) => console.error(msg, err), 
                 debug: mock() 
             }, mockEventsManager);
             await engine.setLocalSyncRoot(syncRoot);
@@ -177,6 +290,54 @@ describe("SyncEngine", () => {
             const mapping = db.getMapping("remote.txt");
             expect(mapping).toBeDefined();
             expect(mapping?.node_uid).toBe("remote-uid");
+        });
+
+        it("should reject download and retry if downloaded size does not match claimedSize", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            mockSdk.iterateFolderChildrenNodeUids = async function* () { yield "mismatch-uid"; };
+            mockSdk.getNode = mock().mockResolvedValue({
+                uid: "mismatch-uid",
+                name: "mismatch.txt",
+                ModifyTime: Date.now() / 1000,
+                Size: 9999,
+                Type: 1,
+                MIMEType: "text/plain",
+                ActiveRevision: { ID: "rev-mismatch", claimedSize: 9999 }
+            });
+
+            (engine as any).isStarted = true;
+            try {
+                await engine.forceSync();
+            } catch {}
+
+            const mapping = db.getMapping("mismatch.txt");
+            expect(mapping).toBeFalsy();
+        });
+
+        it("should reject download and retry if SHA-1 checksum mismatches claimedSha1", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            mockSdk.iterateFolderChildrenNodeUids = async function* () { yield "checksum-uid"; };
+            mockSdk.getNode = mock().mockResolvedValue({
+                uid: "checksum-uid",
+                name: "checksum.txt",
+                ModifyTime: Date.now() / 1000,
+                Size: 0,
+                Type: 1,
+                MIMEType: "text/plain",
+                ActiveRevision: { ID: "rev-checksum", claimedSha1: "invalid-sha1-hash-12345" }
+            });
+
+            (engine as any).isStarted = true;
+            try {
+                await engine.forceSync();
+            } catch {}
+
+            const mapping = db.getMapping("checksum.txt");
+            expect(mapping).toBeFalsy();
         });
     });
 
@@ -367,7 +528,7 @@ describe("SyncEngine", () => {
             });
 
             // Rename locally on disk
-            rmdirSync(path.join(syncRoot, "OldDir"), { recursive: true });
+            rmSync(path.join(syncRoot, "OldDir"), { recursive: true, force: true });
             mkdirSync(path.join(syncRoot, "NewDir"), { recursive: true });
             writeFileSync(path.join(syncRoot, "NewDir", "file.txt"), "hello world");
 

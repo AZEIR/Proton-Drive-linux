@@ -102,6 +102,19 @@ export class SyncDatabase {
         this.db.prepare('INSERT OR REPLACE INTO sync_config (key, value) VALUES (?, ?)').run(key, value);
     }
 
+    getAccountUid(): string {
+        return this.getConfig("account_uid", "");
+    }
+
+    getAccountEmail(): string {
+        return this.getConfig("account_email", "");
+    }
+
+    setAccountInfo(uid: string, email: string): void {
+        this.setConfig("account_uid", uid);
+        this.setConfig("account_email", email);
+    }
+
     // Mapping Methods
     getMapping(localPath: string): SyncMapping | undefined {
         return this.db.prepare('SELECT * FROM sync_mappings WHERE local_path = ?').get(localPath) as SyncMapping | undefined;
@@ -177,6 +190,7 @@ export class SyncDatabase {
 
     clearMappings(): void {
         this.db.run('DELETE FROM sync_mappings');
+        this.setConfig("full_sync_completed", "0");
     }
 
     // Pending delete persistence — survives crashes/restarts
@@ -235,6 +249,10 @@ export class SyncDatabase {
 
     getRecentLogs(limit: number = 50): SyncLog[] {
         return this.db.prepare('SELECT * FROM sync_logs ORDER BY id DESC LIMIT ?').all(limit) as SyncLog[];
+    }
+
+    pruneOldLogs(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): void {
+        this.db.prepare('DELETE FROM sync_logs WHERE timestamp < ?').run(Date.now() - maxAgeMs);
     }
 
     /**

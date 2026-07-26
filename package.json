@@ -1,17 +1,16 @@
 {
   "name": "proton-drive-linux",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build --compile src/cli/daemon.ts --outfile release/proton-sync && cp release/proton-sync release/proton-sync-x86_64-unknown-linux-gnu 2>/dev/null || true",
+    "build": "bun build --compile src/cli/daemon.ts --outfile release/proton-sync",
     "test": "bun test",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
     "@protontech/crypto": "2.0.0",
     "@protontech/drive-sdk": "file:./sdk/client/js",
-    "@sentry/bun": "^10.67.0",
     "better-sqlite3": "^13.0.1",
     "chokidar": "^4.0.1",
     "ky": "^1.14.3",

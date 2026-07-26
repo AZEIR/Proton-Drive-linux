@@ -29,8 +29,13 @@ DAEMON_PID=$!
 start_tray() {
     if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
         if [ -f "$TRAY_SCRIPT" ]; then
-            python3 "$TRAY_SCRIPT" &
-            TRAY_PID=$!
+            EXISTING_PID="$(pgrep -f "proton-drive-tray.py" | head -n 1)"
+            if [ -n "$EXISTING_PID" ]; then
+                TRAY_PID="$EXISTING_PID"
+            else
+                python3 "$TRAY_SCRIPT" &
+                TRAY_PID=$!
+            fi
         fi
     fi
 }

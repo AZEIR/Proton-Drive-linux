@@ -1,8 +1,8 @@
-import { describe, expect, it, beforeEach, afterEach } from '@jest/globals';
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { IgnoreMatcher, PROTONIGNORE_FILENAME } from './ignore';
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { IgnoreMatcher, PROTONIGNORE_FILENAME } from "../src/sync/ignore";
 
 // Helper: create a temporary directory for each test
 function makeTempDir(): string {

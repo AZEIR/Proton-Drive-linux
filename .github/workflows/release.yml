@@ -8,51 +8,37 @@ on:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: Install System Dependencies for Tauri v2 & WebKitGTK 4.1
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install JS Dependencies
         run: bun install
 
-      - name: Build Proton Sync Daemon Binary (Sidecar)
-        run: |
-          bun run build
-          mkdir -p src-tauri/binaries
-          cp release/proton-sync src-tauri/binaries/proton-sync-x86_64-unknown-linux-gnu
+      - name: Build Proton Sync Binary
+        run: bun run build
 
-      - name: Build Tauri Desktop Application (.AppImage & .deb)
-        uses: tauri-apps/tauri-action@v0
+      - name: Create Release Package
+        run: |
+          tar -czvf proton-drive-linux.tar.gz release/proton-sync proton-drive-tray.py proton-drive-launcher.sh setup.sh drive.sh uninstall.sh icons/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/proton-sync
+            proton-drive-linux.tar.gz
+          draft: true
+          prerelease: false
+          name: "Proton Drive Linux Client ${{ github.ref_name }}"
+          body: "Official Proton Drive Linux Native Desktop Client Release"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Proton Drive Linux Desktop v__VERSION__'
-          releaseBody: 'Official Proton Drive Linux Native Desktop Release'
-          releaseDraft: true
-          prerelease: false

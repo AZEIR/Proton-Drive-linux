@@ -5,10 +5,24 @@ import time
 import threading
 import webbrowser
 import requests
+import fcntl
 
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib
+
+# Single-instance file lock
+LOCK_FILE = os.path.expanduser("~/.config/proton-drive-sync/tray.lock")
+
+def ensure_single_instance():
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+    try:
+        lock_fd = open(LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_fd
+    except (IOError, OSError):
+        # Tray process already running, exit cleanly
+        sys.exit(0)
 
 # Read environment variables
 PORT = int(os.environ.get("PROTON_SYNC_PORT", "8085"))
@@ -139,11 +153,7 @@ class ProtonDriveTrayApp:
 
         # Update icon path/name
         if has_indicator:
-            icon_file = os.path.join(ICONS_DIR, f"{icon_name}.png")
-            if os.path.isfile(icon_file):
-                self.indicator.set_icon_full(icon_file, f"Proton Drive: {status}")
-            else:
-                self.indicator.set_icon_full(icon_name, f"Proton Drive: {status}")
+            self.indicator.set_icon_full(icon_name, f"Proton Drive: {status}")
         else:
             self.status_icon.set_from_file(os.path.join(ICONS_DIR, f"{icon_name}.png"))
 
@@ -194,10 +204,13 @@ class ProtonDriveTrayApp:
 
     def quit_app(self, widget):
         self.stop_flag.set()
-        os.system("systemctl --user stop proton-sync.service 2>/dev/null")
+        os.system("systemctl --user stop proton-sync.service 2>/dev/null || true")
+        os.system("pkill -f proton-sync 2>/dev/null || true")
         Gtk.main_quit()
 
 def main():
+    _lock = ensure_single_instance()
+
     # Allow KeyboardInterrupt (Ctrl+C) to terminate the Gtk main loop
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
