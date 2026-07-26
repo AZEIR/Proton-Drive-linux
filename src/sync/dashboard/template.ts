@@ -112,21 +112,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                         </div>
                     </div>
 
-                    <!-- FOD Mode Hero Card (hidden by default, shown when mode=fod) -->
-                    <div id="fodHeroCard" class="card" style="display:none;">
-                        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
-                            <div style="width:52px;height:52px;border-radius:50%;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                <span class="material-symbols-outlined text-success" style="font-size:24px;">cloud</span>
-                            </div>
-                            <div>
-                                <h2 style="font-size:1.1rem;font-weight:700;color:var(--text-main);margin:0 0 4px;border:none;padding:0;">File On Demand — FUSE Mode</h2>
-                                <p style="font-size:0.88rem;color:var(--text-muted);margin:0;">Mount point: <code id="mountPointDisplay" style="color:var(--primary);font-size:0.85rem;font-weight:600;">~/P-Drive</code></p>
-                            </div>
-                            <div style="margin-left:auto;display:flex;gap:8px;">
-                                <button class="btn" onclick="openFolder()">Open Mount Folder</button>
-                            </div>
-                        </div>
-                    </div>
+
 
                     <!-- Dashboard Layout -->
                     <div class="dashboard-main-col">
@@ -238,7 +224,6 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                 <!-- Tab Pane: Settings -->
                 <div id="tab-settings" class="tab-pane">
                     <div class="card">
-                        <h2>Configuration Settings</h2>
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <span class="setting-title">Sync Folder Path</span>
@@ -255,13 +240,13 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                     <span class="setting-title">Synchronization Mode</span>
                                     <span class="setting-desc">Switch between Standard Full Sync (local file copies) and FUSE File-On-Demand mode.</span>
                                 </div>
-                                <div style="display:flex;gap:8px;align-items:center;">
-                                    <button class="btn" id="btnModeFull" onclick="switchSyncMode('full')">
-                                        <span class="material-symbols-outlined" style="font-size:16px;">folder</span>
+                                <div style="display:flex;gap:10px;align-items:center;">
+                                    <button class="btn btn-mode" id="btnModeFull" onclick="switchSyncMode('full')">
+                                        <span class="material-symbols-outlined" style="font-size:18px;">folder</span>
                                         Full Sync
                                     </button>
-                                    <button class="btn" id="btnModeFuse" onclick="switchSyncMode('fuse')">
-                                        <span class="material-symbols-outlined" style="font-size:16px;">cloud</span>
+                                    <button class="btn btn-mode" id="btnModeFuse" onclick="switchSyncMode('fuse')">
+                                        <span class="material-symbols-outlined" style="font-size:18px;">cloud</span>
                                         FUSE Mode
                                     </button>
                                 </div>

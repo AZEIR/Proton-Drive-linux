@@ -31,12 +31,6 @@
             if (FOD_MODE) {
                 document.getElementById('modeLabel').innerText = 'FOD';
                 document.getElementById('cacheMenuItem').style.display = 'flex';
-                document.getElementById('fodHeroCard').style.display = 'block';
-                // FOD: hide full-sync only controls
-                const pauseBtn = document.getElementById('btnPause');
-                if (pauseBtn) pauseBtn.style.display = 'none';
-                const syncNowBtn = document.getElementById('syncNowBtn');
-                if (syncNowBtn) syncNowBtn.style.display = 'none';
                 fetchCachedFiles();
                 setInterval(fetchCachedFiles, 5000);
             }
@@ -346,10 +340,38 @@
             badge.className = 'status-badge status-' + data.status;
             text.innerText = data.status.replace('_', ' ');
 
-            // FOD mode — show mount point in hero card
-            if (FOD_MODE && data.mountPoint) {
-                const mp = document.getElementById('mountPointDisplay');
-                if (mp) mp.innerText = data.mountPoint;
+            const currentMode = data.mode || (FOD_MODE ? 'fod' : 'full');
+            const isFuseMode = currentMode === 'fod' || currentMode === 'fuse';
+
+            // Highlight active mode button in Settings
+            const btnFull = document.getElementById('btnModeFull');
+            const btnFuse = document.getElementById('btnModeFuse');
+
+            if (btnFull && btnFuse) {
+                if (isFuseMode) {
+                    btnFuse.className = 'btn btn-mode mode-active';
+                    btnFuse.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">cloud</span> FUSE Mode <span class="material-symbols-outlined" style="font-size:16px;margin-left:4px;">check</span>`;
+                    
+                    btnFull.className = 'btn btn-mode mode-inactive';
+                    btnFull.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">folder</span> Full Sync`;
+                } else {
+                    btnFull.className = 'btn btn-mode mode-active';
+                    btnFull.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">folder</span> Full Sync <span class="material-symbols-outlined" style="font-size:16px;margin-left:4px;">check</span>`;
+                    
+                    btnFuse.className = 'btn btn-mode mode-inactive';
+                    btnFuse.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">cloud</span> FUSE Mode`;
+                }
+            }
+
+            // Sync action button visibility per mode
+            const pauseBtn = document.getElementById('btnPause');
+            const syncNowBtn = document.getElementById('syncNowBtn');
+            if (isFuseMode) {
+                if (pauseBtn) pauseBtn.style.display = 'none';
+                if (syncNowBtn) syncNowBtn.style.display = 'inline-flex';
+            } else {
+                if (pauseBtn) pauseBtn.style.display = 'inline-flex';
+                if (syncNowBtn) syncNowBtn.style.display = 'inline-flex';
             }
 
             // Update status description and icon in hero card
@@ -375,8 +397,8 @@
             heroIcon.innerHTML = getMascotIcon(data.status);
 
             if (data.status === 'synced') {
-                heroTitle.innerText = FOD_MODE ? 'FUSE filesystem mounted' : 'Your files are up to date';
-                heroDesc.innerText  = FOD_MODE ? 'Files are served on-demand. Accessing a file downloads it transparently.' : 'Proton Drive is actively monitoring your sync folder.';
+                heroTitle.innerText = isFuseMode ? 'FUSE Filesystem Active' : 'Your files are up to date';
+                heroDesc.innerText  = isFuseMode ? `Files are mounted at ${data.mountPoint || '~/P-Drive-FUSE'}. Accessing any file downloads it transparently on-demand.` : 'Proton Drive is actively monitoring your sync folder.';
             } else if (data.status === 'bulk_deletion_warning') {
                 heroTitle.innerText = 'Sync Paused - Deletion Warning';
                 heroDesc.innerText  = 'A large number of local deletions was intercepted. Confirm or cancel them to resume sync.';
