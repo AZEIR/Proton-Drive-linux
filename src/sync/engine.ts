@@ -210,7 +210,18 @@ export class SyncEngine extends EventEmitter {
   }
 
   private async rateLimitTransfer(relativePath: string, currentTransferredBytes: number): Promise<void> {
-    if (this.maxSpeedKbps <= 0) return;
+    const effectiveLimit = this.maxSpeedKbps > 0 
+      ? this.maxSpeedKbps 
+      : (this.wifiSafeMode ? 2000 : 0);
+
+    if (effectiveLimit <= 0) {
+      if (this.wifiSafeMode) {
+        // Micro-yield pacing for Wi-Fi driver packet ring stability
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return;
+    }
+
     let tracker = this.transferRateTrackers.get(relativePath);
     const now = Date.now();
     if (!tracker) {
@@ -224,12 +235,14 @@ export class SyncEngine extends EventEmitter {
     const bytesSinceStart = currentTransferredBytes - tracker.bytesStart;
     if (bytesSinceStart <= 0) return;
 
-    const targetBytesPerMs = (this.maxSpeedKbps * 1024) / 1000;
+    const targetBytesPerMs = (effectiveLimit * 1024) / 1000;
     const expectedMs = bytesSinceStart / targetBytesPerMs;
     const sleepMs = expectedMs - elapsedMs;
 
-    if (sleepMs > 10) {
+    if (sleepMs > 5) {
       await new Promise((resolve) => setTimeout(resolve, Math.min(sleepMs, 1000)));
+    } else if (this.wifiSafeMode) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
     }
   }
 
