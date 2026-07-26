@@ -11,10 +11,11 @@
     "preserveSymlinks": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "bun:sqlite": ["src/sync/sqlite.ts"]
     }
   },
-  "include": ["src/**/*", "tests/**/*"],
-  "exclude": ["node_modules", "sdk", "sdk/**", "**/sdk/**"]
+  "include": ["src/**/*", "tests/**/*", "sdk/**/*"],
+  "exclude": ["node_modules"]
 }
 

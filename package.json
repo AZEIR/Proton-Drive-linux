@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/cli/daemon.ts --target=node --outfile release/proton-sync.js && printf '#!/bin/bash\\nNODE_BIN=\"$(command -v node || echo /usr/bin/node)\"\\nexec \"$NODE_BIN\" \"$(dirname \"$0\")/proton-sync.js\" \"$@\"\\n' > release/proton-sync && chmod +x release/proton-sync",
+    "build": "bun build src/cli/daemon.ts --target=node --outfile release/proton-sync.js && python3 -c \"with open('release/proton-sync.js', 'r+') as f: c = f.read().replace('import { Database as Database2 } from \\\"bun:sqlite\\\";', 'import betterSqlite3 from \\\"better-sqlite3\\\"; const Database2 = betterSqlite3;').replace('import { Database } from \\\"bun:sqlite\\\";', 'import betterSqlite3 from \\\"better-sqlite3\\\"; const Database = betterSqlite3;'); f.seek(0); f.write(c); f.truncate()\" && printf '#!/bin/bash\\nNODE_BIN=\"$(command -v node || echo /usr/bin/node)\"\\nexec \"$NODE_BIN\" \"$(dirname \"$0\")/proton-sync.js\" \"$@\"\\n' > release/proton-sync && chmod +x release/proton-sync",
     "test": "bun test",
     "check-types": "tsc --noEmit"
   },
