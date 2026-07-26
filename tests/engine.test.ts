@@ -786,6 +786,20 @@ describe("SyncEngine", () => {
             expect(engine.getConcurrencyLimit()).toBe(1);
             expect(db.getConfig("sync_wifi_safe_mode", "0")).toBe("1");
         });
+
+        it("should apply rate limiting to transfers when maxSpeedKbps is set", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            engine.setMaxSpeedKbps(100); // 100 KB/s limit
+            expect(engine.getMaxSpeedKbps()).toBe(100);
+
+            const now = Date.now();
+            // Simulate 100ms passed and 20 KB transferred. Target is 100 KB/s, so 20 KB should take 200ms -> expected sleep ~100ms
+            (engine as any).transferRateTrackers.set("test.txt", { startTime: now - 100, bytesStart: 0 });
+            const startCall = Date.now();
+            await (engine as any).rateLimitTransfer("test.txt", 20 * 1024); 
+            const elapsed = Date.now() - startCall;
+            expect(elapsed).toBeGreaterThanOrEqual(50);
+        });
     });
 });
 

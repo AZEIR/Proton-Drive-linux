@@ -3,6 +3,9 @@ import { statSync, existsSync, createReadStream, createWriteStream, readFileSync
 import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { setupNetworkSocketLimits } from './utils/httpAgent';
+
+setupNetworkSocketLimits();
 
 if (typeof (globalThis as any).Bun === 'undefined') {
     (globalThis as any).Bun = {};

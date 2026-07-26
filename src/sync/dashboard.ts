@@ -2,7 +2,7 @@ import { exec, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
-import { openBrowserUrl } from '../../sdk/cli/src/cli/openBrowserUrl';
+import { openBrowserUrl } from '../sdk/adapter';
 import { getHtmlContent } from './dashboard/template';
 
 export interface FodHooks {

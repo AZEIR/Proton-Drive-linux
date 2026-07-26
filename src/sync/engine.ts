@@ -12,10 +12,9 @@ import { existsSync, mkdirSync, utimesSync } from "node:fs";
 import { mkdir, readdir, rename, rm, stat, lstat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { getSha1 } from "../../sdk/cli/src/commands/fileSystem/digest";
+import { getSha1, type EventsProvider } from "../sdk/adapter";
 import { SyncDatabase, SyncMapping } from "./db";
 import { IgnoreMatcher, PROTONIGNORE_FILENAME } from "./ignore";
-import type { EventsProvider } from "../../sdk/cli/src/events/interface";
 
 export class SyncEngine extends EventEmitter {
   private db: SyncDatabase;
@@ -1042,6 +1041,10 @@ export class SyncEngine extends EventEmitter {
             const pacingDelay = this.wifiSafeMode ? 150 : 100;
             await new Promise((resolve) => setTimeout(resolve, pacingDelay));
           }
+
+          // Yield pacing between folder scans
+          const folderPacing = this.wifiSafeMode ? 100 : 50;
+          await new Promise((resolve) => setTimeout(resolve, folderPacing));
 
           folderQueue.push(...childFolders);
         } catch (error: any) {
@@ -2635,10 +2638,27 @@ export class SyncEngine extends EventEmitter {
             const transfer = this.activeTransfers.get(relativePath);
             if (transfer) transfer.size = size;
 
-            // Create a fresh stream on every attempt — a ReadableStream can
-            // only be consumed once, so reusing it across retries causes a
-            // "ReadableStream is locked" error.
-            currentStream = file.stream();
+            const rawStream = file.stream();
+            let totalUploadedBytes = 0;
+            const reader = rawStream.getReader();
+            const self = this;
+            currentStream = new ReadableStream({
+              async pull(controller) {
+                const { done, value } = await reader.read();
+                if (done) {
+                  controller.close();
+                  return;
+                }
+                if (value) {
+                  totalUploadedBytes += value.byteLength;
+                  await self.rateLimitTransfer(relativePath, totalUploadedBytes);
+                  controller.enqueue(value);
+                }
+              },
+              async cancel(reason) {
+                await reader.cancel(reason);
+              },
+            }) as any;
             let uploadController;
             if (mapped) {
               this.logger.info(
@@ -2943,8 +2963,25 @@ export class SyncEngine extends EventEmitter {
         this.ignoredLocalChanges.add(tmpPath);
         const bunFile = Bun.file(tmpPath);
         const writer = bunFile.writer();
+        let totalDownloadedBytes = 0;
+        const self = this;
+        const throttledWriter = {
+          write: async (chunk: Uint8Array) => {
+            totalDownloadedBytes += chunk.byteLength;
+            await self.rateLimitTransfer(relativePath, totalDownloadedBytes);
+            return await writer.write(chunk);
+          },
+          end: async () => {
+            return await writer.end();
+          },
+          flush: async () => {
+            if (typeof writer.flush === "function") {
+              return await writer.flush();
+            }
+          },
+        };
         const writableStream = {
-          getWriter: () => writer,
+          getWriter: () => throttledWriter,
           close: async () => {
             await writer.end();
           },

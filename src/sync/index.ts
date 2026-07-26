@@ -1,5 +1,5 @@
 import { FeatureFlags } from '@protontech/drive-sdk';
-import { init } from '../../sdk/cli/src/init';
+import { initSdk } from '../sdk/adapter';
 import { SyncDatabase } from './db';
 import { startDashboard } from './dashboard';
 import { SyncEngine } from './engine';
@@ -34,7 +34,7 @@ export async function runSync(port: number = 8085) {
     let fuseEngine: ProtonFuseEngine | null = null;
 
     try {
-        session = await init(initOptions);
+        session = await initSdk(initOptions);
     } catch (initErr: any) {
         console.warn('Network offline or initialization error on startup:', initErr?.message || initErr);
         db.log('system', 'system', 'failed', `Startup offline: ${initErr?.message || initErr}. Monitoring connection...`);

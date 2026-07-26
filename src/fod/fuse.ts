@@ -42,6 +42,12 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
             }
         };
         process.once('exit', cleanup);
+        process.once('SIGINT', cleanup);
+        process.once('SIGTERM', cleanup);
+        process.once('uncaughtException', (err) => {
+            this.logger?.error?.('Uncaught exception in FUSE engine:', err);
+            cleanup();
+        });
     }
 
     private unmountSync(): void {
