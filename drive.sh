@@ -267,6 +267,34 @@ case "$cmd" in
         echo "Local sync state completely cleared."
         echo "Reset complete. Start daemon with: ./drive.sh start [path]"
         ;;
+    wifi-safe)
+        ENABLE_ARG="${2:-on}"
+        if [ "$ENABLE_ARG" = "off" ] || [ "$ENABLE_ARG" = "false" ] || [ "$ENABLE_ARG" = "0" ]; then
+            echo "Disabling Wi-Fi Safe Mode..."
+            curl -s -X POST http://localhost:8085/api/set-wifi-safe-mode -H "Content-Type: application/json" -d '{"enabled": false}' >/dev/null || true
+            if command -v sqlite3 >/dev/null 2>&1; then
+                sqlite3 "${HOME}/.config/proton-drive-sync/sync_state.db" "INSERT OR REPLACE INTO sync_config (key, value) VALUES ('sync_wifi_safe_mode', '0');" 2>/dev/null || true
+            fi
+            echo "Wi-Fi Safe Mode disabled."
+        else
+            echo "Enabling Wi-Fi Safe Mode..."
+            curl -s -X POST http://localhost:8085/api/set-wifi-safe-mode -H "Content-Type: application/json" -d '{"enabled": true}' >/dev/null || true
+            if command -v sqlite3 >/dev/null 2>&1; then
+                sqlite3 "${HOME}/.config/proton-drive-sync/sync_state.db" "INSERT OR REPLACE INTO sync_config (key, value) VALUES ('sync_wifi_safe_mode', '1');" 2>/dev/null || true
+                sqlite3 "${HOME}/.config/proton-drive-sync/sync_state.db" "INSERT OR REPLACE INTO sync_config (key, value) VALUES ('sync_concurrency', '1');" 2>/dev/null || true
+            fi
+            echo "Wi-Fi Safe Mode enabled (concurrency=1, download streaming micro-yield pacing enabled)."
+        fi
+        ;;
+    limit)
+        SPEED_KBPS="${2:-1000}"
+        echo "Setting download speed limit to ${SPEED_KBPS} KB/s..."
+        curl -s -X POST http://localhost:8085/api/set-speed-limit -H "Content-Type: application/json" -d "{\"maxSpeedKbps\": ${SPEED_KBPS}}" >/dev/null || true
+        if command -v sqlite3 >/dev/null 2>&1; then
+            sqlite3 "${HOME}/.config/proton-drive-sync/sync_state.db" "INSERT OR REPLACE INTO sync_config (key, value) VALUES ('sync_max_speed_kbps', '${SPEED_KBPS}');" 2>/dev/null || true
+        fi
+        echo "Speed limit set to ${SPEED_KBPS} KB/s."
+        ;;
     test)
         echo "Running automated test suite..."
         cd "$SCRIPT_DIR" && bun test tests/
