@@ -27,6 +27,10 @@ describe("Dashboard API", () => {
             getBulkDeletionCount: mock().mockReturnValue(0),
             getConcurrencyLimit: mock().mockReturnValue(2),
             setConcurrencyLimit: mock(),
+            getMaxSpeedKbps: mock().mockReturnValue(0),
+            setMaxSpeedKbps: mock(),
+            isWifiSafeMode: mock().mockReturnValue(false),
+            setWifiSafeMode: mock(),
             start: mock().mockResolvedValue(undefined),
             stop: mock().mockResolvedValue(undefined),
             pause: mock().mockResolvedValue(undefined),
@@ -172,5 +176,32 @@ describe("Dashboard API", () => {
         expect(data.concurrency).toBe(3);
         expect(mockEngine.setConcurrencyLimit).toHaveBeenCalledWith(3);
     });
+
+    it("POST /api/set-speed-limit should update max speed limit", async () => {
+        const res = await fetch(`${BASE_URL}/api/set-speed-limit`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ maxSpeedKbps: 2048 }),
+        });
+        expect(res.status).toBe(200);
+        const data: any = await res.json();
+        expect(data.ok).toBe(true);
+        expect(data.maxSpeedKbps).toBe(2048);
+        expect(mockEngine.setMaxSpeedKbps).toHaveBeenCalledWith(2048);
+    });
+
+    it("POST /api/set-wifi-safe-mode should update Wi-Fi Safe Mode", async () => {
+        const res = await fetch(`${BASE_URL}/api/set-wifi-safe-mode`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: true }),
+        });
+        expect(res.status).toBe(200);
+        const data: any = await res.json();
+        expect(data.ok).toBe(true);
+        expect(data.wifiSafeMode).toBe(true);
+        expect(mockEngine.setWifiSafeMode).toHaveBeenCalledWith(true);
+    });
 });
+
 

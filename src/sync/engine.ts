@@ -47,6 +47,9 @@ export class SyncEngine extends EventEmitter {
   private isOffline: boolean = false;
   private checkConnectionInterval: any = null;
   private concurrencyLimit: number = 2;
+  private maxSpeedKbps: number = 0;
+  private wifiSafeMode: boolean = false;
+  private transferRateTrackers: Map<string, { startTime: number; bytesStart: number }> = new Map();
   private activeReconciles: Set<string> = new Set();
   private offlineMonitorPromise: Promise<void> | null = null;
   private unsubscribeOffline: (() => void)[] = [];
@@ -148,6 +151,18 @@ export class SyncEngine extends EventEmitter {
       ? envConcurrency
       : (!isNaN(dbConcurrency) && dbConcurrency > 0 ? dbConcurrency : 2);
     this.logger.info(`Network concurrency limit set to ${this.concurrencyLimit}`);
+
+    // Initialize bandwidth speed limit & Wi-Fi safe mode settings
+    const envMaxSpeed = parseInt(process.env.PROTON_MAX_SPEED_KBPS || "", 10);
+    const dbMaxSpeed = parseInt(this.db.getConfig("sync_max_speed_kbps", "0"), 10);
+    this.maxSpeedKbps = !isNaN(envMaxSpeed) && envMaxSpeed >= 0
+      ? envMaxSpeed
+      : (!isNaN(dbMaxSpeed) && dbMaxSpeed >= 0 ? dbMaxSpeed : 0);
+
+    this.wifiSafeMode = this.db.getConfig("sync_wifi_safe_mode", "0") === "1";
+    if (this.wifiSafeMode) {
+      this.concurrencyLimit = 1;
+    }
   }
 
   getLocalSyncRoot(): string {
@@ -164,6 +179,58 @@ export class SyncEngine extends EventEmitter {
       this.db.setConfig("sync_concurrency", limit.toString());
       this.logger.info(`Network concurrency limit set to ${this.concurrencyLimit}`);
       this.emit("statusChanged");
+    }
+  }
+
+  getMaxSpeedKbps(): number {
+    return this.maxSpeedKbps;
+  }
+
+  setMaxSpeedKbps(kbps: number): void {
+    if (kbps >= 0) {
+      this.maxSpeedKbps = kbps;
+      this.db.setConfig("sync_max_speed_kbps", kbps.toString());
+      this.logger.info(`Network bandwidth rate limit set to ${kbps === 0 ? "Unlimited" : `${kbps} KB/s`}`);
+      this.emit("statusChanged");
+    }
+  }
+
+  isWifiSafeMode(): boolean {
+    return this.wifiSafeMode;
+  }
+
+  setWifiSafeMode(enabled: boolean): void {
+    this.wifiSafeMode = enabled;
+    this.db.setConfig("sync_wifi_safe_mode", enabled ? "1" : "0");
+    if (enabled) {
+      this.concurrencyLimit = 1;
+      this.db.setConfig("sync_concurrency", "1");
+    }
+    this.logger.info(`Wi-Fi Safe Mode set to ${enabled ? "enabled" : "disabled"}`);
+    this.emit("statusChanged");
+  }
+
+  private async rateLimitTransfer(relativePath: string, currentTransferredBytes: number): Promise<void> {
+    if (this.maxSpeedKbps <= 0) return;
+    let tracker = this.transferRateTrackers.get(relativePath);
+    const now = Date.now();
+    if (!tracker) {
+      this.transferRateTrackers.set(relativePath, { startTime: now, bytesStart: currentTransferredBytes });
+      return;
+    }
+
+    const elapsedMs = now - tracker.startTime;
+    if (elapsedMs <= 0) return;
+
+    const bytesSinceStart = currentTransferredBytes - tracker.bytesStart;
+    if (bytesSinceStart <= 0) return;
+
+    const targetBytesPerMs = (this.maxSpeedKbps * 1024) / 1000;
+    const expectedMs = bytesSinceStart / targetBytesPerMs;
+    const sleepMs = expectedMs - elapsedMs;
+
+    if (sleepMs > 10) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(sleepMs, 1000)));
     }
   }
 
@@ -798,8 +865,9 @@ export class SyncEngine extends EventEmitter {
               } catch (err: any) {
                 this.logger.error(`Upload worker error for ${item.path}:`, err);
               }
-              // 50ms pacing delay between transfers to prevent Wi-Fi bufferbloat
-              await new Promise((resolve) => setTimeout(resolve, 50));
+              // Inter-file pacing delay (150ms in Wi-Fi Safe Mode, 50ms standard)
+              const interFileDelay = this.wifiSafeMode ? 150 : 50;
+              await new Promise((resolve) => setTimeout(resolve, interFileDelay));
             }
           }
         },
@@ -970,8 +1038,9 @@ export class SyncEngine extends EventEmitter {
               return folders;
             });
             childFolders.push(...chunkFolders);
-            // 100ms pacing delay to smooth API request bursts and keep internet ping low
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            // Pacing delay (150ms in Wi-Fi Safe Mode, 100ms standard)
+            const pacingDelay = this.wifiSafeMode ? 150 : 100;
+            await new Promise((resolve) => setTimeout(resolve, pacingDelay));
           }
 
           folderQueue.push(...childFolders);
@@ -1483,8 +1552,9 @@ export class SyncEngine extends EventEmitter {
               remoteFiles.get(relPath),
               mappingsCache.get(relPath),
             );
-            // 50ms pacing delay between file reconciliations to prevent Wi-Fi bufferbloat
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            // Inter-file pacing delay (150ms in Wi-Fi Safe Mode, 50ms standard)
+            const interFileDelay = this.wifiSafeMode ? 150 : 50;
+            await new Promise((resolve) => setTimeout(resolve, interFileDelay));
           }
         }
       },
@@ -2509,6 +2579,7 @@ export class SyncEngine extends EventEmitter {
               lastProgressEmit = now;
             }
           }
+          this.rateLimitTransfer(relativePath, uploadedBytes).catch(() => {});
         };
 
         // Track the current stream so abort() can cancel it regardless of which
@@ -2911,6 +2982,7 @@ export class SyncEngine extends EventEmitter {
               lastProgressEmit = now;
             }
           }
+          this.rateLimitTransfer(relativePath, downloadedBytes).catch(() => {});
         };
 
         try {

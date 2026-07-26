@@ -78,6 +78,8 @@ export function startDashboard(
                     isPaused:          engine?.getStatus() === 'paused',
                     bulkDeletionCount: engine?.getBulkDeletionCount() ?? 0,
                     concurrencyLimit:  engine?.getConcurrencyLimit() ?? (db?.getConfig ? parseInt(db.getConfig('sync_concurrency', '2'), 10) : 2),
+                    maxSpeedKbps:      engine?.getMaxSpeedKbps() ?? (db?.getConfig ? parseInt(db.getConfig('sync_max_speed_kbps', '0'), 10) : 0),
+                    wifiSafeMode:      engine?.isWifiSafeMode() ?? (db?.getConfig ? db.getConfig('sync_wifi_safe_mode', '0') === '1' : false),
                     email,
                     isAuthenticating,
                 });
@@ -121,6 +123,45 @@ export function startDashboard(
                         });
                     }
                     return Response.json({ ok: false, error: 'Invalid concurrency limit (must be between 1 and 10)' }, { status: 400 });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-speed-limit') {
+                try {
+                    const body = await req.json() as { maxSpeedKbps?: number | string };
+                    const kbps = typeof body.maxSpeedKbps === 'number' ? body.maxSpeedKbps : parseInt(String(body.maxSpeedKbps || '0'), 10);
+                    if (!isNaN(kbps) && kbps >= 0) {
+                        if (engine) {
+                            engine.setMaxSpeedKbps(kbps);
+                        } else {
+                            db.setConfig('sync_max_speed_kbps', kbps.toString());
+                        }
+                        db.log('system', 'system', 'completed', `Network bandwidth limit set to ${kbps === 0 ? 'Unlimited' : `${kbps} KB/s`}.`);
+                        return Response.json({ ok: true, maxSpeedKbps: kbps }, {
+                            headers: { 'Access-Control-Allow-Origin': '*' }
+                        });
+                    }
+                    return Response.json({ ok: false, error: 'Invalid speed limit (must be >= 0)' }, { status: 400 });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-wifi-safe-mode') {
+                try {
+                    const body = await req.json() as { enabled?: boolean };
+                    const enabled = Boolean(body.enabled);
+                    if (engine) {
+                        engine.setWifiSafeMode(enabled);
+                    } else {
+                        db.setConfig('sync_wifi_safe_mode', enabled ? '1' : '0');
+                    }
+                    db.log('system', 'system', 'completed', `Wi-Fi Safe Mode ${enabled ? 'enabled' : 'disabled'}.`);
+                    return Response.json({ ok: true, wifiSafeMode: enabled }, {
+                        headers: { 'Access-Control-Allow-Origin': '*' }
+                    });
                 } catch (err: any) {
                     return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
                 }
@@ -519,6 +560,8 @@ export function startDashboard(
                                         isAuthenticating,
                                         localSyncRoot,
                                         concurrencyLimit: engine.getConcurrencyLimit(),
+                                        maxSpeedKbps: engine.getMaxSpeedKbps(),
+                                        wifiSafeMode: engine.isWifiSafeMode(),
                                         email: cachedEmail
                                     });
                                 } else {

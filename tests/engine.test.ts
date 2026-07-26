@@ -767,8 +767,28 @@ describe("SyncEngine", () => {
             expect(engine.getConcurrencyLimit()).toBe(4);
             expect(db.getConfig("sync_concurrency", "2")).toBe("4");
         });
+
+        it("should get and set bandwidth speed limit correctly", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            expect(engine.getMaxSpeedKbps()).toBe(0);
+
+            engine.setMaxSpeedKbps(1024);
+            expect(engine.getMaxSpeedKbps()).toBe(1024);
+            expect(db.getConfig("sync_max_speed_kbps", "0")).toBe("1024");
+        });
+
+        it("should get and set Wi-Fi Safe Mode correctly", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            expect(engine.isWifiSafeMode()).toBe(false);
+
+            engine.setWifiSafeMode(true);
+            expect(engine.isWifiSafeMode()).toBe(true);
+            expect(engine.getConcurrencyLimit()).toBe(1);
+            expect(db.getConfig("sync_wifi_safe_mode", "0")).toBe("1");
+        });
     });
 });
+
 
 
 
