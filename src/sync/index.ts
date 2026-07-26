@@ -46,9 +46,6 @@ export async function runSync(port: number = 8085) {
 
         if (requestedMode === 'fuse') {
             fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger);
-            if (session.auth.isLoggedIn()) {
-                await fuseEngine.start();
-            }
         } else {
             engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
             if (process.env.PROTON_SYNC_ONCE === 'true') {
@@ -67,18 +64,24 @@ export async function runSync(port: number = 8085) {
                     process.exit(0);
                 }
             }
-
-            if (session.auth.isLoggedIn()) {
-                await engine.start();
-            } else {
-                logger.warn('User is not logged in. Starting daemon dashboard for authentication...');
-                db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
-            }
         }
     }
 
-    // Start Dashboard
+    // Start Dashboard HTTP Server immediately
     const server = startDashboard(db, engine, session, port, fuseEngine || undefined);
+
+    if (session && session.auth.isLoggedIn()) {
+        if (fuseEngine) {
+            await fuseEngine.start();
+        } else if (engine) {
+            engine.start().catch((err) => {
+                session.logger.error('SyncEngine startup error:', err);
+            });
+        }
+    } else if (session) {
+        session.logger.warn('User is not logged in. Starting daemon dashboard for authentication...');
+        db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
+    }
 
     // Background reconnect loop if initialized offline on boot
     let reconnectInterval: ReturnType<typeof setInterval> | null = null;

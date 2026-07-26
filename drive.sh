@@ -30,12 +30,19 @@ show_help() {
 # Helper to start daemon
 start_daemon() {
     CUSTOM_PATH="$1"
-    SYNC_MODE="full"
+    DB_FILE="${HOME}/.config/proton-drive-sync/sync_state.db"
+    STORED_MODE=""
+    if [ -f "$DB_FILE" ] && command -v sqlite3 >/dev/null 2>&1; then
+        STORED_MODE="$(sqlite3 "$DB_FILE" "SELECT value FROM sync_config WHERE key='sync_mode';" 2>/dev/null)"
+    fi
 
+    SYNC_MODE="full"
     if [ "$2" = "--mode=fuse" ] || [ "$3" = "--mode=fuse" ] || [ "$1" = "--mode=fuse" ]; then
         SYNC_MODE="fuse"
     elif [ "$2" = "--mode=full" ] || [ "$3" = "--mode=full" ] || [ "$1" = "--mode=full" ]; then
         SYNC_MODE="full"
+    elif [ "$STORED_MODE" = "fuse" ]; then
+        SYNC_MODE="fuse"
     fi
 
     if [ -n "$CUSTOM_PATH" ] && [ "$CUSTOM_PATH" != "--mode=fuse" ] && [ "$CUSTOM_PATH" != "--mode=full" ]; then
@@ -50,6 +57,7 @@ start_daemon() {
         else
             TARGET_DIR="${HOME}/P-Drive"
         fi
+        fusermount -u -z "$TARGET_DIR" 2>/dev/null || umount -l "$TARGET_DIR" 2>/dev/null || true
         mkdir -p "$TARGET_DIR"
         export PROTON_MOUNT_POINT="$TARGET_DIR"
     fi

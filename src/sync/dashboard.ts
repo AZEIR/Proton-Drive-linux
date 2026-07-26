@@ -101,6 +101,21 @@ export function startDashboard(
                 }
             }
 
+            if (req.method === 'GET' && url.pathname === '/api/fod/hydrate') {
+                const nodeUid = url.searchParams.get('nodeUid');
+                if (!nodeUid) return Response.json({ ok: false, error: 'Missing nodeUid' }, { status: 400 });
+                try {
+                    const mapping = db.getMappingByNodeUid(nodeUid);
+                    if (fod && mapping) {
+                        const cachePath = await fod.hydrateFile?.(nodeUid, mapping.local_path);
+                        return Response.json({ ok: true, cachePath }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+                    }
+                    return Response.json({ ok: false, error: 'Hydrator unavailable or mapping not found' }, { status: 404 });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err.message }, { status: 500 });
+                }
+            }
+
             if (req.method === 'POST' && url.pathname === '/api/login') {
                 if (session.auth.isLoggedIn()) {
                     return Response.json({ ok: false, error: 'Already logged in' }, { status: 400 });
