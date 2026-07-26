@@ -500,8 +500,38 @@ export class SyncEngine extends EventEmitter {
     }
   }
 
-  // Fast startup reconciliation using local scan and event logs
-  // Performs full scan and reconciliation on startup
+  async syncFodMetadata(): Promise<void> {
+    this.logger.info("FUSE Mode: Syncing remote cloud directory structure...");
+    this.db.log("system", "system", "syncing", "FUSE Mode: Syncing remote cloud directory structure...");
+    try {
+      if (!this.remoteRootUid) {
+        const rootFolder = await this.sdk.getMyFilesRootFolder();
+        this.remoteRootUid = rootFolder.uid;
+      }
+      const remoteFiles = new Map<string, NodeEntity>();
+      await this.scanRemoteDir(this.remoteRootUid, "", remoteFiles);
+
+      for (const [relPath, node] of remoteFiles.entries()) {
+        const isDir = node.type === NodeType.Folder;
+        this.db.setMapping({
+          local_path: relPath,
+          node_uid: node.uid,
+          is_dir: isDir ? 1 : 0,
+          size: node.size || 0,
+          mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+          sha1: "",
+          remote_revision_uid: (node.activeRevision as any)?.ok ? (node.activeRevision as any).value?.id || "" : "",
+          remote_mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+        });
+      }
+      this.logger.info(`FUSE Mode: Discovered and mapped ${remoteFiles.size} cloud items.`);
+      this.db.log("system", "system", "completed", `FUSE Mode: Mapped ${remoteFiles.size} cloud items.`);
+    } catch (err: any) {
+      this.logger.error("FUSE Mode: Metadata scan failed:", err);
+      this.db.log("system", "system", "failed", `FUSE Mode scan failed: ${err?.message || err}`);
+    }
+  }
+
   async startupSync(): Promise<void> {
     await this.cleanupTempFiles(this.localSyncRoot);
     const mappingsCount = this.db.getMappingCount();

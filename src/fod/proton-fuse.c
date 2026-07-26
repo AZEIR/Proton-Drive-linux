@@ -116,6 +116,9 @@ static int pf_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t
     const char *norm = strcmp(path, "/") == 0 ? "" : path + 1;
     size_t norm_len = strlen(norm);
 
+    static char added_entries[2048][256];
+    int added_count = 0;
+
     sqlite3_stmt *stmt;
     const char *query = "SELECT local_path FROM sync_mappings;";
     if (sqlite3_prepare_v2(db, query, -1, &stmt, NULL) == SQLITE_OK) {
@@ -123,32 +126,43 @@ static int pf_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t
             const char *lp = (const char*)sqlite3_column_text(stmt, 0);
             if (!lp) continue;
 
+            char entry_name[256] = {0};
             if (norm_len == 0) {
-                char entry_name[256] = {0};
                 const char *slash = strchr(lp, '/');
                 if (slash) {
                     size_t len = slash - lp;
                     if (len < sizeof(entry_name)) {
                         strncpy(entry_name, lp, len);
-                        filler(buf, entry_name, NULL, 0, 0);
                     }
                 } else {
-                    filler(buf, lp, NULL, 0, 0);
+                    strncpy(entry_name, lp, sizeof(entry_name) - 1);
                 }
             } else {
                 if (strncmp(lp, norm, norm_len) == 0 && lp[norm_len] == '/') {
                     const char *sub = lp + norm_len + 1;
-                    char entry_name[256] = {0};
                     const char *slash = strchr(sub, '/');
                     if (slash) {
                         size_t len = slash - sub;
                         if (len < sizeof(entry_name)) {
                             strncpy(entry_name, sub, len);
-                            filler(buf, entry_name, NULL, 0, 0);
                         }
                     } else {
-                        filler(buf, sub, NULL, 0, 0);
+                        strncpy(entry_name, sub, sizeof(entry_name) - 1);
                     }
+                }
+            }
+
+            if (entry_name[0] != '\0') {
+                int exists = 0;
+                for (int i = 0; i < added_count; i++) {
+                    if (strcmp(added_entries[i], entry_name) == 0) {
+                        exists = 1;
+                        break;
+                    }
+                }
+                if (!exists && added_count < 2048) {
+                    strncpy(added_entries[added_count++], entry_name, 255);
+                    filler(buf, entry_name, NULL, 0, 0);
                 }
             }
         }
@@ -243,7 +257,7 @@ int main(int argc, char *argv[]) {
     }
 
     const char *home = getenv("HOME") ? getenv("HOME") : "/tmp";
-    snprintf(g_db_path, sizeof(g_db_path), "%s/.config/proton-drive-sync/sync.db", home);
+    snprintf(g_db_path, sizeof(g_db_path), "%s/.config/proton-drive-sync/sync_state.db", home);
     snprintf(g_cache_dir, sizeof(g_cache_dir), "%s/.cache/proton-drive-sync/fod-cache", home);
 
     if (argc >= 3) strncpy(g_db_path, argv[2], sizeof(g_db_path) - 1);

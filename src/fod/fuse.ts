@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from '
 import { exec, spawn, ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { NodeType } from '@protontech/drive-sdk';
 import { SyncDatabase } from '../sync/db';
 import { FodHydrator } from './hydrator';
 import { FodHooks } from '../sync/dashboard';
@@ -57,6 +58,11 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
         // Clean up any stale mount point from a previous crash
         this.unmountSync();
 
+        // Perform background remote cloud scan so SQLite database has all cloud file mappings
+        this.scanRemoteTree().catch((err) => {
+            this.logger.error('FUSE background remote scan error:', err);
+        });
+
         const candidatePaths = [
             path.join(process.cwd(), 'release', 'proton-fuse'),
             path.join(path.dirname(process.execPath), 'proton-fuse'),
@@ -77,6 +83,57 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
             this.logger.info(`Proton Drive FUSE filesystem mounted cleanly on ${this.mountPoint}`);
         } else {
             this.logger.warn(`Native FUSE binary not found at ${fuseBin}. Please run: gcc -O2 src/fod/proton-fuse.c -lfuse3 -lsqlite3 -lpthread -o release/proton-fuse`);
+        }
+    }
+
+    private async scanRemoteTree(): Promise<void> {
+        this.logger.info('FUSE Mode: Syncing remote cloud directory structure...');
+        try {
+            const rootFolder = await this.sdk.getMyFilesRootFolder();
+            const queue: { uid: string; relPath: string }[] = [{ uid: rootFolder.uid, relPath: '' }];
+            let mappedCount = 0;
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+                if (!current) continue;
+
+                const childrenUids: string[] = [];
+                for await (const uid of this.sdk.iterateFolderChildrenNodeUids(current.uid)) {
+                    childrenUids.push(uid);
+                }
+
+                const chunkSize = 50;
+                for (let i = 0; i < childrenUids.length; i += chunkSize) {
+                    const chunk = childrenUids.slice(i, i + chunkSize);
+                    for await (const node of this.sdk.iterateNodes(chunk)) {
+                        if ('missingUid' in node || node.trashTime) continue;
+
+                        const name = node.name.ok ? node.name.value : 'degraded_name';
+                        const relPath = current.relPath ? `${current.relPath}/${name}` : name;
+                        const isDir = node.type === NodeType.Folder || node.type === 2;
+
+                        mappedCount++;
+                        this.db.setMapping({
+                            local_path: relPath,
+                            node_uid: node.uid,
+                            is_dir: isDir ? 1 : 0,
+                            size: node.size || 0,
+                            mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+                            sha1: '',
+                            remote_revision_uid: (node.activeRevision as any)?.ok ? (node.activeRevision as any).value?.id || '' : '',
+                            remote_mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+                        });
+
+                        if (isDir) {
+                            queue.push({ uid: node.uid, relPath });
+                        }
+                    }
+                }
+            }
+            this.logger.info(`FUSE Mode: Remote directory structure sync complete. Mapped ${mappedCount} items.`);
+            this.db.log('system', 'system', 'completed', `FUSE Mode: Mapped ${mappedCount} cloud items.`);
+        } catch (err) {
+            this.logger.error('FUSE Mode: Failed to scan remote cloud tree:', err);
         }
     }
 

@@ -46,6 +46,7 @@ export async function runSync(port: number = 8085) {
 
         if (requestedMode === 'fuse') {
             fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger);
+            engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
         } else {
             engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
             if (process.env.PROTON_SYNC_ONCE === 'true') {
@@ -71,8 +72,11 @@ export async function runSync(port: number = 8085) {
     const server = startDashboard(db, engine, session, port, fuseEngine || undefined);
 
     if (session && session.auth.isLoggedIn()) {
-        if (fuseEngine) {
+        if (fuseEngine && engine) {
             await fuseEngine.start();
+            engine.syncFodMetadata().catch((err) => {
+                session.logger.error('FUSE metadata sync error:', err);
+            });
         } else if (engine) {
             engine.start().catch((err) => {
                 session.logger.error('SyncEngine startup error:', err);
