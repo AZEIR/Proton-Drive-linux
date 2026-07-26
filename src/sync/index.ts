@@ -3,6 +3,7 @@ import { init } from '../../sdk/cli/src/init';
 import { SyncDatabase } from './db';
 import { startDashboard } from './dashboard';
 import { SyncEngine } from './engine';
+import { ProtonFuseEngine } from '../fod/fuse';
 
 declare const APP_VERSION: string;
 declare const SDK_VERSION: string | undefined;
@@ -10,6 +11,10 @@ declare const SDK_VERSION: string | undefined;
 export async function runSync(port: number = 8085) {
     const clientUidPrefix = 'sdk-js-cli';
     const db = new SyncDatabase();
+
+    // Check requested mode from ENV or Database
+    const requestedMode = (process.env.PROTON_SYNC_MODE as 'full' | 'fuse') || db.getSyncMode();
+    db.setSyncMode(requestedMode);
 
     const initOptions = {
         clientUidPrefix,
@@ -26,6 +31,7 @@ export async function runSync(port: number = 8085) {
 
     let session: any = null;
     let engine: SyncEngine | null = null;
+    let fuseEngine: ProtonFuseEngine | null = null;
 
     try {
         session = await init(initOptions);
@@ -36,36 +42,43 @@ export async function runSync(port: number = 8085) {
 
     if (session) {
         const logger = session.logger;
-        logger.info('Initializing Proton Drive Sync Daemon...');
-        engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+        logger.info(`Initializing Proton Drive Sync Daemon in ${requestedMode.toUpperCase()} Mode...`);
 
-        if (process.env.PROTON_SYNC_ONCE === 'true') {
-            if (!session.auth.isLoggedIn()) {
-                logger.error('User is not logged in! One-time sync requires authentication.');
-                process.exit(1);
+        if (requestedMode === 'fuse') {
+            fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger);
+            if (session.auth.isLoggedIn()) {
+                await fuseEngine.start();
             }
-            try {
-                await engine.syncOnce();
-                logger.info('One-time sync complete.');
-            } catch (err) {
-                logger.error('One-time sync failed:', err);
-            } finally {
-                db.close();
-                await session.dispose();
-                process.exit(0);
-            }
-        }
-
-        if (session.auth.isLoggedIn()) {
-            await engine.start();
         } else {
-            logger.warn('User is not logged in. Starting daemon dashboard for authentication...');
-            db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
+            engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+            if (process.env.PROTON_SYNC_ONCE === 'true') {
+                if (!session.auth.isLoggedIn()) {
+                    logger.error('User is not logged in! One-time sync requires authentication.');
+                    process.exit(1);
+                }
+                try {
+                    await engine.syncOnce();
+                    logger.info('One-time sync complete.');
+                } catch (err) {
+                    logger.error('One-time sync failed:', err);
+                } finally {
+                    db.close();
+                    await session.dispose();
+                    process.exit(0);
+                }
+            }
+
+            if (session.auth.isLoggedIn()) {
+                await engine.start();
+            } else {
+                logger.warn('User is not logged in. Starting daemon dashboard for authentication...');
+                db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
+            }
         }
     }
 
     // Start Dashboard
-    const server = startDashboard(db, engine, session, port);
+    const server = startDashboard(db, engine, session, port, fuseEngine || undefined);
 
     // Background reconnect loop if initialized offline on boot
     let reconnectInterval: ReturnType<typeof setInterval> | null = null;

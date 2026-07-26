@@ -115,6 +115,24 @@ export class SyncDatabase {
         this.setConfig("account_email", email);
     }
 
+    getSyncMode(): 'full' | 'fuse' {
+        const mode = this.getConfig("sync_mode", "full");
+        return mode === "fuse" ? "fuse" : "full";
+    }
+
+    setSyncMode(mode: 'full' | 'fuse'): void {
+        this.setConfig("sync_mode", mode);
+    }
+
+    getFuseMountPoint(): string {
+        const home = process.env.HOME || "/tmp";
+        return this.getConfig("fuse_mount_point", `${home}/P-Drive-FUSE`);
+    }
+
+    setFuseMountPoint(mountPath: string): void {
+        this.setConfig("fuse_mount_point", mountPath);
+    }
+
     // Mapping Methods
     getMapping(localPath: string): SyncMapping | undefined {
         return this.db.prepare('SELECT * FROM sync_mappings WHERE local_path = ?').get(localPath) as SyncMapping | undefined;

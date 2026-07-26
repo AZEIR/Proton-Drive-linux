@@ -14,7 +14,10 @@ describe("Dashboard API", () => {
     beforeEach(() => {
         mockDb = {
             log: mock(),
-            getRecentLogs: mock().mockReturnValue([{ id: 1, message: "test log" }])
+            getRecentLogs: mock().mockReturnValue([{ id: 1, message: "test log" }]),
+            getSyncMode: mock().mockReturnValue("full"),
+            setSyncMode: mock(),
+            getFuseMountPoint: mock().mockReturnValue("/tmp/P-Drive-FUSE"),
         };
 
         mockEngine = {

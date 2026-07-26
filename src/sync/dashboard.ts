@@ -70,9 +70,9 @@ export function startDashboard(
 
                 return Response.json({
                     status:            engine?.getStatus() ?? 'offline',
-                    mode:              'full',
+                    mode:              fod?.isFuseMode ? 'fuse' : db.getSyncMode(),
                     activeTransfers:   engine?.getActiveTransfers() ?? [],
-                    localSyncRoot:     engine?.getLocalSyncRoot() ?? '',
+                    localSyncRoot:     fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? ''),
                     isPaused:          engine?.getStatus() === 'paused',
                     bulkDeletionCount: engine?.getBulkDeletionCount() ?? 0,
                     email,
@@ -80,6 +80,25 @@ export function startDashboard(
                 }, {
                     headers: { 'Access-Control-Allow-Origin': '*' }
                 });
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-mode') {
+                try {
+                    const body = await req.json() as { mode?: string };
+                    const targetMode = body.mode === 'fuse' ? 'fuse' : 'full';
+                    db.setSyncMode(targetMode);
+                    db.log('system', 'system', 'completed', `Sync mode updated to ${targetMode.toUpperCase()}. Applying changes...`);
+
+                    setTimeout(() => {
+                        process.exit(0);
+                    }, 500);
+
+                    return Response.json({ ok: true, mode: targetMode, message: 'Sync mode updated. Daemon restarting...' }, {
+                        headers: { 'Access-Control-Allow-Origin': '*' }
+                    });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err.message }, { status: 400, headers: { 'Access-Control-Allow-Origin': '*' } });
+                }
             }
 
             if (req.method === 'POST' && url.pathname === '/api/login') {

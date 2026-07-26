@@ -685,3 +685,23 @@
         // Logs and quota remain poll-based
         setInterval(fetchLogs, 2000);
         setInterval(fetchQuota, 30000);
+
+        window.switchSyncMode = async function(targetMode) {
+            if (!confirm(`Switch synchronization mode to ${targetMode.toUpperCase()}?\n\nThe daemon will restart in the selected mode.`)) return;
+            try {
+                const res = await fetch('/api/set-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: targetMode })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    alert(data.message);
+                    setTimeout(() => { location.reload(); }, 1500);
+                } else {
+                    alert('Error switching mode: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                alert('Network error switching mode: ' + err.message);
+            }
+        };

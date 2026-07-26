@@ -2823,7 +2823,7 @@ export class SyncEngine extends EventEmitter {
             }
 
             // 2. Pre-Swap SHA-1 Checksum Verification
-            const expectedSha1 = revision.claimedSha1 ?? (revision as any).sha1;
+            const expectedSha1 = (revision as any).claimedSha1 ?? (revision as any).sha1;
             if (expectedSha1) {
               const actualSha1 = await getSha1(tmpPath);
               if (actualSha1 !== expectedSha1) {

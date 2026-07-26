@@ -12,10 +12,11 @@ show_help() {
     echo "Usage: $0 [command] [options]"
     echo ""
     echo "Daemon Commands:"
-    echo "  start [path]      - Start the sync daemon (default: ~/P-Drive or custom path)"
-    echo "  stop              - Stop the sync daemon and tray"
-    echo "  restart [path]    - Restart the daemon with optional custom path"
-    echo "  status            - Check daemon & tray status & view dashboard link"
+    echo "  start [path] [--mode=full|fuse] - Start daemon in Full Sync or FUSE Mode"
+    echo "  mode [full|fuse]                - Switch sync mode on the fly"
+    echo "  stop                            - Stop the sync daemon, tray, & unmount FUSE"
+    echo "  restart [path]                  - Restart the daemon with optional custom path"
+    echo "  status                          - Check daemon, mode, tray status & view dashboard"
     echo ""
     echo "Client & Maintenance Commands:"
     echo "  login             - Authenticate with Proton Drive"
@@ -29,21 +30,33 @@ show_help() {
 # Helper to start daemon
 start_daemon() {
     CUSTOM_PATH="$1"
-    PROFILE="${2:-default}"
-    if [ -n "$CUSTOM_PATH" ]; then
+    SYNC_MODE="full"
+
+    if [ "$2" = "--mode=fuse" ] || [ "$3" = "--mode=fuse" ] || [ "$1" = "--mode=fuse" ]; then
+        SYNC_MODE="fuse"
+    elif [ "$2" = "--mode=full" ] || [ "$3" = "--mode=full" ] || [ "$1" = "--mode=full" ]; then
+        SYNC_MODE="full"
+    fi
+
+    if [ -n "$CUSTOM_PATH" ] && [ "$CUSTOM_PATH" != "--mode=fuse" ] && [ "$CUSTOM_PATH" != "--mode=full" ]; then
         RESOLVED_PATH="$(eval echo "$CUSTOM_PATH")"
-        fusermount -u "$RESOLVED_PATH" 2>/dev/null || umount -l "$RESOLVED_PATH" 2>/dev/null || true
+        fusermount -u -z "$RESOLVED_PATH" 2>/dev/null || umount -l "$RESOLVED_PATH" 2>/dev/null || true
         TARGET_DIR="$(mkdir -p "$RESOLVED_PATH" && cd "$RESOLVED_PATH" && pwd)"
         export PROTON_MOUNT_POINT="$TARGET_DIR"
         echo "Setting sync folder to: ${TARGET_DIR}"
     else
-        TARGET_DIR="${HOME}/P-Drive"
+        if [ "$SYNC_MODE" = "fuse" ]; then
+            TARGET_DIR="${HOME}/P-Drive-FUSE"
+        else
+            TARGET_DIR="${HOME}/P-Drive"
+        fi
         mkdir -p "$TARGET_DIR"
         export PROTON_MOUNT_POINT="$TARGET_DIR"
     fi
-    echo "Starting Proton Drive daemon (profile: ${PROFILE})..."
+
+    echo "Starting Proton Drive daemon in ${SYNC_MODE^^} mode..."
     mkdir -p "${HOME}/.config/proton-drive-sync"
-    nohup env PROTON_SYNC_PROFILE="$PROFILE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" > "${HOME}/.config/proton-drive-sync/daemon.log" 2>&1 &
+    nohup env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_MOUNT_POINT="$TARGET_DIR" "${DAEMON_BIN}" > "${HOME}/.config/proton-drive-sync/daemon.log" 2>&1 &
     
     if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
         if [ -f "$TRAY_SCRIPT" ]; then
@@ -56,24 +69,30 @@ start_daemon() {
 }
 
 stop_daemon() {
-    echo "Stopping Proton Drive daemon and tray..."
+    echo "Stopping Proton Drive daemon, unmounting FUSE, and stopping tray..."
     pkill -f "proton-sync" 2>/dev/null || true
     pkill -f "proton-drive-tray.py" 2>/dev/null || true
-    systemctl --user stop proton-sync.service 2>/dev/null || true
+    fusermount -u -z "${HOME}/P-Drive-FUSE" 2>/dev/null || umount -l "${HOME}/P-Drive-FUSE" 2>/dev/null || true
     echo "Stopped."
 }
 
 cmd="${1:-help}"
 case "$cmd" in
     start)
-        start_daemon "$2"
+        start_daemon "$2" "$3"
+        ;;
+    mode)
+        TARGET_MODE="${2:-full}"
+        echo "Switching Proton Drive sync mode to ${TARGET_MODE^^}..."
+        stop_daemon
+        start_daemon "" "--mode=${TARGET_MODE}"
         ;;
     stop)
         stop_daemon
         ;;
     restart)
         stop_daemon
-        start_daemon "$2"
+        start_daemon "$2" "$3"
         ;;
     status)
         echo "Daemon status:"; pgrep -fl "proton-sync" || echo "Not running"

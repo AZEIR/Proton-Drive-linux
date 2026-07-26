@@ -16,6 +16,7 @@ TRAY_PID=""
 cleanup() {
     [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null
     [ -n "$TRAY_PID" ] && kill "$TRAY_PID" 2>/dev/null
+    fusermount -u -z "${HOME}/P-Drive-FUSE" 2>/dev/null || umount -l "${HOME}/P-Drive-FUSE" 2>/dev/null || true
     wait 2>/dev/null
     exit 0
 }

@@ -239,7 +239,6 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                 <div id="tab-settings" class="tab-pane">
                     <div class="card">
                         <h2>Configuration Settings</h2>
-                        <div class="settings-group">
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <span class="setting-title">Sync Folder Path</span>
@@ -248,6 +247,23 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                 <div class="setting-input-group">
                                     <input type="text" id="syncPath" value="">
                                     <button class="btn btn-primary" onclick="savePath()">Save Path</button>
+                                </div>
+                            </div>
+                            
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Synchronization Mode</span>
+                                    <span class="setting-desc">Switch between Standard Full Sync (local file copies) and FUSE File-On-Demand mode.</span>
+                                </div>
+                                <div style="display:flex;gap:8px;align-items:center;">
+                                    <button class="btn" id="btnModeFull" onclick="switchSyncMode('full')">
+                                        <span class="material-symbols-outlined" style="font-size:16px;">folder</span>
+                                        Full Sync
+                                    </button>
+                                    <button class="btn" id="btnModeFuse" onclick="switchSyncMode('fuse')">
+                                        <span class="material-symbols-outlined" style="font-size:16px;">cloud</span>
+                                        FUSE Mode
+                                    </button>
                                 </div>
                             </div>
                             
