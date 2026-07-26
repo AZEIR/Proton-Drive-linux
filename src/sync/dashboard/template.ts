@@ -32,6 +32,10 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                     <span class="material-symbols-outlined menu-icon">dashboard</span>
                     Dashboard
                 </div>
+                <div class="menu-item" data-tab="browser" onclick="showTab('browser')">
+                    <span class="material-symbols-outlined menu-icon">folder_open</span>
+                    File Browser
+                </div>
                 <div class="menu-item" data-tab="settings" onclick="showTab('settings')">
                     <span class="material-symbols-outlined menu-icon">settings</span>
                     Settings
@@ -276,6 +280,51 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                     </button>
                                 </div>
                             </div>
+                    </div>
+                </div>
+
+                <!-- Tab Pane: File Browser -->
+                <div id="tab-browser" class="tab-pane">
+                    <div class="browser-container card">
+                        <!-- Browser Header & Breadcrumbs -->
+                        <div class="browser-header">
+                            <div class="browser-breadcrumbs" id="browserBreadcrumbs">
+                                <span class="breadcrumb-item active" onclick="navigateToBrowserPath('')">My Files</span>
+                            </div>
+                            <div class="browser-toolbar">
+                                <div class="search-box">
+                                    <span class="material-symbols-outlined search-icon">search</span>
+                                    <input type="text" id="browserSearchInput" placeholder="Filter current folder..." oninput="filterBrowserItems()">
+                                </div>
+                                <button class="btn btn-sm" onclick="refreshBrowser()" title="Refresh file list">
+                                    <span class="material-symbols-outlined">refresh</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Browser File List Table -->
+                        <div class="browser-table-wrapper">
+                            <table class="browser-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 42%;">Name</th>
+                                        <th style="width: 22%;">Local Status</th>
+                                        <th style="width: 14%;">Size</th>
+                                        <th style="width: 22%; text-align: right;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="browserTableBody">
+                                    <tr>
+                                        <td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">Loading files...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Browser Footer Stats -->
+                        <div class="browser-footer">
+                            <span id="browserItemCount">0 items</span>
+                            <span id="browserCacheSummary">0 B cached locally</span>
                         </div>
                     </div>
                 </div>

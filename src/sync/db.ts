@@ -259,7 +259,7 @@ export class SyncDatabase {
         if (this._logWriteCount % 100 === 0) {
             this.db.run(`
                 DELETE FROM sync_logs
-                WHERE id < (SELECT MAX(id) FROM sync_logs) - 1000
+                WHERE id NOT IN (SELECT id FROM sync_logs ORDER BY id DESC LIMIT 1000)
             `);
             this.checkpoint();
         }

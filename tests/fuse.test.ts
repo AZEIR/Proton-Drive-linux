@@ -25,7 +25,7 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
                 downloadToStream: (stream: any) => {
                     const writer = stream.getWriter();
                     writer.write(new TextEncoder().encode("hello fuse content"));
-                    return { completion: async () => { await stream.close(); } };
+                    return { completion: async () => { try { writer.releaseLock(); } catch {} await stream.close(); } };
                 }
             }),
             trashNodes: mock().mockResolvedValue([]),
@@ -73,10 +73,17 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
         expect(hydrator.isHydrated("node-doc-1")).toBe(false);
         expect(hydrator.isPinned("node-doc-1")).toBe(false);
 
+        let startEmitted = false;
+        let completeEmitted = false;
+        hydrator.on("start", () => { startEmitted = true; });
+        hydrator.on("complete", () => { completeEmitted = true; });
+
         // Hydrate node on-demand
         const cachePath = await hydrator.hydrateNode("node-doc-1", "document.txt");
         expect(existsSync(cachePath)).toBe(true);
         expect(hydrator.isHydrated("node-doc-1")).toBe(true);
+        expect(startEmitted).toBe(true);
+        expect(completeEmitted).toBe(true);
 
         const stats = hydrator.getCacheStats();
         expect(stats.totalFiles).toBe(1);
@@ -93,12 +100,34 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
         expect(hydrator.isPinned("node-doc-1")).toBe(false);
     });
 
-    it("ProtonFuseEngine should implement FodHooks interface correctly", () => {
+    it("FodHydrator should deduplicate simultaneous in-flight hydrations", async () => {
+        const hydrator = new FodHydrator(db, mockSdk, mockLogger);
+        db.setMapping({
+            local_path: "file.txt",
+            node_uid: "node-dedup-1",
+            is_dir: 0,
+            size: 100,
+            mtime: Date.now(),
+            sha1: "",
+            remote_revision_uid: "",
+            remote_mtime: Date.now(),
+        });
+
+        const p1 = hydrator.hydrateNode("node-dedup-1", "file.txt");
+        const p2 = hydrator.hydrateNode("node-dedup-1", "file.txt");
+
+        const [path1, path2] = await Promise.all([p1, p2]);
+        expect(path1).toBe(path2);
+        expect(existsSync(path1)).toBe(true);
+    });
+
+    it("ProtonFuseEngine should implement FodHooks and return active transfers", () => {
         const engine = new ProtonFuseEngine(db, mockSdk, mockAuth, mockLogger, `${testDir}/mount`);
         expect(engine.isFuseMode).toBe(true);
         expect(engine.mountPoint).toBe(`${testDir}/mount`);
         expect(engine.getCached()).toBeArray();
         expect(engine.getCacheStats()).toBeObject();
         expect(engine.getUploads()).toBeArray();
+        expect(engine.getActiveTransfers()).toBeArray();
     });
 });

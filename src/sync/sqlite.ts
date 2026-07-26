@@ -8,8 +8,20 @@ export class Database {
 
     constructor(filename: string, options?: any) {
         if (isBun) {
-            const BunDatabase = require('bun:sqlite').Database;
-            this.inner = new BunDatabase(filename, options);
+            try {
+                const req = eval('require');
+                const BunDatabase = req('bun:sqlite').Database;
+                this.inner = new BunDatabase(filename, options);
+            } catch {
+                const BetterSqlite3 = require('better-sqlite3');
+                mkdirSync(path.dirname(filename), { recursive: true });
+                const nodeOptions: any = {};
+                if (options) {
+                    if (options.readonly) nodeOptions.readonly = true;
+                    if (options.create === false) nodeOptions.fileMustExist = true;
+                }
+                this.inner = new BetterSqlite3(filename, nodeOptions);
+            }
         } else {
             const BetterSqlite3 = require('better-sqlite3');
             mkdirSync(path.dirname(filename), { recursive: true });

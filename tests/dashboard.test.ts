@@ -25,6 +25,8 @@ describe("Dashboard API", () => {
             getActiveTransfers: mock().mockReturnValue([]),
             getLocalSyncRoot: mock().mockReturnValue("/tmp/test-sync"),
             getBulkDeletionCount: mock().mockReturnValue(0),
+            getConcurrencyLimit: mock().mockReturnValue(2),
+            setConcurrencyLimit: mock(),
             start: mock().mockResolvedValue(undefined),
             stop: mock().mockResolvedValue(undefined),
             pause: mock().mockResolvedValue(undefined),
@@ -140,4 +142,35 @@ describe("Dashboard API", () => {
             offlineServer.stop(true);
         }
     });
+
+    it("GET /api/browser/list should return file tree with breadcrumbs and items", async () => {
+        mockDb.getAllMappings = mock().mockReturnValue([
+            { local_path: "document.txt", node_uid: "n1", is_dir: 0, size: 100, mtime: 1000 },
+            { local_path: "folder/file2.txt", node_uid: "n2", is_dir: 0, size: 200, mtime: 2000 },
+        ]);
+        const res = await fetch(`${BASE_URL}/api/browser/list?path=`);
+        expect(res.status).toBe(200);
+        const data: any = await res.json();
+        expect(data.currentPath).toBe("");
+        expect(data.breadcrumbs.length).toBe(1);
+        expect(data.items.length).toBe(2);
+        expect(data.items[0].name).toBe("folder");
+        expect(data.items[0].isDir).toBe(true);
+        expect(data.items[1].name).toBe("document.txt");
+        expect(data.items[1].isDir).toBe(false);
+    });
+
+    it("POST /api/set-concurrency should update concurrency limit", async () => {
+        const res = await fetch(`${BASE_URL}/api/set-concurrency`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ concurrency: 3 }),
+        });
+        expect(res.status).toBe(200);
+        const data: any = await res.json();
+        expect(data.ok).toBe(true);
+        expect(data.concurrency).toBe(3);
+        expect(mockEngine.setConcurrencyLimit).toHaveBeenCalledWith(3);
+    });
 });
+

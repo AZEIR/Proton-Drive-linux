@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build --compile src/cli/daemon.ts --outfile release/proton-sync",
+    "build": "bun build src/cli/daemon.ts --target=node --outfile release/proton-sync.js && printf '#!/bin/bash\\nNODE_BIN=\"$(command -v node || echo /usr/bin/node)\"\\nexec \"$NODE_BIN\" \"$(dirname \"$0\")/proton-sync.js\" \"$@\"\\n' > release/proton-sync && chmod +x release/proton-sync",
     "test": "bun test",
     "check-types": "tsc --noEmit"
   },

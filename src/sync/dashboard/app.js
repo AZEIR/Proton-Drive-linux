@@ -1,8 +1,16 @@
         let isPaused = false;
         let currentTab = 'dashboard';
-        const IS_FOD = false; // Replaced server-side with isFodMode
+        const IS_FOD = typeof FOD_MODE !== 'undefined' ? FOD_MODE : false;
 
-        // Injected by server
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
 
         // Local UI State for Search/Filters
         let logSearchQuery = '';
@@ -110,11 +118,16 @@
             currentTab = tabId;
             const titles = {
                 'dashboard': 'Sync Dashboard',
+                'browser':   'Proton Drive File Browser',
                 'history':   'Activity History',
                 'settings':  'Configuration Settings',
                 'cache':     'Local Cache',
             };
             document.getElementById('pageTitle').innerText = titles[tabId] || tabId;
+
+            if (tabId === 'browser') {
+                loadBrowserPath(currentBrowserPath);
+            }
 
             // Close mobile sidebar drawer if open
             const sidebar = document.querySelector('.sidebar');
@@ -124,6 +137,234 @@
                 overlay.classList.remove('active');
             }
         }
+
+        // ── Integrated File Browser Logic ─────────────────────────────────
+        let currentBrowserPath = '';
+        let currentBrowserData = { breadcrumbs: [], items: [] };
+        let browserSearchQuery = '';
+
+        function loadBrowserPath(relPath) {
+            currentBrowserPath = relPath || '';
+            const tbody = document.getElementById('browserTableBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">Loading files...</td></tr>`;
+            }
+            fetch('/api/browser/list?path=' + encodeURIComponent(currentBrowserPath))
+                .then(r => r.json())
+                .then(data => {
+                    currentBrowserData = data;
+                    renderBreadcrumbs(data.breadcrumbs || []);
+                    renderBrowserItems();
+                })
+                .catch(err => {
+                    console.error('Failed to fetch browser list:', err);
+                    if (tbody) {
+                        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-danger" style="padding: 24px;">Failed to load files: ${escapeHtml(err.message)}</td></tr>`;
+                    }
+                });
+        }
+
+        function renderBreadcrumbs(breadcrumbs) {
+            const container = document.getElementById('browserBreadcrumbs');
+            if (!container) return;
+            if (!breadcrumbs || breadcrumbs.length === 0) {
+                container.innerHTML = `<span class="breadcrumb-item active" onclick="navigateToBrowserPath('')">My Files</span>`;
+                return;
+            }
+            let html = '';
+            breadcrumbs.forEach((b, idx) => {
+                const isLast = idx === breadcrumbs.length - 1;
+                if (idx > 0) {
+                    html += `<span class="breadcrumb-separator material-symbols-outlined">chevron_right</span>`;
+                }
+                if (isLast) {
+                    html += `<span class="breadcrumb-item active">${escapeHtml(b.name)}</span>`;
+                } else {
+                    html += `<span class="breadcrumb-item" onclick="navigateToBrowserPath('${escapeHtml(b.path)}')">${escapeHtml(b.name)}</span>`;
+                }
+            });
+            container.innerHTML = html;
+        }
+
+        function navigateToBrowserPath(relPath) {
+            const input = document.getElementById('browserSearchInput');
+            if (input) input.value = '';
+            browserSearchQuery = '';
+            loadBrowserPath(relPath);
+        }
+
+        function refreshBrowser() {
+            loadBrowserPath(currentBrowserPath);
+        }
+
+        function filterBrowserItems() {
+            const input = document.getElementById('browserSearchInput');
+            browserSearchQuery = input ? input.value.trim().toLowerCase() : '';
+            renderBrowserItems();
+        }
+
+        function getFileIcon(name, isDir) {
+            if (isDir) return `<span class="material-symbols-outlined file-icon folder">folder</span>`;
+            const ext = name.split('.').pop().toLowerCase();
+            if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
+                return `<span class="material-symbols-outlined file-icon text-primary">image</span>`;
+            } else if (['pdf', 'doc', 'docx', 'txt', 'md', 'rtf'].includes(ext)) {
+                return `<span class="material-symbols-outlined file-icon text-primary">description</span>`;
+            } else if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext)) {
+                return `<span class="material-symbols-outlined file-icon text-primary">video_file</span>`;
+            } else if (['mp3', 'wav', 'flac', 'ogg', 'aac'].includes(ext)) {
+                return `<span class="material-symbols-outlined file-icon text-primary">audio_file</span>`;
+            } else if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) {
+                return `<span class="material-symbols-outlined file-icon text-primary">folder_zip</span>`;
+            } else if (['js', 'ts', 'py', 'json', 'html', 'css', 'cpp', 'sh', 'rs'].includes(ext)) {
+                return `<span class="material-symbols-outlined file-icon text-primary">code</span>`;
+            }
+            return `<span class="material-symbols-outlined file-icon text-primary">draft</span>`;
+        }
+
+        function renderBrowserItems() {
+            const tbody = document.getElementById('browserTableBody');
+            if (!tbody) return;
+
+            let items = currentBrowserData.items || [];
+            if (browserSearchQuery) {
+                items = items.filter(item => item.name.toLowerCase().includes(browserSearchQuery));
+            }
+
+            let cachedCount = 0;
+            let totalBytes = 0;
+            let cachedBytes = 0;
+
+            (currentBrowserData.items || []).forEach(item => {
+                if (!item.isDir) {
+                    totalBytes += item.size;
+                    if (item.isCached) {
+                        cachedCount++;
+                        cachedBytes += item.size;
+                    }
+                }
+            });
+
+            const countEl = document.getElementById('browserItemCount');
+            const summaryEl = document.getElementById('browserCacheSummary');
+            if (countEl) countEl.innerText = `${items.length} items (${cachedCount} cached locally)`;
+            if (summaryEl) summaryEl.innerText = `${formatBytes(cachedBytes)} cached of ${formatBytes(totalBytes)}`;
+
+            if (items.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">No items found in this directory.</td></tr>`;
+                return;
+            }
+
+            let html = '';
+            items.forEach(item => {
+                const icon = getFileIcon(item.name, item.isDir);
+                const nameDisplay = item.isDir 
+                    ? `<div class="browser-item-name is-dir" onclick="navigateToBrowserPath('${escapeHtml(item.relPath)}')">${icon}<span>${escapeHtml(item.name)}</span></div>`
+                    : `<div class="browser-item-name">${icon}<span>${escapeHtml(item.name)}</span></div>`;
+
+                let statusBadge = '';
+                if (item.isPinned) {
+                    statusBadge = `<span class="badge-status badge-pinned"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pinned</span>`;
+                } else if (item.isCached) {
+                    statusBadge = `<span class="badge-status badge-cached"><span class="material-symbols-outlined" style="font-size:14px;">cloud_done</span> Locally Cached</span>`;
+                } else {
+                    statusBadge = `<span class="badge-status badge-virtual"><span class="material-symbols-outlined" style="font-size:14px;">cloud</span> Cloud Only</span>`;
+                }
+
+                const sizeDisplay = item.isDir ? '--' : formatBytes(item.size);
+
+                let actions = `<div class="browser-actions">`;
+                if (!item.isDir && item.nodeUid) {
+                    if (!item.isCached) {
+                        actions += `<button class="btn btn-sm btn-primary" onclick="hydrateBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined" style="font-size:14px;">download</span> Hydrate</button>`;
+                    } else if (IS_FOD) {
+                        actions += `<button class="btn btn-sm" onclick="evictBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined" style="font-size:14px;">delete_sweep</span> Free Space</button>`;
+                    }
+                    if (item.isPinned) {
+                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined text-warning" style="font-size:14px;">push_pin</span> Unpin</button>`;
+                    } else {
+                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pin</button>`;
+                    }
+                }
+                actions += `<button class="btn btn-sm" onclick="openBrowserItem('${escapeHtml(item.relPath)}')"><span class="material-symbols-outlined" style="font-size:14px;">open_in_new</span> Open</button>`;
+                actions += `</div>`;
+
+                html += `<tr>
+                    <td>${nameDisplay}</td>
+                    <td>${statusBadge}</td>
+                    <td>${sizeDisplay}</td>
+                    <td style="text-align: right;">${actions}</td>
+                </tr>`;
+            });
+
+            tbody.innerHTML = html;
+        }
+
+        function hydrateBrowserItem(nodeUid) {
+            fetch('/api/fod/hydrate?nodeUid=' + encodeURIComponent(nodeUid))
+                .then(r => r.json())
+                .then(res => {
+                    if (res.ok) {
+                        refreshBrowser();
+                    } else {
+                        alert('Hydration failed: ' + (res.error || 'Unknown error'));
+                    }
+                });
+        }
+
+        function evictBrowserItem(nodeUid) {
+            fetch('/api/evict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nodeUid }),
+            })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.ok) {
+                        refreshBrowser();
+                    } else {
+                        alert('Evict failed: ' + (res.error || 'Unknown error'));
+                    }
+                });
+        }
+
+        function pinBrowserItem(nodeUid) {
+            fetch('/api/pin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nodeUid }),
+            })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.ok) {
+                        refreshBrowser();
+                    } else {
+                        alert('Pin toggle failed: ' + (res.error || 'Unknown error'));
+                    }
+                });
+        }
+
+        function openBrowserItem(relPath) {
+            fetch('/api/browser/open-item', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ relPath }),
+            })
+                .then(r => r.json())
+                .then(res => {
+                    if (!res.ok) {
+                        alert('Failed to open: ' + (res.error || 'Unknown error'));
+                    }
+                });
+        }
+
+        window.navigateToBrowserPath = navigateToBrowserPath;
+        window.refreshBrowser = refreshBrowser;
+        window.filterBrowserItems = filterBrowserItems;
+        window.hydrateBrowserItem = hydrateBrowserItem;
+        window.evictBrowserItem = evictBrowserItem;
+        window.pinBrowserItem = pinBrowserItem;
+        window.openBrowserItem = openBrowserItem;
 
         function formatBytes(bytes) {
             if (bytes === 0) return '0 B';
@@ -224,14 +465,14 @@
             const visibleLogs = filtered.slice(0, visibleLogsCount);
             let html = activeRows.join('') + visibleLogs.map(l => {
                 const time        = new Date(l.timestamp).toLocaleString();
-                const action      = l.direction.replace('_', ' ');
-                const statusClass = 'status-' + l.status;
-                const path        = l.file_path;
-                const msg         = l.message ? `<span class="log-message">${l.message}</span>` : '';
+                const action      = escapeHtml(l.direction.replace('_', ' '));
+                const statusClass = 'status-' + escapeHtml(l.status);
+                const path        = escapeHtml(l.file_path);
+                const msg         = l.message ? `<span class="log-message">${escapeHtml(l.message)}</span>` : '';
                 return `<tr>
                     <td class="time-col">${time}</td>
                     <td class="log-direction" style="color: ${l.direction.startsWith('up') ? '#a78bfa' : '#10b981'}">${action}</td>
-                    <td><span class="log-status ${statusClass}">${l.status}</span></td>
+                    <td><span class="log-status ${statusClass}">${escapeHtml(l.status)}</span></td>
                     <td><strong class="file-path-text">${path}</strong>${msg}</td>
                 </tr>`;
             }).join('');
@@ -302,10 +543,11 @@
             }
 
             body.innerHTML = filtered.map(f => {
-                const name    = f.local_path || f.name;
+                const rawName = f.local_path || f.name || '';
+                const name    = escapeHtml(rawName);
                 const size    = formatBytes(f.size || 0);
                 const isLocal = f.is_local;
-                const uid     = f.node_uid;
+                const uid     = f.node_uid ? escapeHtml(f.node_uid) : '';
                 const status  = isLocal
                     ? `<span class="log-status status-completed"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">check_circle</span>Local</span>`
                     : `<span class="log-status" style="color:var(--text-muted);background:rgba(255,255,255,0.05);"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">cloud_queue</span>Stub</span>`;
@@ -366,13 +608,8 @@
             // Sync action button visibility per mode
             const pauseBtn = document.getElementById('btnPause');
             const syncNowBtn = document.getElementById('syncNowBtn');
-            if (isFuseMode) {
-                if (pauseBtn) pauseBtn.style.display = 'none';
-                if (syncNowBtn) syncNowBtn.style.display = 'inline-flex';
-            } else {
-                if (pauseBtn) pauseBtn.style.display = 'inline-flex';
-                if (syncNowBtn) syncNowBtn.style.display = 'inline-flex';
-            }
+            if (pauseBtn) pauseBtn.style.display = 'inline-flex';
+            if (syncNowBtn) syncNowBtn.style.display = 'inline-flex';
 
             // Update status description and icon in hero card
             const heroTitle = document.getElementById('syncStateTitle');
@@ -396,15 +633,16 @@
             // Inject the Material Symbol icon
             heroIcon.innerHTML = getMascotIcon(data.status);
 
-            if (data.status === 'synced') {
+            if (data.status === 'synced' && (!data.activeTransfers || data.activeTransfers.length === 0)) {
                 heroTitle.innerText = isFuseMode ? 'FUSE Filesystem Active' : 'Your files are up to date';
                 heroDesc.innerText  = isFuseMode ? `Files are mounted at ${data.mountPoint || '~/P-Drive-FUSE'}. Accessing any file downloads it transparently on-demand.` : 'Proton Drive is actively monitoring your sync folder.';
+            } else if (data.status === 'syncing' || (data.activeTransfers && data.activeTransfers.length > 0)) {
+                const active = (data.activeTransfers && data.activeTransfers[0]) || {};
+                const name = active.filePath || active.localPath || 'file';
+                const actionLabel = active.type === 'upload' ? 'Uploading' : 'Downloading';
+                heroTitle.innerText = isFuseMode ? `FUSE: ${actionLabel} ${name}...` : 'Syncing your changes...';
+                heroDesc.innerText  = active.percent !== undefined ? `${actionLabel} ${name} — ${active.percent}% complete` : 'Uploading/downloading files to keep your drive in sync.';
             } else if (data.status === 'bulk_deletion_warning') {
-                heroTitle.innerText = 'Sync Paused - Deletion Warning';
-                heroDesc.innerText  = 'A large number of local deletions was intercepted. Confirm or cancel them to resume sync.';
-            } else if (data.status === 'syncing') {
-                heroTitle.innerText = 'Syncing your changes...';
-                heroDesc.innerText  = 'Uploading/downloading files to keep your drive in sync.';
             } else if (data.status === 'scanning') {
                 heroTitle.innerText = 'Scanning repositories...';
                 heroDesc.innerText  = 'Checking local and cloud directories for changes.';

@@ -758,7 +758,17 @@ describe("SyncEngine", () => {
             expect((engine as any).isPaused).toBe(true);
             expect((engine as any).bulkDeletionWarning).toBe(true);
         });
+
+        it("should get and set network concurrency limit correctly", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            expect(engine.getConcurrencyLimit()).toBe(2);
+
+            engine.setConcurrencyLimit(4);
+            expect(engine.getConcurrencyLimit()).toBe(4);
+            expect(db.getConfig("sync_concurrency", "2")).toBe("4");
+        });
     });
 });
+
 
 

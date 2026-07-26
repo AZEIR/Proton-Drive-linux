@@ -1,18 +1,18 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { exec, spawn, ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import { exec } from 'node:child_process';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { NodeType } from '@protontech/drive-sdk';
 import { SyncDatabase } from '../sync/db';
-import { FodHydrator } from './hydrator';
+import { FodHydrator, ActiveTransferInfo } from './hydrator';
+import { FuseDriver } from './fuse-driver';
 import { FodHooks } from '../sync/dashboard';
 
 export class ProtonFuseEngine extends EventEmitter implements FodHooks {
     public isFuseMode: boolean = true;
     public mountPoint: string;
-    private fuseProcess: ChildProcess | null = null;
     private hydrator: FodHydrator;
-    private activeUploadsList: any[] = [];
+    private fuseDriver: FuseDriver | null = null;
     private isMounted: boolean = false;
 
     constructor(
@@ -26,6 +26,12 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
         const home = process.env.HOME || '/tmp';
         this.mountPoint = mountPoint || db.getFuseMountPoint() || path.join(home, 'P-Drive-FUSE');
         this.hydrator = new FodHydrator(db, sdk, logger);
+        
+        // Forward hydration progress events for UI real-time SSE stream
+        this.hydrator.on('progress', (info) => this.emit('transfersChanged', info));
+        this.hydrator.on('start', (info) => this.emit('transfersChanged', info));
+        this.hydrator.on('complete', (info) => this.emit('transfersChanged', info));
+
         this.setupProcessExitHandlers();
     }
 
@@ -35,16 +41,14 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
                 this.unmountSync();
             }
         };
-        process.on('SIGINT', cleanup);
-        process.on('SIGTERM', cleanup);
-        process.on('exit', cleanup);
+        process.once('exit', cleanup);
     }
 
     private unmountSync(): void {
         try {
-            if (this.fuseProcess) {
-                this.fuseProcess.kill('SIGTERM');
-                this.fuseProcess = null;
+            if (this.fuseDriver) {
+                this.fuseDriver.unmount().catch(() => {});
+                this.fuseDriver = null;
             }
             exec(`fusermount -u -z "${this.mountPoint}" 2>/dev/null || umount -l "${this.mountPoint}" 2>/dev/null`);
             this.isMounted = false;
@@ -63,73 +67,106 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
             this.logger.error('FUSE background remote scan error:', err);
         });
 
-        const candidatePaths = [
-            path.join(process.cwd(), 'release', 'proton-fuse'),
-            path.join(path.dirname(process.execPath), 'proton-fuse'),
-            path.join(path.dirname(process.execPath), 'release', 'proton-fuse'),
-            '/usr/local/bin/proton-fuse',
-        ];
-        const fuseBin = candidatePaths.find(p => existsSync(p)) || candidatePaths[0];
-        const dbPath = path.join(process.env.HOME || '/tmp', '.config', 'proton-drive-sync', 'sync_state.db');
-        const cacheDir = this.hydrator.getCacheDir();
+        this.fuseDriver = new FuseDriver(this.mountPoint, this.db, this.hydrator, this.sdk, this.logger);
 
-        if (existsSync(fuseBin)) {
-            this.logger.info(`Launching native FUSE binary: ${fuseBin} "${this.mountPoint}" "${dbPath}" "${cacheDir}"`);
-            this.fuseProcess = spawn(fuseBin, [this.mountPoint, dbPath, cacheDir], {
-                stdio: 'ignore',
-                detached: true,
-            });
+        // Forward upload events from FUSE driver to UI
+        this.fuseDriver.on('upload_start', (info) => this.emit('transfersChanged', info));
+        this.fuseDriver.on('upload_progress', (info) => this.emit('transfersChanged', info));
+        this.fuseDriver.on('upload_complete', (info) => this.emit('transfersChanged', info));
+
+        try {
+            await this.fuseDriver.mount();
             this.isMounted = true;
             this.logger.info(`Proton Drive FUSE filesystem mounted cleanly on ${this.mountPoint}`);
-        } else {
-            this.logger.warn(`Native FUSE binary not found at ${fuseBin}. Please run: gcc -O2 src/fod/proton-fuse.c -lfuse3 -lsqlite3 -lpthread -o release/proton-fuse`);
+        } catch (err: any) {
+            this.logger.error(`Failed to mount native TypeScript FUSE filesystem: ${err?.message || err}`);
+            throw err;
         }
     }
 
-    private async scanRemoteTree(): Promise<void> {
+    public async scanRemoteTree(): Promise<void> {
         this.logger.info('FUSE Mode: Syncing remote cloud directory structure...');
         try {
             const rootFolder = await this.sdk.getMyFilesRootFolder();
             const queue: { uid: string; relPath: string }[] = [{ uid: rootFolder.uid, relPath: '' }];
             let mappedCount = 0;
+            let activeWorkers = 0;
 
-            while (queue.length > 0) {
-                const current = queue.shift();
-                if (!current) continue;
+            const processNode = (currentRelPath: string, node: any) => {
+                if ('missingUid' in node || node.trashTime) return;
 
-                const childrenUids: string[] = [];
-                for await (const uid of this.sdk.iterateFolderChildrenNodeUids(current.uid)) {
-                    childrenUids.push(uid);
+                const name = node.name.ok ? node.name.value : 'degraded_name';
+                const relPath = currentRelPath ? `${currentRelPath}/${name}` : name;
+                const isDir = node.type === NodeType.Folder || node.type === 2;
+                const rev = node.activeRevision?.ok ? node.activeRevision.value : null;
+                const size = rev
+                    ? (rev.claimedSize ?? rev.size ?? rev.storageSize ?? 0)
+                    : ((node as any).totalStorageSize ?? (node as any).size ?? (node as any).claimedSize ?? 0);
+                const remoteRevUid = rev ? (rev.uid ?? rev.id ?? '') : '';
+                const sha1 = rev?.claimedDigests?.sha1 || '';
+
+                mappedCount++;
+                this.db.setMapping({
+                    local_path: relPath,
+                    node_uid: node.uid,
+                    is_dir: isDir ? 1 : 0,
+                    size,
+                    mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+                    sha1,
+                    remote_revision_uid: remoteRevUid,
+                    remote_mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+                });
+
+                if (isDir) {
+                    queue.push({ uid: node.uid, relPath });
                 }
+            };
 
-                const chunkSize = 50;
-                for (let i = 0; i < childrenUids.length; i += chunkSize) {
-                    const chunk = childrenUids.slice(i, i + chunkSize);
-                    for await (const node of this.sdk.iterateNodes(chunk)) {
-                        if ('missingUid' in node || node.trashTime) continue;
+            const workerCount = 5;
+            const workers = Array.from({ length: workerCount }, async () => {
+                while (true) {
+                    if (queue.length === 0) {
+                        if (activeWorkers === 0) break;
+                        await new Promise((r) => setTimeout(r, 25));
+                        continue;
+                    }
 
-                        const name = node.name.ok ? node.name.value : 'degraded_name';
-                        const relPath = current.relPath ? `${current.relPath}/${name}` : name;
-                        const isDir = node.type === NodeType.Folder || node.type === 2;
+                    const current = queue.shift();
+                    if (!current) continue;
 
-                        mappedCount++;
-                        this.db.setMapping({
-                            local_path: relPath,
-                            node_uid: node.uid,
-                            is_dir: isDir ? 1 : 0,
-                            size: node.size || 0,
-                            mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
-                            sha1: '',
-                            remote_revision_uid: (node.activeRevision as any)?.ok ? (node.activeRevision as any).value?.id || '' : '',
-                            remote_mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
-                        });
-
-                        if (isDir) {
-                            queue.push({ uid: node.uid, relPath });
+                    activeWorkers++;
+                    try {
+                        const childrenUids: string[] = [];
+                        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(current.uid)) {
+                            childrenUids.push(uid);
                         }
+
+                        const chunkSize = 15;
+                        for (let i = 0; i < childrenUids.length; i += chunkSize) {
+                            const chunk = childrenUids.slice(i, i + chunkSize);
+                            try {
+                                for await (const node of this.sdk.iterateNodes(chunk)) {
+                                    processNode(current.relPath, node);
+                                }
+                            } catch {
+                                for (const singleUid of chunk) {
+                                    try {
+                                        for await (const node of this.sdk.iterateNodes([singleUid])) {
+                                            processNode(current.relPath, node);
+                                        }
+                                    } catch {}
+                                }
+                            }
+                        }
+                    } catch (folderErr) {
+                        this.logger.error(`Error scanning folder ${current.relPath}:`, folderErr);
+                    } finally {
+                        activeWorkers--;
                     }
                 }
-            }
+            });
+
+            await Promise.all(workers);
             this.logger.info(`FUSE Mode: Remote directory structure sync complete. Mapped ${mappedCount} items.`);
             this.db.log('system', 'system', 'completed', `FUSE Mode: Mapped ${mappedCount} cloud items.`);
         } catch (err) {
@@ -143,7 +180,7 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
         this.logger.info('Proton Drive FUSE Engine stopped.');
     }
 
-    // FodHooks implementation
+    // FodHooks & Dashboard Active Transfer implementation
     getInodes(): any[] {
         return this.db.getAllMappings();
     }
@@ -169,6 +206,12 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
     }
 
     getUploads(): any[] {
-        return this.activeUploadsList;
+        return this.fuseDriver ? this.fuseDriver.getActiveUploads() : [];
+    }
+
+    getActiveTransfers(): ActiveTransferInfo[] {
+        const downloads = this.hydrator.getActiveTransfers();
+        const uploads = this.getUploads();
+        return [...downloads, ...uploads];
     }
 }

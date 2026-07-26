@@ -145,10 +145,10 @@ class ProtonDriveTrayApp:
             icon_name = "tray-synced"
         elif status in ("syncing", "scanning", "uploading", "downloading"):
             icon_name = "tray-syncing"
-        elif status == "paused":
+        elif status in ("paused", "auth_required"):
             icon_name = "tray-paused"
         else:
-            # error, auth_required, offline, unknown
+            # error, offline, unknown
             icon_name = "tray-error"
 
         # Update icon path/name
@@ -199,7 +199,10 @@ class ProtonDriveTrayApp:
 
     def restart_service(self, widget):
         def worker():
-            os.system("systemctl --user restart proton-sync.service 2>/dev/null")
+            res = os.system("systemctl --user restart proton-sync.service 2>/dev/null")
+            if res != 0:
+                script_dir = os.path.dirname(os.path.realpath(__file__))
+                os.system(f"bash '{script_dir}/drive.sh' restart &")
         threading.Thread(target=worker, daemon=True).start()
 
     def quit_app(self, widget):

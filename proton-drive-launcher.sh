@@ -13,16 +13,28 @@ TRAY_SCRIPT="${SCRIPT_DIR}/proton-drive-tray.py"
 DAEMON_PID=""
 TRAY_PID=""
 
+DB_FILE="${HOME}/.config/proton-drive-sync/sync_state.db"
+STORED_MODE=""
+STORED_FUSE=""
+if [ -f "$DB_FILE" ] && command -v sqlite3 >/dev/null 2>&1; then
+    STORED_MODE="$(sqlite3 "$DB_FILE" "SELECT value FROM sync_config WHERE key='sync_mode';" 2>/dev/null)"
+    STORED_FUSE="$(sqlite3 "$DB_FILE" "SELECT value FROM sync_config WHERE key='fuse_mount_point';" 2>/dev/null)"
+fi
+
 cleanup() {
     [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null
     [ -n "$TRAY_PID" ] && kill "$TRAY_PID" 2>/dev/null
     fusermount -u -z "${HOME}/P-Drive-FUSE" 2>/dev/null || umount -l "${HOME}/P-Drive-FUSE" 2>/dev/null || true
+    if [ -n "$STORED_FUSE" ] && [ "$STORED_FUSE" != "${HOME}/P-Drive-FUSE" ]; then
+        fusermount -u -z "$STORED_FUSE" 2>/dev/null || umount -l "$STORED_FUSE" 2>/dev/null || true
+    fi
     wait 2>/dev/null
     exit 0
 }
 trap cleanup EXIT INT TERM
 
-# Start the sync daemon in the background
+# Start the sync daemon in the background with environment set from DB if not provided
+export PROTON_SYNC_MODE="${PROTON_SYNC_MODE:-${STORED_MODE:-full}}"
 "$DAEMON_BIN" &
 DAEMON_PID=$!
 

@@ -74,8 +74,8 @@ export async function runSync(port: number = 8085) {
     if (session && session.auth.isLoggedIn()) {
         if (fuseEngine && engine) {
             await fuseEngine.start();
-            engine.syncFodMetadata().catch((err) => {
-                session.logger.error('FUSE metadata sync error:', err);
+            engine.startFodEventLoop().catch((err) => {
+                session.logger.error('FUSE event loop error:', err);
             });
         } else if (engine) {
             engine.start().catch((err) => {
@@ -97,9 +97,23 @@ export async function runSync(port: number = 8085) {
                 session = newSession;
                 const logger = session.logger;
                 logger.info('Connection established! Initializing sync engine...');
-                engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
-                if (session.auth.isLoggedIn()) {
-                    await engine.start();
+
+                if (requestedMode === 'fuse') {
+                    fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger);
+                    engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+                    if (session.auth.isLoggedIn()) {
+                        await fuseEngine.start();
+                        engine.startFodEventLoop().catch((err) => {
+                            logger.error('FUSE event loop error:', err);
+                        });
+                    }
+                } else {
+                    engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+                    if (session.auth.isLoggedIn()) {
+                        await engine.start().catch((err) => {
+                            logger.error('SyncEngine startup error:', err);
+                        });
+                    }
                 }
             } catch {
                 // Still offline
@@ -107,11 +121,16 @@ export async function runSync(port: number = 8085) {
         }, 15000);
     }
 
+    // Keep-alive timer to prevent Node event loop from exiting when running in background
+    const keepAliveInterval = setInterval(() => {}, 60000);
+
     // Handle shutdown signals
     const cleanup = async () => {
         if (reconnectInterval) clearInterval(reconnectInterval);
+        clearInterval(keepAliveInterval);
         server.stop();
         if (engine) await engine.stop();
+        if (fuseEngine) await fuseEngine.stop();
         db.close();
         if (session) await session.dispose();
         process.exit(0);

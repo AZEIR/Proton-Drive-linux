@@ -34,11 +34,11 @@ _do_build() {
     mkdir -p "${SCRIPT_DIR}/release"
     (cd "${SCRIPT_DIR}" && bun run build)
 
-    chmod +x "$BINARY"
     if [ ! -f "$BINARY" ]; then
         echo "ERROR: Build failed to produce binary at ${BINARY}"
         exit 1
     fi
+    chmod +x "$BINARY"
     echo "Build complete."
 }
 
@@ -49,11 +49,15 @@ if [ "$FORCE_REBUILD" -eq 1 ]; then
     echo "============================================="
     _do_build
     if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        echo "Restarting daemon to pick up newly built binary..."
+        echo "Restarting daemon (systemd) to pick up newly built binary..."
         systemctl --user restart "$SERVICE_NAME"
         echo "Daemon restarted."
+    elif pgrep -f "[p]roton-sync" >/dev/null 2>&1 || [ -f "${HOME}/.config/proton-drive-sync/daemon.pid" ]; then
+        echo "Restarting daemon (drive.sh) to pick up newly built binary..."
+        "${SCRIPT_DIR}/drive.sh" restart
+        echo "Daemon restarted."
     else
-        echo "(Service not running — start it with: ./drive.sh start)"
+        echo "(Service/Daemon not running — start it with: ./drive.sh start)"
     fi
     echo "Done."
     exit 0
@@ -80,7 +84,6 @@ ExecStart=${SCRIPT_DIR}/proton-drive-launcher.sh
 WorkingDirectory=${SCRIPT_DIR}
 Restart=always
 RestartSec=5s
-Environment=PROTON_MOUNT_POINT=${HOME}/P-Drive
 Environment=DISPLAY=${DISPLAY:-:0}
 Environment=WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
 Environment=PATH=${PATH}

@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, statSync, unlinkSync, readdirSync } from 'node:fs';
-import { mkdir, stat, unlink, readdir } from 'node:fs/promises';
+import { existsSync, mkdirSync, statSync, unlinkSync, readdirSync, createWriteStream } from 'node:fs';
+import { mkdir, stat, unlink, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { SyncDatabase } from '../sync/db';
 
 export interface CachedFileItem {
@@ -11,15 +12,28 @@ export interface CachedFileItem {
     lastAccessed: number;
 }
 
-export class FodHydrator {
+export interface ActiveTransferInfo {
+    nodeUid: string;
+    filePath: string;
+    localPath?: string;
+    transferred: number;
+    size: number;
+    percent: number;
+    type: 'download' | 'upload';
+}
+
+export class FodHydrator extends EventEmitter {
     private cacheDir: string;
     private pinnedNodeUids: Set<string> = new Set();
+    private activeHydrations: Map<string, ActiveTransferInfo> = new Map();
+    private inFlightHydrations: Map<string, Promise<string>> = new Map();
 
     constructor(
         private db: SyncDatabase,
         private sdk: any,
         private logger: any,
     ) {
+        super();
         const home = process.env.HOME || '/tmp';
         this.cacheDir = path.join(home, '.cache', 'proton-drive-sync', 'fod-cache');
         if (!existsSync(this.cacheDir)) {
@@ -65,6 +79,10 @@ export class FodHydrator {
         return this.pinnedNodeUids.has(nodeUid);
     }
 
+    getActiveTransfers(): ActiveTransferInfo[] {
+        return Array.from(this.activeHydrations.values());
+    }
+
     async pinFile(nodeUid: string): Promise<boolean> {
         this.pinnedNodeUids.add(nodeUid);
         this.savePinnedState();
@@ -104,37 +122,109 @@ export class FodHydrator {
             return cachePath;
         }
 
+        // Deduplicate in-flight hydration requests for the same nodeUid
+        if (this.inFlightHydrations.has(nodeUid)) {
+            return this.inFlightHydrations.get(nodeUid)!;
+        }
+
+        const hydrationPromise = this.performHydration(nodeUid, relativePath, cachePath);
+        this.inFlightHydrations.set(nodeUid, hydrationPromise);
+
+        try {
+            const result = await hydrationPromise;
+            return result;
+        } finally {
+            this.inFlightHydrations.delete(nodeUid);
+        }
+    }
+
+    private async performHydration(nodeUid: string, relativePath: string, cachePath: string): Promise<string> {
         const tmpCachePath = `${cachePath}.tmp-${Date.now()}`;
         this.logger.info(`Hydrating on-demand file for FUSE: ${relativePath} (${nodeUid})...`);
 
+        const mapping = this.db.getMappingByNodeUid(nodeUid);
+        const totalSize = mapping?.size || 0;
+
+        const activeItem: ActiveTransferInfo = {
+            nodeUid,
+            filePath: relativePath,
+            localPath: relativePath,
+            transferred: 0,
+            size: totalSize,
+            percent: 0,
+            type: 'download',
+        };
+
+        this.activeHydrations.set(nodeUid, activeItem);
+        this.emit('start', activeItem);
+        this.db.log(relativePath, 'download', 'syncing', `Starting hydration download for ${relativePath}`);
+
         try {
             const node = await this.sdk.getNode(nodeUid);
-            const bunFile = Bun.file(tmpCachePath);
-            const writer = bunFile.writer();
+            const size = node?.activeRevision?.ok ? (node.activeRevision.value.size || totalSize) : (node?.size || totalSize);
+            activeItem.size = size;
 
-            const writableStream = {
-                getWriter: () => writer,
-                close: async () => { await writer.end(); },
-                abort: async () => {
-                    try { await writer.end(); } catch {}
-                    await unlink(tmpCachePath).catch(() => {});
+            const fsWriteStream = createWriteStream(tmpCachePath);
+            let transferred = 0;
+
+            const writableStream = new WritableStream({
+                write: (chunk: any) => {
+                    const buf = Buffer.isBuffer(chunk)
+                        ? chunk
+                        : (chunk instanceof Uint8Array
+                            ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+                            : (chunk instanceof ArrayBuffer ? Buffer.from(chunk) : Buffer.from(chunk)));
+
+                    if (buf && buf.length) {
+                        transferred += buf.length;
+                        activeItem.transferred = transferred;
+                        activeItem.percent = size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : 100;
+                        this.emit('progress', activeItem);
+                    }
+
+                    return new Promise<void>((resolve, reject) => {
+                        const ok = fsWriteStream.write(buf, (err) => {
+                            if (err) reject(err);
+                            else resolve();
+                        });
+                        if (!ok) {
+                            fsWriteStream.once('drain', resolve);
+                        }
+                    });
                 },
-                locked: false,
-            };
+                close: () => {
+                    return new Promise<void>((resolve) => {
+                        fsWriteStream.end(() => resolve());
+                    });
+                },
+                abort: () => {
+                    fsWriteStream.destroy();
+                },
+            });
 
             const downloader = await this.sdk.getFileDownloader(node);
             const downloadController = downloader.downloadToStream(writableStream as any);
             await downloadController.completion();
-            await writer.end();
+            if (!writableStream.locked) {
+                await writableStream.close().catch(() => {});
+            }
 
-            await Bun.write(cachePath, Bun.file(tmpCachePath));
-            await unlink(tmpCachePath).catch(() => {});
+            await rename(tmpCachePath, cachePath);
+
+            activeItem.transferred = size;
+            activeItem.percent = 100;
+            this.emit('complete', activeItem);
             this.logger.info(`Hydration complete: ${relativePath}`);
+            this.db.log(relativePath, 'download', 'completed', `Hydration complete for ${relativePath}`);
             return cachePath;
-        } catch (err) {
+        } catch (err: any) {
             await unlink(tmpCachePath).catch(() => {});
             this.logger.error(`Hydration failed for ${relativePath}:`, err);
+            this.db.log(relativePath, 'download', 'failed', `Hydration failed for ${relativePath}: ${err?.message || err}`);
+            this.emit('error', { nodeUid, error: err });
             throw err;
+        } finally {
+            this.activeHydrations.delete(nodeUid);
         }
     }
 

@@ -46,7 +46,7 @@ export class SyncEngine extends EventEmitter {
   private isBulkDeletionConfirmed: boolean = false;
   private isOffline: boolean = false;
   private checkConnectionInterval: any = null;
-  private concurrencyLimit: number = 5;
+  private concurrencyLimit: number = 2;
   private activeReconciles: Set<string> = new Set();
   private offlineMonitorPromise: Promise<void> | null = null;
   private unsubscribeOffline: (() => void)[] = [];
@@ -140,10 +140,31 @@ export class SyncEngine extends EventEmitter {
     this.isPaused = this.db.getConfig("is_sync_paused", "0") === "1";
     this.ignoreMatcher = new IgnoreMatcher(this.localSyncRoot);
     this.setMaxListeners(100);
+
+    // Initialize network concurrency limit (default 2 to prevent bufferbloat & high ping)
+    const envConcurrency = parseInt(process.env.PROTON_CONCURRENCY || "", 10);
+    const dbConcurrency = parseInt(this.db.getConfig("sync_concurrency", "2"), 10);
+    this.concurrencyLimit = !isNaN(envConcurrency) && envConcurrency > 0
+      ? envConcurrency
+      : (!isNaN(dbConcurrency) && dbConcurrency > 0 ? dbConcurrency : 2);
+    this.logger.info(`Network concurrency limit set to ${this.concurrencyLimit}`);
   }
 
   getLocalSyncRoot(): string {
     return this.localSyncRoot;
+  }
+
+  getConcurrencyLimit(): number {
+    return this.concurrencyLimit;
+  }
+
+  setConcurrencyLimit(limit: number): void {
+    if (limit > 0 && limit <= 10) {
+      this.concurrencyLimit = limit;
+      this.db.setConfig("sync_concurrency", limit.toString());
+      this.logger.info(`Network concurrency limit set to ${this.concurrencyLimit}`);
+      this.emit("statusChanged");
+    }
   }
 
   async setLocalSyncRoot(newPath: string): Promise<void> {
@@ -199,16 +220,23 @@ export class SyncEngine extends EventEmitter {
     );
   }
 
+  public async getRemoteRootUid(): Promise<string> {
+    if (!this.remoteRootUid) {
+      const rootFolder = await this.sdk.getMyFilesRootFolder();
+      if (rootFolder && rootFolder.uid) {
+        this.remoteRootUid = rootFolder.uid;
+      }
+    }
+    if (!this.remoteRootUid) {
+      throw new Error("Unable to retrieve valid remote root folder UID from Proton Drive SDK");
+    }
+    return this.remoteRootUid;
+  }
+
   async syncOnce(): Promise<void> {
     if (!this.auth.isLoggedIn()) return;
 
-    // Ensure local sync directory exists
-    if (!existsSync(this.localSyncRoot)) {
-      this.wasRootDeleted = true;
-      mkdirSync(this.localSyncRoot, { recursive: true });
-    } else {
-      this.wasRootDeleted = false;
-    }
+    if (this.isPaused) return;
 
     this.logger.info(
       `Running one-time Sync Engine run at ${this.localSyncRoot}`,
@@ -222,8 +250,7 @@ export class SyncEngine extends EventEmitter {
 
     try {
       // Get Proton Drive remote root folder
-      const rootFolder = await this.sdk.getMyFilesRootFolder();
-      this.remoteRootUid = rootFolder.uid;
+      await this.getRemoteRootUid();
 
       // Perform full reconciliation
       await this.forceSync();
@@ -428,6 +455,7 @@ export class SyncEngine extends EventEmitter {
   }
 
   async forceSync(): Promise<void> {
+    if (this.db.getSyncMode() === "fuse") return;
     if (this.isScanning) return;
     this.isScanning = true;
     this.emit("statusChanged");
@@ -459,8 +487,9 @@ export class SyncEngine extends EventEmitter {
         "syncing",
         "Scanning remote cloud directory...",
       );
+      const rootUid = await this.getRemoteRootUid();
       const remoteFiles = new Map<string, NodeEntity>();
-      await this.scanRemoteDir(this.remoteRootUid, "", remoteFiles);
+      await this.scanRemoteDir(rootUid, "", remoteFiles);
       this.db.log(
         "system",
         "system",
@@ -500,6 +529,17 @@ export class SyncEngine extends EventEmitter {
     }
   }
 
+  async startFodEventLoop(): Promise<void> {
+    try {
+      const rootFolder = await this.sdk.getMyFilesRootFolder();
+      this.remoteRootUid = rootFolder.uid;
+      await this.subscribeToRemoteEvents(rootFolder.treeEventScopeId);
+      this.logger.info("FUSE Mode: Remote event listener active.");
+    } catch (err: any) {
+      this.logger.error("Failed to start FUSE remote event loop:", err);
+    }
+  }
+
   async syncFodMetadata(): Promise<void> {
     this.logger.info("FUSE Mode: Syncing remote cloud directory structure...");
     this.db.log("system", "system", "syncing", "FUSE Mode: Syncing remote cloud directory structure...");
@@ -513,14 +553,20 @@ export class SyncEngine extends EventEmitter {
 
       for (const [relPath, node] of remoteFiles.entries()) {
         const isDir = node.type === NodeType.Folder;
+        const rev = node.activeRevision?.ok ? node.activeRevision.value : null;
+        const size = rev
+          ? (rev.claimedSize ?? rev.size ?? rev.storageSize ?? 0)
+          : ((node as any).totalStorageSize ?? (node as any).size ?? (node as any).claimedSize ?? 0);
+        const remoteRevUid = rev ? (rev.uid ?? rev.id ?? "") : "";
+        const sha1 = rev?.claimedDigests?.sha1 || "";
         this.db.setMapping({
           local_path: relPath,
           node_uid: node.uid,
           is_dir: isDir ? 1 : 0,
-          size: node.size || 0,
+          size,
           mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
-          sha1: "",
-          remote_revision_uid: (node.activeRevision as any)?.ok ? (node.activeRevision as any).value?.id || "" : "",
+          sha1,
+          remote_revision_uid: remoteRevUid,
           remote_mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
         });
       }
@@ -533,6 +579,10 @@ export class SyncEngine extends EventEmitter {
   }
 
   async startupSync(): Promise<void> {
+    if (this.db.getSyncMode() === "fuse") {
+      this.logger.info("FUSE Mode active: Skipping local disk reconciliation.");
+      return;
+    }
     await this.cleanupTempFiles(this.localSyncRoot);
     const mappingsCount = this.db.getMappingCount();
     const isFullSyncCompleted =
@@ -552,6 +602,7 @@ export class SyncEngine extends EventEmitter {
   }
 
   async fastSync(): Promise<void> {
+    if (this.db.getSyncMode() === "fuse") return;
     if (this.isScanning) return;
     this.isScanning = true;
     this.emit("statusChanged");
@@ -747,6 +798,8 @@ export class SyncEngine extends EventEmitter {
               } catch (err: any) {
                 this.logger.error(`Upload worker error for ${item.path}:`, err);
               }
+              // 50ms pacing delay between transfers to prevent Wi-Fi bufferbloat
+              await new Promise((resolve) => setTimeout(resolve, 50));
             }
           }
         },
@@ -883,7 +936,7 @@ export class SyncEngine extends EventEmitter {
           });
 
           const childFolders: { uid: string; relPath: string }[] = [];
-          const chunkSize = 50;
+          const chunkSize = 10;
           for (let i = 0; i < childrenUids.length; i += chunkSize) {
             const chunk = childrenUids.slice(i, i + chunkSize);
             const chunkFolders = await this.runWithRetry(async () => {
@@ -917,6 +970,8 @@ export class SyncEngine extends EventEmitter {
               return folders;
             });
             childFolders.push(...chunkFolders);
+            // 100ms pacing delay to smooth API request bursts and keep internet ping low
+            await new Promise((resolve) => setTimeout(resolve, 100));
           }
 
           folderQueue.push(...childFolders);
@@ -1428,6 +1483,8 @@ export class SyncEngine extends EventEmitter {
               remoteFiles.get(relPath),
               mappingsCache.get(relPath),
             );
+            // 50ms pacing delay between file reconciliations to prevent Wi-Fi bufferbloat
+            await new Promise((resolve) => setTimeout(resolve, 50));
           }
         }
       },
@@ -1631,6 +1688,7 @@ export class SyncEngine extends EventEmitter {
 
   // Local file watcher logic using chokidar
   private setupWatcher() {
+    if (this.db.getSyncMode() === "fuse") return;
     if (this.watcher) return;
 
     this.watcher = chokidar.watch(this.localSyncRoot, {
@@ -1733,13 +1791,6 @@ export class SyncEngine extends EventEmitter {
 
     const relativePath = path.relative(this.localSyncRoot, absolutePath);
 
-    if (this.ignoreMatcher.shouldIgnore(relativePath, isDir)) {
-      this.logger.debug(
-        `Ignoring watcher change at ${relativePath} (matches ignore rules)`,
-      );
-      return;
-    }
-
     // Reload ignore rules when the user edits .protonignore
     if (
       path.basename(absolutePath) === PROTONIGNORE_FILENAME &&
@@ -1754,6 +1805,13 @@ export class SyncEngine extends EventEmitter {
         "system",
         "completed",
         ".protonignore rules reloaded",
+      );
+      return;
+    }
+
+    if (this.ignoreMatcher.shouldIgnore(relativePath, isDir)) {
+      this.logger.debug(
+        `Ignoring watcher change at ${relativePath} (matches ignore rules)`,
       );
       return;
     }
@@ -2058,6 +2116,9 @@ export class SyncEngine extends EventEmitter {
                 this.db.deletePendingDeletesByPrefix(relativePath);
               }
 
+              if (!this.isStarted || this.isPaused || this.isOffline || this.bulkDeletionWarning) {
+                return;
+              }
               if (!this.activeReconciles.has(relativePath)) {
                 await this.deleteRemoteNode(pending.nodeUid, relativePath);
               }
@@ -2348,7 +2409,7 @@ export class SyncEngine extends EventEmitter {
           const parentRelPath = parts.join("/");
           const parentUid = parentRelPath
             ? await this.ensureRemoteParentFolder(parentRelPath)
-            : this.remoteRootUid;
+            : await this.getRemoteRootUid();
 
           // Create directory remotely
           let nodeUid = "";
@@ -2528,7 +2589,7 @@ export class SyncEngine extends EventEmitter {
               const parentRelPath = parts.join("/");
               const parentUid = parentRelPath
                 ? await this.ensureRemoteParentFolder(parentRelPath)
-                : this.remoteRootUid;
+                : await this.getRemoteRootUid();
 
               this.logger.info(
                 `Uploading new file ${fileName} under parent ${parentUid}`,
@@ -2649,6 +2710,28 @@ export class SyncEngine extends EventEmitter {
         );
         return;
       }
+    }
+
+    if (this.db.getSyncMode() === "fuse") {
+      const isDir = node.type === NodeType.Folder;
+      const rev = node.activeRevision?.ok ? node.activeRevision.value : null;
+      const size = rev
+        ? (rev.claimedSize ?? rev.size ?? rev.storageSize ?? 0)
+        : ((node as any).totalStorageSize ?? (node as any).size ?? (node as any).claimedSize ?? 0);
+      const remoteRevUid = rev ? (rev.uid ?? rev.id ?? "") : "";
+      const sha1 = rev?.claimedDigests?.sha1 || "";
+      this.db.setMapping({
+        local_path: relativePath,
+        node_uid: node.uid,
+        is_dir: isDir ? 1 : 0,
+        size,
+        mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+        sha1,
+        remote_revision_uid: remoteRevUid,
+        remote_mtime: node.modificationTime ? new Date(node.modificationTime).getTime() : Date.now(),
+      });
+      this.emit("statusChanged");
+      return;
     }
 
     const localPath = this.resolveLocalPath(relativePath);
@@ -2972,16 +3055,17 @@ export class SyncEngine extends EventEmitter {
   private async ensureRemoteParentFolder(
     parentRelativePath: string,
   ): Promise<string> {
+    const rootUid = await this.getRemoteRootUid();
     return await this.runWithRetry(async () => {
-      const parts = parentRelativePath.split("/");
-      let currentParentUid = this.remoteRootUid;
+      const parts = parentRelativePath.split("/").filter(Boolean);
+      let currentParentUid = rootUid;
       let prefix = "";
 
       for (const part of parts) {
         prefix = prefix ? `${prefix}/${part}` : part;
         const mapped = this.db.getMapping(prefix);
 
-        if (mapped) {
+        if (mapped && mapped.node_uid) {
           currentParentUid = mapped.node_uid;
         } else {
           // Check if there is an active folder creation promise for this prefix
@@ -3170,9 +3254,16 @@ export class SyncEngine extends EventEmitter {
 
   // Delete file locally
   private async deleteLocalFile(relativePath: string): Promise<void> {
+    if (this.db.getSyncMode() === "fuse") {
+      this.db.deleteMapping(relativePath);
+      this.db.deleteMappingsByPrefix(relativePath);
+      this.emit("statusChanged");
+      return;
+    }
     const localPath = this.resolveLocalPath(relativePath);
     if (!existsSync(localPath)) {
       this.db.deleteMapping(relativePath);
+      this.db.deleteMappingsByPrefix(relativePath);
       return;
     }
 
@@ -3181,6 +3272,7 @@ export class SyncEngine extends EventEmitter {
     try {
       await rm(localPath, { recursive: true, force: true });
       this.db.deleteMapping(relativePath);
+      this.db.deleteMappingsByPrefix(relativePath);
       this.db.log(
         relativePath,
         "delete_local",
@@ -3202,7 +3294,12 @@ export class SyncEngine extends EventEmitter {
   }
 
   private resolveLocalPath(relativePath: string): string {
-    return path.join(this.localSyncRoot, relativePath);
+    const resolved = path.resolve(this.localSyncRoot, relativePath);
+    const rootWithSep = this.localSyncRoot.endsWith(path.sep) ? this.localSyncRoot : this.localSyncRoot + path.sep;
+    if (!resolved.startsWith(rootWithSep) && resolved !== this.localSyncRoot) {
+      throw new Error(`Path traversal attempt detected: ${relativePath}`);
+    }
+    return resolved;
   }
 
   getBulkDeletionCount(): number {
@@ -3221,12 +3318,14 @@ export class SyncEngine extends EventEmitter {
 
   async restoreBulkDeletions(): Promise<void> {
     this.logger.info(
-      "User rejected bulk deletions. Restoring local files from remote cloud.",
+      "User requested cloud file restoration. Clearing database mappings and re-downloading files from remote cloud.",
     );
     this.bulkDeletionWarning = false;
     this.recentDeletions = [];
     this.db.clearMappings();
+    this.db.clearPendingDeletes();
     await this.resume();
+    this.forceSync();
   }
 
   /** Drain all in-memory pending local deletes, executing or discarding each one. */
