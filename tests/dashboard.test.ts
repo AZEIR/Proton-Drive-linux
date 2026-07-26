@@ -124,4 +124,17 @@ describe("Dashboard API", () => {
         const data: any = await res.json();
         expect(data.error).toBe("Already logged in");
     });
+
+    it("GET /api/status should handle null engine and session gracefully when offline", async () => {
+        const offlineServer = startDashboard(mockDb as any, null, null, 8090);
+        try {
+            const res = await fetch("http://localhost:8090/api/status");
+            expect(res.status).toBe(200);
+            const data: any = await res.json();
+            expect(data.status).toBe("offline");
+            expect(data.email).toBe("Not Logged In");
+        } finally {
+            offlineServer.stop(true);
+        }
+    });
 });
