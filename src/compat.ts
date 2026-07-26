@@ -12,29 +12,41 @@ if (typeof (globalThis as any).Bun === 'undefined') {
 }
 
 if (typeof (globalThis as any).Bun.file === 'undefined') {
-    (globalThis as any).Bun.file = function(filePath: string) {
+    (globalThis as any).Bun.file = function(filePath: string | number) {
         return {
             get size() {
-                try { return statSync(filePath).size; } catch { return 0; }
+                try { return statSync(filePath as any).size; } catch { return 0; }
             },
             stream() {
-                return createReadStream(filePath);
+                return typeof filePath === 'number'
+                    ? createReadStream('', { fd: filePath })
+                    : createReadStream(filePath);
             },
             async exists() {
+                if (typeof filePath === 'number') return true;
                 return existsSync(filePath);
             },
             async bytes() {
-                return new Uint8Array(await readFile(filePath));
+                const buf = typeof filePath === 'number'
+                    ? await readFile('', { fd: filePath })
+                    : await readFile(filePath);
+                return new Uint8Array(buf);
             },
             async arrayBuffer() {
-                const buf = await readFile(filePath);
+                const buf = typeof filePath === 'number'
+                    ? await readFile('', { fd: filePath })
+                    : await readFile(filePath);
                 return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
             },
             async text() {
-                return await readFile(filePath, 'utf-8');
+                return typeof filePath === 'number'
+                    ? await readFile('', { fd: filePath, encoding: 'utf-8' })
+                    : await readFile(filePath, 'utf-8');
             },
             writer() {
-                const stream = createWriteStream(filePath);
+                const stream = typeof filePath === 'number'
+                    ? createWriteStream('', { fd: filePath })
+                    : createWriteStream(filePath);
                 return {
                     write(chunk: any) {
                         stream.write(chunk);
@@ -46,17 +58,19 @@ if (typeof (globalThis as any).Bun.file === 'undefined') {
             }
         };
     };
-    (globalThis as any).Bun.write = async function(filePath: string, data: any) {
+    (globalThis as any).Bun.write = async function(filePath: string | number, data: any) {
+        const targetPath = typeof filePath === 'number' ? ('') as any : filePath;
+        const options = typeof filePath === 'number' ? { fd: filePath } : undefined;
         if (typeof data === 'string' || Buffer.isBuffer(data) || data instanceof Uint8Array) {
-            await writeFile(filePath, data);
+            await writeFile(targetPath, data, options);
         } else if (data && typeof data.arrayBuffer === 'function') {
             const buf = await data.arrayBuffer();
-            await writeFile(filePath, Buffer.from(buf));
+            await writeFile(targetPath, Buffer.from(buf), options);
         } else if (data && typeof data.text === 'function') {
             const txt = await data.text();
-            await writeFile(filePath, txt, 'utf-8');
+            await writeFile(targetPath, txt, options);
         } else {
-            await writeFile(filePath, String(data));
+            await writeFile(targetPath, String(data), options);
         }
     };
     (globalThis as any).Bun.serve = function(options: { port: number; hostname?: string; fetch: (req: Request) => Promise<Response> }) {
