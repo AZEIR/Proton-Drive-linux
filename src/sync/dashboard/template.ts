@@ -271,10 +271,10 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                 </div>
                                 <div class="setting-input-group">
                                     <div class="range-with-value">
-                                        <input type="range" id="concurrencyRange" min="1" max="10" value="2" oninput="updateConcurrencyInput(this.value)">
-                                        <input type="number" id="concurrencyInput" min="1" max="10" value="2" oninput="updateConcurrencyRange(this.value)">
+                                        <input type="range" id="concurrencyRange" min="1" max="10" step="1" value="2" aria-label="Parallel file transfer limit" oninput="updateConcurrencyInput(this.value)">
+                                        <input type="number" id="concurrencyInput" min="1" max="10" step="1" value="2" aria-label="Parallel file transfer limit" oninput="updateConcurrencyRange(this.value)">
                                     </div>
-                                    <button class="btn btn-primary" onclick="saveConcurrency()">Save Limit</button>
+                                    <button type="button" id="concurrencySaveBtn" class="btn btn-primary" onclick="saveConcurrency()">Save Limit</button>
                                 </div>
                             </div>
 

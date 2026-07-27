@@ -91,6 +91,8 @@ describe("Dashboard API", () => {
         expect(html).not.toContain("var(--bg-hover)");
         expect(html).toContain("isPaused = Boolean(data.isPaused || data.status === 'paused')");
         expect(html).not.toContain("if (!FOD_MODE)");
+        expect(html).toContain("fetch('/api/set-speed-limit'");
+        expect(html).not.toContain("fetch('/api/set-max-speed'");
     });
 
     it("GET /api/status should handle logged out state", async () => {
@@ -147,6 +149,9 @@ describe("Dashboard API", () => {
         expect(status.status).toBe("paused");
         expect(status.mode).toBe("fod");
         expect(status.isPaused).toBe(true);
+        expect(status.concurrencyLimit).toBe(2);
+        expect(status.maxSpeedKbps).toBe(0);
+        expect(status.wifiSafeMode).toBe(false);
 
         const pauseRes = await fetch(`${BASE_URL}/api/pause`, { method: "POST" });
         const resumeRes = await fetch(`${BASE_URL}/api/resume`, { method: "POST" });
@@ -180,6 +185,9 @@ describe("Dashboard API", () => {
         expect(response.headers.get("content-type")).toContain("text/event-stream");
         expect(payload).toContain('"status":"paused"');
         expect(payload).toContain('"isPaused":true');
+        expect(payload).toContain('"concurrencyLimit":2');
+        expect(payload).toContain('"maxSpeedKbps":0');
+        expect(payload).toContain('"wifiSafeMode":false');
     });
 
     it("POST /api/sync should call engine.forceSync", async () => {

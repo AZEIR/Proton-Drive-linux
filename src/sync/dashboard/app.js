@@ -1,5 +1,6 @@
         let isPaused = false;
         let currentTab = 'dashboard';
+        let concurrencyDraft;
         const IS_FOD = typeof FOD_MODE !== 'undefined' ? FOD_MODE : false;
 
         function escapeHtml(str) {
@@ -83,14 +84,25 @@
             });
         }
 
-        function updateConcurrencyInput(val) {
+        function applyConcurrencyValue(val) {
             const input = document.getElementById('concurrencyInput');
-            if (input) input.value = val;
+            const range = document.getElementById('concurrencyRange');
+            if (input) input.value = String(val);
+            if (range) range.value = String(val);
+        }
+
+        function updateConcurrencyInput(val) {
+            concurrencyDraft = String(val);
+            applyConcurrencyValue(val);
         }
 
         function updateConcurrencyRange(val) {
+            concurrencyDraft = String(val);
+            const parsed = Number(val);
             const range = document.getElementById('concurrencyRange');
-            if (range) range.value = val;
+            if (range && Number.isInteger(parsed) && parsed >= 1 && parsed <= 10) {
+                range.value = String(parsed);
+            }
         }
 
         function init() {
@@ -647,13 +659,16 @@
             }
             const concurrencyInput = document.getElementById('concurrencyInput');
             const concurrencyRange = document.getElementById('concurrencyRange');
-            if (data.concurrencyLimit !== undefined) {
-                if (concurrencyInput && document.activeElement !== concurrencyInput) {
-                    concurrencyInput.value = data.concurrencyLimit ?? 2;
-                }
-                if (concurrencyRange && document.activeElement !== concurrencyRange) {
-                    concurrencyRange.value = data.concurrencyLimit ?? 2;
-                }
+            const concurrencySaveBtn = document.getElementById('concurrencySaveBtn');
+            const wifiSafeMode = Boolean(data.wifiSafeMode);
+            if (concurrencyInput) concurrencyInput.disabled = wifiSafeMode;
+            if (concurrencyRange) concurrencyRange.disabled = wifiSafeMode;
+            if (concurrencySaveBtn) concurrencySaveBtn.disabled = wifiSafeMode;
+            if (wifiSafeMode) {
+                concurrencyDraft = undefined;
+                applyConcurrencyValue(1);
+            } else if (data.concurrencyLimit !== undefined && concurrencyDraft === undefined) {
+                applyConcurrencyValue(data.concurrencyLimit ?? 2);
             }
 
             // Sync action button visibility per mode
@@ -1014,6 +1029,7 @@
                 const data = await res.json();
                 if (data.ok) {
                     showToast(`Wi-Fi Safe Mode ${enabled ? 'Enabled' : 'Disabled'}`, 'success');
+                    await fetchStatus();
                 } else {
                     showToast('Error: ' + (data.error || 'Failed to update Wi-Fi Safe Mode'), 'danger');
                 }
@@ -1027,15 +1043,17 @@
             const val = parseInt(input ? input.value : '0', 10);
             if (isNaN(val) || val < 0) return showToast('Invalid speed limit value', 'danger');
             try {
-                const res = await fetch('/api/set-max-speed', {
+                const res = await fetch('/api/set-speed-limit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ kbps: val })
+                    body: JSON.stringify({ maxSpeedKbps: val })
                 });
                 const data = await res.json();
                 if (data.ok) {
-                    updateSpeedPresetButtons(val);
-                    showToast(`Speed limit set to ${val === 0 ? 'Unlimited' : val + ' KB/s'}`, 'success');
+                    const savedValue = data.maxSpeedKbps ?? val;
+                    input.value = String(savedValue);
+                    updateSpeedPresetButtons(savedValue);
+                    showToast(`Speed limit set to ${savedValue === 0 ? 'Unlimited' : savedValue + ' KB/s'}`, 'success');
                 } else {
                     showToast('Error: ' + (data.error || 'Failed to update speed limit'), 'danger');
                 }
@@ -1046,8 +1064,12 @@
 
         window.saveConcurrency = async function() {
             const input = document.getElementById('concurrencyInput');
-            const val = parseInt(input ? input.value : '2', 10);
+            const saveBtn = document.getElementById('concurrencySaveBtn');
+            const rawValue = concurrencyDraft !== undefined ? concurrencyDraft : (input ? input.value : '2');
+            const val = Number(rawValue);
             if (isNaN(val) || val < 1 || val > 10) return showToast('Concurrency limit must be between 1 and 10', 'danger');
+            if (!Number.isInteger(val)) return showToast('Concurrency limit must be a whole number', 'danger');
+            if (saveBtn) saveBtn.disabled = true;
             try {
                 const res = await fetch('/api/set-concurrency', {
                     method: 'POST',
@@ -1056,13 +1078,17 @@
                 });
                 const data = await res.json();
                 if (data.ok) {
-                    updateConcurrencyRange(val);
-                    showToast(`Parallel transfers limit set to ${val}`, 'success');
+                    const savedValue = data.concurrency ?? val;
+                    concurrencyDraft = undefined;
+                    applyConcurrencyValue(savedValue);
+                    showToast(`Parallel transfers limit set to ${savedValue}`, 'success');
                 } else {
                     showToast('Error: ' + (data.error || 'Failed to update concurrency limit'), 'danger');
                 }
             } catch (err) {
                 showToast('Network error: ' + err.message, 'danger');
+            } finally {
+                if (saveBtn) saveBtn.disabled = false;
             }
         };
 

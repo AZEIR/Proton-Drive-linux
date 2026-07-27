@@ -68,6 +68,13 @@ export function startDashboard(
             db.setConfig('dashboard_token', dashboardToken);
         }
     }
+    const readConfig = (key: string, fallback: string): string =>
+        typeof (db as any).getConfig === 'function' ? db.getConfig(key, fallback) : fallback;
+    const getPerformanceSettings = () => ({
+        concurrencyLimit: engine?.getConcurrencyLimit() ?? parseInt(readConfig('sync_concurrency', '2'), 10),
+        maxSpeedKbps: engine?.getMaxSpeedKbps() ?? parseInt(readConfig('sync_max_speed_kbps', '0'), 10),
+        wifiSafeMode: engine?.isWifiSafeMode() ?? readConfig('sync_wifi_safe_mode', '0') === '1',
+    });
     const allowedOrigins = new Set([
         `http://127.0.0.1:${port}`,
         `http://localhost:${port}`,
@@ -124,6 +131,7 @@ export function startDashboard(
                         activeTransfers: transfers,
                         isPaused:        fod.getIsPaused?.() ?? false,
                         bulkDeletionCount: 0,
+                        ...getPerformanceSettings(),
                         email,
                         isAuthenticating,
                     });
@@ -136,9 +144,7 @@ export function startDashboard(
                     localSyncRoot:     fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? ''),
                     isPaused:          engine?.getStatus() === 'paused',
                     bulkDeletionCount: engine?.getBulkDeletionCount() ?? 0,
-                    concurrencyLimit:  engine?.getConcurrencyLimit() ?? (db?.getConfig ? parseInt(db.getConfig('sync_concurrency', '2'), 10) : 2),
-                    maxSpeedKbps:      engine?.getMaxSpeedKbps() ?? (db?.getConfig ? parseInt(db.getConfig('sync_max_speed_kbps', '0'), 10) : 0),
-                    wifiSafeMode:      engine?.isWifiSafeMode() ?? (db?.getConfig ? db.getConfig('sync_wifi_safe_mode', '0') === '1' : false),
+                    ...getPerformanceSettings(),
                     email,
                     isAuthenticating,
                 });
@@ -635,6 +641,7 @@ export function startDashboard(
                                         activeTransfers: transfers,
                                         isPaused:        fod.getIsPaused?.() ?? status === 'paused',
                                         bulkDeletionCount: 0,
+                                        ...getPerformanceSettings(),
                                         email:           cachedEmail,
                                         isAuthenticating,
                                     });
