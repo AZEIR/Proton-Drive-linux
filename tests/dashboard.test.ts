@@ -194,6 +194,30 @@ describe("Dashboard API", () => {
         expect(data.items[1].isDir).toBe(false);
     });
 
+    it("POST /api/browser/open-item should reject unknown FUSE paths from mappings", async () => {
+        mockDb.getAllMappings = mock().mockReturnValue([
+            { local_path: "folder/file.txt", node_uid: "n1", is_dir: 0, size: 100, mtime: 1000 },
+        ]);
+        mockFod = {
+            isFuseMode: true,
+            mountPoint: "/tmp/test-fuse-mount",
+            getCached: mock().mockReturnValue([]),
+            getStatus: mock().mockReturnValue("synced"),
+            getActiveTransfers: mock().mockReturnValue([]),
+            getIsPaused: mock().mockReturnValue(false),
+        };
+        server.updateContext(mockEngine, mockSession, mockFod);
+
+        const res = await fetch(`${BASE_URL}/api/browser/open-item`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ relPath: "not-in-drive" }),
+        });
+        expect(res.status).toBe(404);
+        const data: any = await res.json();
+        expect(data.error).toContain("not found in Proton Drive");
+    });
+
     it("POST /api/set-concurrency should update concurrency limit", async () => {
         const res = await fetch(`${BASE_URL}/api/set-concurrency`, {
             method: "POST",

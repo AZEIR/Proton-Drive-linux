@@ -440,9 +440,28 @@ export function startDashboard(
                     return Response.json({ ok: false, error: 'relPath required' }, { status: 400 });
                 }
                 const localRoot = fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? '');
-                const fullPath = resolveContainedPath(localRoot, body.relPath);
+                const isFusePath = Boolean(fod?.isFuseMode);
+                const fullPath = resolveContainedPath(localRoot, body.relPath, !isFusePath);
                 if (!fullPath) {
                     return Response.json({ ok: false, error: 'Path escapes the configured root' }, { status: 400 });
+                }
+                if (isFusePath) {
+                    // Never synchronously stat/realpath our own FUSE mount from
+                    // the Node process that must answer that FUSE request. Use
+                    // the already-loaded remote mapping tree for existence
+                    // validation, then let xdg-open access the mount from a
+                    // separate process.
+                    const relPath = body.relPath.replace(/^\/+|\/+$/g, '');
+                    const mapped = relPath === '' || db.getAllMappings().some(
+                        (mapping) =>
+                            mapping.local_path === relPath ||
+                            mapping.local_path.startsWith(`${relPath}/`),
+                    );
+                    if (!mapped) {
+                        return Response.json({ ok: false, error: 'File/directory not found in Proton Drive.' }, { status: 404 });
+                    }
+                    execFile('xdg-open', [fullPath]);
+                    return Response.json({ ok: true });
                 }
                 if (existsSync(fullPath)) {
                     execFile('xdg-open', [fullPath]);
@@ -478,7 +497,9 @@ export function startDashboard(
                 if (req.method === 'POST' && url.pathname === '/api/open-folder') {
                     const mountPoint = fod.mountPoint;
                     if (mountPoint) {
-                        try { mkdirSync(mountPoint, { recursive: true }); } catch {}
+                        // The mount point is created before FUSE starts. A
+                        // synchronous mkdir/stat here would ask the daemon to
+                        // service its own filesystem request and deadlock.
                         execFile('xdg-open', [mountPoint]);
                         return Response.json({ ok: true });
                     }
@@ -711,11 +732,12 @@ export function startDashboard(
     });
 }
 
-function resolveContainedPath(root: string, relativePath: string): string | null {
+function resolveContainedPath(root: string, relativePath: string, inspectFilesystem = true): string | null {
     if (!root || path.isAbsolute(relativePath) || relativePath.includes('\0')) return null;
     const resolvedRoot = path.resolve(root);
     const candidate = path.resolve(resolvedRoot, relativePath);
     if (candidate !== resolvedRoot && !candidate.startsWith(`${resolvedRoot}${path.sep}`)) return null;
+    if (!inspectFilesystem) return candidate;
     if (!existsSync(candidate)) return candidate;
     try {
         const realRoot = realpathSync(resolvedRoot);

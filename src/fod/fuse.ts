@@ -53,10 +53,12 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
 
     async start(): Promise<void> {
         this.logger.info(`Starting Proton Drive FUSE Mode on mount point: ${this.mountPoint}`);
-        mkdirSync(this.mountPoint, { recursive: true });
 
-        // Clean up any stale mount point from a previous crash
+        // Detach a stale or disconnected FUSE mount before touching the path.
+        // Even mkdir({ recursive: true }) stats an existing target and returns
+        // ENOTCONN when the previous daemon died with the mount attached.
         await this.unmountStaleMount();
+        mkdirSync(this.mountPoint, { recursive: true });
 
         this.fuseDriver = new FuseDriver(
             this.mountPoint,
