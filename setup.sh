@@ -86,7 +86,7 @@ echo "============================================="
 
 _do_build
 
-# Install single unified systemd service
+# Install the daemon service. The desktop session owns the tray separately.
 mkdir -p "${SYSTEMD_DIR}"
 cat <<EOF > "$SERVICE_DST"
 [Unit]
@@ -96,12 +96,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${SCRIPT_DIR}/proton-drive-launcher.sh
+ExecStart=${BINARY}
 WorkingDirectory=${SCRIPT_DIR}
 Restart=always
 RestartSec=5s
-Environment=DISPLAY=${DISPLAY:-:0}
-Environment=WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+TimeoutStopSec=20s
+KillMode=control-group
 Environment=PATH=${PATH}
 
 [Install]

@@ -152,19 +152,28 @@ export async function runSync(port: number = 8085) {
     const keepAliveInterval = setInterval(() => {}, 60000);
 
     // Handle shutdown signals
-    const cleanup = async () => {
-        if (reconnectInterval) clearInterval(reconnectInterval);
-        clearInterval(keepAliveInterval);
-        server.stop();
-        if (engine) await engine.stop();
-        if (fuseEngine) await fuseEngine.stop();
-        db.close();
-        if (session) await session.dispose();
-        process.exit(0);
+    let cleanupPromise: Promise<void> | null = null;
+    const cleanup = () => {
+        if (cleanupPromise) return cleanupPromise;
+        cleanupPromise = (async () => {
+            if (reconnectInterval) clearInterval(reconnectInterval);
+            clearInterval(keepAliveInterval);
+            server.stop();
+
+            // Unmount and cancel the FUSE metadata scan before disposing the
+            // event loop or SDK session. This keeps shutdown bounded even when
+            // a remote request is still in flight.
+            if (fuseEngine) await fuseEngine.stop().catch(() => {});
+            if (engine) await engine.stop().catch(() => {});
+            if (session) await session.dispose().catch(() => {});
+            db.close();
+            process.exit(0);
+        })();
+        return cleanupPromise;
     };
 
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
 
     // Log the startup
     console.log(`\n======================================================`);

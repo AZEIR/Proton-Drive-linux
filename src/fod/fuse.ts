@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -18,6 +18,7 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
     private isPaused: boolean;
     private lastError: string = '';
     private scanPromise: Promise<void> | null = null;
+    private scanAbortController: AbortController | null = null;
 
     constructor(
         private db: SyncDatabase,
@@ -48,38 +49,6 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
         this.hydrator.on('start', (info) => this.emit('transfersChanged', info));
         this.hydrator.on('complete', (info) => this.emit('transfersChanged', info));
 
-        this.setupProcessExitHandlers();
-    }
-
-    private setupProcessExitHandlers(): void {
-        const cleanup = () => {
-            if (this.isMounted) {
-                this.unmountSync();
-            }
-        };
-        process.once('exit', cleanup);
-        process.once('uncaughtException', (err) => {
-            this.logger?.error?.('Uncaught exception in FUSE engine:', err);
-            cleanup();
-            process.exitCode = 1;
-            setTimeout(() => process.exit(1), 1000).unref();
-        });
-    }
-
-    private unmountSync(): void {
-        try {
-            if (this.fuseDriver) {
-                this.fuseDriver.unmount().catch(() => {});
-                this.fuseDriver = null;
-            }
-            execFile('fusermount3', ['-u', '-z', this.mountPoint], (fuse3Error) => {
-                if (!fuse3Error) return;
-                execFile('fusermount', ['-u', '-z', this.mountPoint], (fuseError) => {
-                    if (fuseError) execFile('umount', ['-l', this.mountPoint], () => {});
-                });
-            });
-            this.isMounted = false;
-        } catch {}
     }
 
     async start(): Promise<void> {
@@ -162,23 +131,35 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
     public scanRemoteTree(force = true): Promise<void> {
         if (!force && !this.shouldRefreshRemoteTree()) return Promise.resolve();
         if (this.scanPromise) return this.scanPromise;
-        this.scanPromise = this.performRemoteTreeScan().finally(() => {
+        const controller = new AbortController();
+        this.scanAbortController = controller;
+        this.scanPromise = this.performRemoteTreeScan(controller.signal).finally(() => {
             this.scanPromise = null;
+            if (this.scanAbortController === controller) this.scanAbortController = null;
         });
         return this.scanPromise;
     }
 
-    private async performRemoteTreeScan(): Promise<void> {
+    private async performRemoteTreeScan(signal: AbortSignal): Promise<void> {
         if (this.isPaused) return;
         this.logger.info('FUSE Mode: Syncing remote cloud directory structure...');
+        this.db.log(
+            'system',
+            'system',
+            'syncing',
+            `FUSE metadata scan started (${this.db.getMappingCount()} cached items).`,
+        );
         try {
             const rootFolder = await this.sdk.getMyFilesRootFolder();
+            if (signal.aborted) throw new DOMException('FUSE metadata scan cancelled', 'AbortError');
             const queue: { uid: string; relPath: string }[] = [{ uid: rootFolder.uid, relPath: '' }];
             let mappedCount = 0;
             let activeWorkers = 0;
+            let lastProgressAt = Date.now();
             const seenPaths = new Set<string>();
 
             const processNode = (currentRelPath: string, node: any) => {
+                if (signal.aborted) return;
                 if ('missingUid' in node || node.trashTime) return;
 
                 const name = node.name.ok ? node.name.value : 'degraded_name';
@@ -193,6 +174,16 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
 
                 mappedCount++;
                 seenPaths.add(relPath);
+                const now = Date.now();
+                if (mappedCount % 250 === 0 || now - lastProgressAt >= 15_000) {
+                    lastProgressAt = now;
+                    this.db.log(
+                        'system',
+                        'system',
+                        'syncing',
+                        `FUSE metadata scan progress: ${mappedCount} items mapped, ${queue.length} folders queued.`,
+                    );
+                }
                 // A pending FUSE upload represents newer cache-only user data.
                 // Do not overwrite its local size/mtime while scanning the
                 // older remote revision.
@@ -220,7 +211,7 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
                 Math.min(10, Number.isFinite(configuredWorkers) ? configuredWorkers : 2),
             );
             const workers = Array.from({ length: workerCount }, async () => {
-                while (true) {
+                while (!signal.aborted) {
                     if (queue.length === 0) {
                         if (activeWorkers === 0) break;
                         await new Promise((r) => setTimeout(r, 25));
@@ -233,28 +224,37 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
                     activeWorkers++;
                     try {
                         const childrenUids: string[] = [];
-                        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(current.uid)) {
+                        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(
+                            current.uid,
+                            undefined,
+                            signal,
+                        )) {
                             childrenUids.push(uid);
                         }
 
                         const chunkSize = 50;
-                        for (let i = 0; i < childrenUids.length; i += chunkSize) {
+                        for (let i = 0; i < childrenUids.length && !signal.aborted; i += chunkSize) {
                             const chunk = childrenUids.slice(i, i + chunkSize);
                             try {
-                                for await (const node of this.sdk.iterateNodes(chunk)) {
+                                for await (const node of this.sdk.iterateNodes(chunk, signal)) {
                                     processNode(current.relPath, node);
                                 }
-                            } catch {
+                            } catch (chunkError) {
+                                if (signal.aborted) throw chunkError;
                                 for (const singleUid of chunk) {
+                                    if (signal.aborted) break;
                                     try {
-                                        for await (const node of this.sdk.iterateNodes([singleUid])) {
+                                        for await (const node of this.sdk.iterateNodes([singleUid], signal)) {
                                             processNode(current.relPath, node);
                                         }
-                                    } catch {}
+                                    } catch (nodeError) {
+                                        if (signal.aborted) throw nodeError;
+                                    }
                                 }
                             }
                         }
                     } catch (folderErr) {
+                        if (signal.aborted) break;
                         this.logger.error(`Error scanning folder ${current.relPath}:`, folderErr);
                     } finally {
                         activeWorkers--;
@@ -263,6 +263,7 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
             });
 
             await Promise.all(workers);
+            if (signal.aborted) throw new DOMException('FUSE metadata scan cancelled', 'AbortError');
             for (const mapping of this.db.getAllMappings()) {
                 if (!seenPaths.has(mapping.local_path) && !this.db.hasPendingFodUpload(mapping.local_path)) {
                     this.db.deleteMapping(mapping.local_path);
@@ -273,6 +274,11 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
             this.logger.info(`FUSE Mode: Remote directory structure sync complete. Mapped ${mappedCount} items.`);
             this.db.log('system', 'system', 'completed', `FUSE Mode: Mapped ${mappedCount} cloud items.`);
         } catch (err: any) {
+            if (signal.aborted || err?.name === 'AbortError') {
+                this.logger.info('FUSE Mode: Metadata scan cancelled.');
+                this.db.log('system', 'system', 'completed', 'FUSE metadata scan cancelled during shutdown.');
+                return;
+            }
             this.lastError = err?.message || String(err);
             this.logger.error('FUSE Mode: Failed to scan remote cloud tree:', err);
             this.db.log('system', 'system', 'failed', `FUSE metadata scan failed: ${this.lastError}`);
@@ -281,10 +287,18 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
 
     async stop(): Promise<void> {
         this.logger.info('Stopping Proton Drive FUSE Engine...');
+        this.scanAbortController?.abort();
+        const activeScan = this.scanPromise;
+        if (activeScan) {
+            await Promise.race([
+                activeScan.catch(() => {}),
+                new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+            ]);
+        }
         const driver = this.fuseDriver;
         this.fuseDriver = null;
         if (driver) await driver.unmount();
-        if (this.isMounted) await this.unmountStaleMount();
+        else if (this.isMounted) await this.unmountStaleMount();
         this.isMounted = false;
         this.logger.info('Proton Drive FUSE Engine stopped.');
     }

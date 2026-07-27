@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { copyFile, unlink as unlinkFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import Fuse from 'fuse-native';
@@ -838,16 +839,24 @@ export class FuseDriver extends EventEmitter {
         }
         this.openHandles.clear();
         if (!this.isMounted) return;
-        return new Promise<void>((resolve) => {
-            if (this.fuse) {
-                this.fuse.unmount(() => {
-                    this.isMounted = false;
-                    resolve();
-                });
-            } else {
-                this.isMounted = false;
-                resolve();
-            }
-        });
+
+        // fuse-native's instance unmount first probes the mount path from the
+        // daemon process itself. If the filesystem is already unhealthy, that
+        // stat call can enter an uninterruptible FUSE wait forever. Detach the
+        // mount from an external helper instead and let process teardown close
+        // the native /dev/fuse descriptor.
+        const runUnmount = (command: string, args: string[]) =>
+            new Promise<boolean>((resolve) => {
+                execFile(command, args, (error) => resolve(!error));
+            });
+
+        let unmounted = await runUnmount('fusermount3', ['-u', '-z', this.mountPoint]);
+        if (!unmounted) unmounted = await runUnmount('fusermount', ['-u', '-z', this.mountPoint]);
+        if (!unmounted) unmounted = await runUnmount('umount', ['-l', this.mountPoint]);
+        if (!unmounted) {
+            this.logger.warn(`Could not confirm FUSE unmount for ${this.mountPoint}; detaching daemon state.`);
+        }
+        this.isMounted = false;
+        this.fuse = null;
     }
 }
