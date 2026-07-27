@@ -8,6 +8,7 @@ import { SyncEngine } from './engine';
 import { openBrowserUrl } from '../sdk/adapter';
 import {
     getDashboardCss,
+    getDashboardFavicon,
     getDashboardJs,
     getHtmlContent,
 } from './dashboard/template';
@@ -151,6 +152,14 @@ export function startDashboard(
                 return new Response(getDashboardJs(), {
                     headers: {
                         'Content-Type': 'text/javascript; charset=utf-8',
+                        'Cache-Control': 'no-store',
+                    },
+                });
+            }
+            if (url.pathname === '/assets/favicon.svg') {
+                return new Response(getDashboardFavicon(), {
+                    headers: {
+                        'Content-Type': 'image/svg+xml; charset=utf-8',
                         'Cache-Control': 'no-store',
                     },
                 });
@@ -766,6 +775,10 @@ export function startDashboard(
                                         isPaused:        fod.getIsPaused?.() ?? status === 'paused',
                                         bulkDeletionCount: 0,
                                         ...getPerformanceSettings(),
+                                        network: engine?.getNetworkSnapshot?.(),
+                                        pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                                        pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                                        statusDetail: engine?.getDetailedStatus?.(),
                                         email:           cachedEmail,
                                         isAuthenticating,
                                     });
@@ -783,6 +796,10 @@ export function startDashboard(
                                         isAuthenticating,
                                         localSyncRoot,
                                         ...getPerformanceSettings(),
+                                        network: engine.getNetworkSnapshot?.(),
+                                        pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                                        pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                                        statusDetail: engine.getDetailedStatus?.(),
                                         email: cachedEmail
                                     });
                                 } else {
@@ -803,7 +820,11 @@ export function startDashboard(
                         if (fod?.isFuseMode) {
                             const subscribedFod = fod;
                             const subscribedEngine = engine;
-                            const interval = setInterval(send, 15000);
+                            // Network goodput is calculated in five-second
+                            // windows independently of transfer events. Push a
+                            // lightweight snapshot regularly so the dashboard
+                            // remains live even when no lifecycle event fires.
+                            const interval = setInterval(send, 1000);
                             const onTransfersChanged = () => send();
                             const onStatusChanged = () => send();
                             (subscribedFod as any).on?.('transfersChanged', onTransfersChanged);
@@ -821,8 +842,12 @@ export function startDashboard(
                             };
                         } else if (engine) {
                             const subscribedEngine = engine;
+                            const interval = setInterval(send, 1000);
                             subscribedEngine.on('statusChanged', send);
-                            cleanup = () => subscribedEngine.off('statusChanged', send);
+                            cleanup = () => {
+                                clearInterval(interval);
+                                subscribedEngine.off('statusChanged', send);
+                            };
                         }
                     },
                     cancel() {

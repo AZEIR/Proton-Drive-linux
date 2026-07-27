@@ -1,6 +1,7 @@
         let isPaused = false;
         let currentTab = 'dashboard';
         let concurrencyDraft;
+        let lastStatusData = {};
         const FOD_MODE = document.body.dataset.fodMode === 'true';
         const IS_FOD = FOD_MODE;
         const nativeFetch = window.fetch.bind(window);
@@ -766,7 +767,19 @@
             body.innerHTML = html;
         }
 
-        function renderStatus(data) {
+        function renderStatus(update) {
+            // Event-stream messages and direct status responses share this
+            // renderer. Preserve the last complete snapshot if an older daemon
+            // or a transient event sends only a subset of the status fields.
+            const data = {
+                ...lastStatusData,
+                ...update,
+                network: {
+                    ...(lastStatusData.network || {}),
+                    ...(update.network || {}),
+                },
+            };
+            lastStatusData = data;
             // Check auth state to show login page or main dashboard
             const appLayout = document.querySelector('.app-layout');
             const loginView = document.getElementById('loginView');
@@ -787,14 +800,21 @@
             const currentMode = data.mode || (FOD_MODE ? 'fuse' : 'full');
             const isFuseMode = currentMode === 'fuse';
             const network = data.network || {};
-            const networkState = network.state || (data.status === 'offline' ? 'offline' : 'starting');
+            const networkState = network.state ||
+                (data.status === 'offline' ? 'offline'
+                    : data.status === 'auth_required' ? 'starting'
+                        : 'online');
             const uploadBps = Number(network.uploadBps) || 0;
             const downloadBps = Number(network.downloadBps) || 0;
             const totalBps = uploadBps + downloadBps;
             const queued = Number(network.queuedTransfers) || 0;
             const activeCount = Number(network.activeTransfers) || (data.activeTransfers || []).length;
-            const pendingOperations = Number(data.pendingOperations) || 0;
-            const pendingEvents = Number(data.pendingEvents) || 0;
+            const pendingOperations = Number(
+                data.pendingOperations ?? data.statusDetail?.pendingOperations,
+            ) || 0;
+            const pendingEvents = Number(
+                data.pendingEvents ?? data.statusDetail?.pendingEvents,
+            ) || 0;
             const durableCount = pendingOperations + pendingEvents;
             document.getElementById('networkState').innerText = networkState.replace('_', ' ');
             document.getElementById('networkState').className =
@@ -804,17 +824,22 @@
             const retrySeconds = network.retryAfter
                 ? Math.max(0, Math.ceil((Number(network.retryAfter) - Date.now()) / 1000))
                 : 0;
+            const effectiveSlots =
+                Number(network.effectiveFileTransfers) ||
+                Number(data.concurrencyLimit) ||
+                0;
+            const policyMode = network.policy?.mode === 'fixed' ? 'Fixed' : 'Adaptive';
             document.getElementById('networkDetail').innerText = retrySeconds > 0
                 ? `Rate limited; retrying in ${retrySeconds}s`
-                : `${Number(network.effectiveFileTransfers) || 0} adaptive file slots`;
+                : `${policyMode} · ${effectiveSlots} file slot${effectiveSlots === 1 ? '' : 's'}`;
             document.getElementById('throughputValue').innerText = `${formatBytes(totalBps)}/s`;
-            document.getElementById('queueDepth').innerText = String(queued);
+            document.getElementById('queueDepth').innerText = String(activeCount + queued);
             document.getElementById('queueDetail').innerText =
                 `${activeCount} active · ${queued} queued`;
             document.getElementById('durablePending').innerText = String(durableCount);
             document.getElementById('durableDetail').innerText = durableCount > 0
                 ? `${pendingOperations} local · ${pendingEvents} remote events`
-                : 'All changes committed';
+                : 'No pending journal work';
             const firstTransfer = (data.activeTransfers || [])[0];
             if (firstTransfer && totalBps > 0 && Number(firstTransfer.size) > 0) {
                 const remaining = Math.max(

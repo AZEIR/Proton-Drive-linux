@@ -1,5 +1,6 @@
 import css from './style.css' with { type: 'text' };
 import js from './app.js' with { type: 'text' };
+import favicon from './favicon.svg' with { type: 'text' };
 
 export function getHtmlContent(isFodMode: boolean = false): string {
     return `<!DOCTYPE html>
@@ -7,16 +8,18 @@ export function getHtmlContent(isFodMode: boolean = false): string {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#191b24">
     <title>Drive for Linux — Unofficial Proton client</title>
-    <link rel="stylesheet" href="/assets/dashboard.css?v=network-profile-1">
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=ui-polish-2">
+    <link rel="stylesheet" href="/assets/dashboard.css?v=ui-polish-2">
 </head>
 <body data-fod-mode="${isFodMode ? 'true' : 'false'}">
     <div class="app-layout">
         <!-- Left Sidebar -->
         <aside class="sidebar" id="sidebarNavigation">
             <a href="https://github.com/AZEIR/Proton-Drive-linux" target="_blank" rel="noopener" class="sidebar-header sidebar-brand-link">
-                <span class="app-logo" aria-hidden="true">DL</span>
-                <span class="brand-name">Drive for Linux<span class="sub-brand" id="modeLabel">Unofficial</span></span>
+                <img class="proton-logo" src="/assets/favicon.svg?v=ui-polish-2" alt="" aria-hidden="true">
+                <span class="brand-name">Proton Drive<span class="sub-brand" id="modeLabel">Sync</span></span>
             </a>
 
             <nav class="sidebar-menu" aria-label="Dashboard navigation">
@@ -143,14 +146,14 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                 <span id="transferEta" class="runtime-detail">No active transfer</span>
                             </div>
                             <div class="runtime-metric">
-                                <span class="runtime-label">Transfer queue</span>
+                                <span class="runtime-label">Transfers</span>
                                 <strong id="queueDepth">0</strong>
                                 <span id="queueDetail" class="runtime-detail">No queued work</span>
                             </div>
                             <div class="runtime-metric">
                                 <span class="runtime-label">Durable work</span>
                                 <strong id="durablePending">0</strong>
-                                <span id="durableDetail" class="runtime-detail">All changes committed</span>
+                                <span id="durableDetail" class="runtime-detail">No pending journal work</span>
                             </div>
                         </section>
 
@@ -425,7 +428,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
         </div>
     </div>
 
-    <script src="/assets/dashboard.js?v=network-profile-1" defer></script>
+    <script src="/assets/dashboard.js?v=ui-polish-2" defer></script>
 </body>
 </html>`;
 }
@@ -436,4 +439,8 @@ export function getDashboardCss(): string {
 
 export function getDashboardJs(): string {
     return js;
+}
+
+export function getDashboardFavicon(): string {
+    return favicon;
 }

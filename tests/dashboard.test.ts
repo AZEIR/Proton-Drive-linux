@@ -139,7 +139,11 @@ describe("Dashboard API", () => {
         expect(html).not.toContain("cacheMenuItem");
         expect(html).not.toContain("var(--border)");
         expect(html).not.toContain("var(--bg-hover)");
-        expect(html).toContain('src="/assets/dashboard.js?v=network-profile-1"');
+        expect(html).toContain('src="/assets/dashboard.js?v=ui-polish-2"');
+        expect(html).toContain('rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=ui-polish-2"');
+        expect(html).toContain('class="proton-logo" src="/assets/favicon.svg?v=ui-polish-2"');
+        expect(html).toContain('<span class="brand-name">Proton Drive');
+        expect(html).toContain('id="modeLabel">Sync</span>');
         expect(html).toContain('data-profile="safe"');
         expect(html).not.toContain('id="wifiSafeToggle"');
         expect(html).not.toContain('data-change-action="toggle-wifi-safe"');
@@ -155,6 +159,13 @@ describe("Dashboard API", () => {
         expect(script).toContain("isPaused = Boolean(data.isPaused || data.status === 'paused')");
         expect(script).toContain("fetch('/api/set-speed-limit'");
         expect(script).not.toContain("toggleWifiSafeMode");
+        const stylesheet = await (await fetch(`${BASE_URL}/assets/dashboard.css`)).text();
+        expect(stylesheet).toContain("width: 44px");
+        expect(stylesheet).toContain("--accent-visible:");
+        const faviconResponse = await fetch(`${BASE_URL}/assets/favicon.svg`);
+        expect(faviconResponse.status).toBe(200);
+        expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
+        expect(await faviconResponse.text()).toContain("<svg");
     });
 
     it("GET /api/status should handle logged out state", async () => {
@@ -261,6 +272,38 @@ describe("Dashboard API", () => {
         expect(payload).toContain('"maxSpeedKbps":0');
         expect(payload).toContain('"wifiSafeMode":false');
         expect(payload).toContain('"networkProfile":"custom"');
+        expect(payload).toContain('"network":{"state":"online"');
+        expect(payload).toContain('"pendingOperations":2');
+        expect(payload).toContain('"pendingEvents":1');
+    });
+
+    it("should stream live network and journal metrics in full-sync mode", async () => {
+        mockEngine.getNetworkSnapshot.mockReturnValue({
+            state: "online",
+            effectiveFileTransfers: 2,
+            activeTransfers: 2,
+            queuedTransfers: 1,
+            uploadBps: 1024,
+            downloadBps: 4096,
+        });
+        mockEngine.getActiveTransfers.mockReturnValue([
+            { filePath: "one.bin", type: "download", size: 10, transferred: 5 },
+            { filePath: "two.bin", type: "upload", size: 10, transferred: 2 },
+        ]);
+
+        const response = await apiFetch("/api/events");
+        const reader = response.body!.getReader();
+        const firstEvent = await reader.read();
+        const payload = new TextDecoder().decode(firstEvent.value);
+        await reader.cancel();
+
+        expect(payload).toContain('"mode":"full"');
+        expect(payload).toContain('"effectiveFileTransfers":2');
+        expect(payload).toContain('"activeTransfers":2');
+        expect(payload).toContain('"queuedTransfers":1');
+        expect(payload).toContain('"downloadBps":4096');
+        expect(payload).toContain('"pendingOperations":2');
+        expect(payload).toContain('"pendingEvents":1');
     });
 
     it("POST /api/sync should call engine.forceSync", async () => {
