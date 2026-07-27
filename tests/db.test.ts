@@ -20,6 +20,9 @@ describe("SyncDatabase", () => {
             unlinkSync(`${dbPath}-wal`);
             unlinkSync(`${dbPath}-shm`);
         } catch {}
+        for (const suffix of [".journal", ".journal-wal", ".journal-shm"]) {
+            try { unlinkSync(`${dbPath}${suffix}`); } catch {}
+        }
     });
 
     describe("Config", () => {
@@ -160,6 +163,45 @@ describe("SyncDatabase", () => {
             db.log("recovered.txt", "upload", "failed", "offline");
             db.log("recovered.txt", "upload", "completed", "uploaded");
             expect(db.getUnresolvedFailedUploadPaths()).toEqual(["retry.txt"]);
+        });
+    });
+
+    describe("Durable operation and event journal", () => {
+        it("coalesces queued writeback intents and completes them idempotently", () => {
+            const first = db.journal.enqueueOperation({
+                syncMode: "fuse",
+                stableInodeId: "inode-1",
+                kind: "update_file",
+                localPath: "document.txt",
+                nodeUid: "node-1",
+                cachePath: "/tmp/cache-1",
+                dedupeKey: "write:document.txt",
+            });
+            const second = db.journal.enqueueOperation({
+                syncMode: "fuse",
+                stableInodeId: "inode-1",
+                kind: "update_file",
+                localPath: "document.txt",
+                nodeUid: "node-1",
+                cachePath: "/tmp/cache-2",
+                dedupeKey: "write:document.txt",
+            });
+
+            expect(second).toBe(first);
+            expect(db.journal.getReadyOperations()).toHaveLength(1);
+            expect(db.journal.getReadyOperations()[0].cache_path).toBe("/tmp/cache-2");
+            db.journal.markDedupeKeyCompleted("write:document.txt");
+            expect(db.journal.getPendingOperationCount()).toBe(0);
+        });
+
+        it("persists a remote event only once until it is applied", () => {
+            const event = { eventId: "event-1", type: "NodeUpdated", nodeUid: "node-1" };
+            db.journal.enqueueRemoteEvent("scope-1", "event-1", "node-1", "NodeUpdated", event);
+            db.journal.enqueueRemoteEvent("scope-1", "event-1", "node-1", "NodeUpdated", event);
+            expect(db.journal.getPendingRemoteEventCount()).toBe(1);
+            expect(db.journal.getReadyRemoteEvents("scope-1")).toHaveLength(1);
+            db.journal.markRemoteEventApplied("scope-1", "event-1");
+            expect(db.journal.getPendingRemoteEventCount()).toBe(0);
         });
     });
 

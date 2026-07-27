@@ -23,6 +23,16 @@ export type SdkClientInstance = Awaited<ReturnType<typeof init>> & {
  * Initializes the Proton Drive SDK and attaches application-level helpers such as user quota querying.
  */
 export async function initSdk(configOptions: InitConfig): Promise<SdkClientInstance> {
+    const configuredBaseUrl = process.env.PROTON_DRIVE_BASE_URL;
+    if (
+        configuredBaseUrl &&
+        configuredBaseUrl !== 'drive-api.proton.me' &&
+        process.env.PROTON_DRIVE_UNSAFE_DEV_ENDPOINT !== '1'
+    ) {
+        throw new Error(
+            'Non-production Proton endpoint rejected. Set PROTON_DRIVE_UNSAFE_DEV_ENDPOINT=1 only for an explicitly trusted development server.',
+        );
+    }
     const client = await init(configOptions);
     const config = getConfig(configOptions);
     const clientUidFile = JSON.parse(

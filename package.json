@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "bun@1.3.14",
   "engines": {
-    "node": ">=20.18"
+    "node": ">=22.0"
   },
   "scripts": {
     "build": "bun run check-types:app && bun scripts/build.mjs",

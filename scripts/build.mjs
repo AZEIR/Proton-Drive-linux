@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 
 import path from 'node:path';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, mkdirSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const projectRoot = path.resolve(import.meta.dir, '..');
 const releaseDir = path.join(projectRoot, 'release');
@@ -11,7 +12,7 @@ const result = await Bun.build({
     entrypoints: [path.join(projectRoot, 'src/cli/daemon.ts')],
     target: 'node',
     format: 'esm',
-    external: ['better-sqlite3', 'fuse-native', 'undici'],
+    external: ['better-sqlite3', 'fuse-native'],
     plugins: [
         {
             name: 'node-sqlite-compatibility',
@@ -44,3 +45,40 @@ exec "$NODE_BIN" "$(dirname "$0")/proton-sync.js" "$@"
 `;
 await Bun.write(path.join(releaseDir, 'proton-sync'), launcher);
 chmodSync(path.join(releaseDir, 'proton-sync'), 0o755);
+
+if (process.platform === 'linux') {
+    const runtimeModules = [
+        'better-sqlite3',
+        'node-addon-api',
+        'fuse-native',
+        'fuse-shared-library',
+        'fuse-shared-library-linux',
+        'nanoresource',
+        'inherits',
+        'napi-macros',
+        'node-gyp-build',
+    ];
+    const runtimeModulesDir = path.join(releaseDir, 'node_modules');
+    rmSync(runtimeModulesDir, { recursive: true, force: true });
+    mkdirSync(runtimeModulesDir, { recursive: true, mode: 0o755 });
+    for (const moduleName of runtimeModules) {
+        cpSync(
+            path.join(projectRoot, 'node_modules', moduleName),
+            path.join(runtimeModulesDir, moduleName),
+            { recursive: true },
+        );
+    }
+
+    execFileSync('cargo', [
+        'build',
+        '--release',
+        '--manifest-path',
+        path.join(projectRoot, 'native', 'fuse-sidecar', 'Cargo.toml'),
+    ], { stdio: 'inherit' });
+    const sidecarTarget = path.join(releaseDir, 'drive-fuse-sidecar');
+    copyFileSync(
+        path.join(projectRoot, 'native', 'fuse-sidecar', 'target', 'release', 'drive-fuse-sidecar'),
+        sidecarTarget,
+    );
+    chmodSync(sidecarTarget, 0o755);
+}

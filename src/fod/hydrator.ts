@@ -1,9 +1,25 @@
-import { existsSync, mkdirSync, statSync, unlinkSync, readdirSync, createWriteStream } from 'node:fs';
+import {
+    chmodSync,
+    closeSync,
+    createWriteStream,
+    existsSync,
+    fsyncSync,
+    mkdirSync,
+    openSync,
+    readFileSync,
+    readdirSync,
+    renameSync,
+    statSync,
+    unlinkSync,
+    writeFileSync,
+} from 'node:fs';
 import { mkdir, stat, unlink, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SyncDatabase } from '../sync/db';
 import { MAX_PARALLEL_FILE_TRANSFERS } from '../utils/httpAgent';
+import { getNetworkGovernor } from '../utils/networkGovernor';
+import { getSha1 } from '../sdk/adapter';
 
 export interface CachedFileItem {
     nodeUid: string;
@@ -31,6 +47,7 @@ export class FodHydrator extends EventEmitter {
     private activeHydrationSlots = 0;
     private hydrationSlotWaiters: Array<() => void> = [];
     private isPaused = false;
+    private readonly networkGovernor = getNetworkGovernor();
 
     constructor(
         private db: SyncDatabase,
@@ -41,8 +58,11 @@ export class FodHydrator extends EventEmitter {
         const home = process.env.HOME || '/tmp';
         this.cacheDir = path.join(home, '.cache', 'proton-drive-sync', 'fod-cache');
         if (!existsSync(this.cacheDir)) {
-            mkdirSync(this.cacheDir, { recursive: true });
+            mkdirSync(this.cacheDir, { recursive: true, mode: 0o700 });
         }
+        try {
+            chmodSync(this.cacheDir, 0o700);
+        } catch {}
         this.loadPinnedState();
     }
 
@@ -84,6 +104,11 @@ export class FodHydrator extends EventEmitter {
         if (oldPath !== newPath && existsSync(oldPath)) {
             await rename(oldPath, newPath);
         }
+        const oldRevisionPath = this.getRevisionPath(oldNodeUid);
+        const newRevisionPath = this.getRevisionPath(newNodeUid);
+        if (oldRevisionPath !== newRevisionPath && existsSync(oldRevisionPath)) {
+            await rename(oldRevisionPath, newRevisionPath);
+        }
         if (this.pinnedNodeUids.delete(oldNodeUid)) {
             this.pinnedNodeUids.add(newNodeUid);
             this.savePinnedState();
@@ -91,9 +116,18 @@ export class FodHydrator extends EventEmitter {
         return newPath;
     }
 
+    setCachedRevision(nodeUid: string, revisionUid: string): void {
+        this.writeRevisionMarker(nodeUid, revisionUid);
+    }
+
     isHydrated(nodeUid: string): boolean {
         const cachePath = this.getCachePath(nodeUid);
-        return existsSync(cachePath);
+        if (!existsSync(cachePath)) return false;
+        if (this.db.hasPendingFodUpload(this.db.getMappingByNodeUid(nodeUid)?.local_path ?? '')) {
+            return true;
+        }
+        const expectedRevision = this.db.getMappingByNodeUid(nodeUid)?.remote_revision_uid ?? '';
+        return this.cachedRevisionMatches(nodeUid, expectedRevision);
     }
 
     isPinned(nodeUid: string): boolean {
@@ -122,12 +156,20 @@ export class FodHydrator extends EventEmitter {
     }
 
     async evictFile(nodeUid: string): Promise<boolean> {
+        const mapping = this.db.getMappingByNodeUid(nodeUid);
+        if (
+            this.inFlightHydrations.has(nodeUid) ||
+            (mapping && this.db.hasPendingFodUpload(mapping.local_path))
+        ) {
+            return false;
+        }
         this.pinnedNodeUids.delete(nodeUid);
         this.savePinnedState();
         const cachePath = this.getCachePath(nodeUid);
         if (existsSync(cachePath)) {
             try {
                 await unlink(cachePath);
+                await unlink(this.getRevisionPath(nodeUid)).catch(() => {});
                 return true;
             } catch (err) {
                 this.logger.warn(`Failed to evict file ${nodeUid}:`, err);
@@ -139,8 +181,20 @@ export class FodHydrator extends EventEmitter {
 
     async hydrateNode(nodeUid: string, relativePath: string): Promise<string> {
         const cachePath = this.getCachePath(nodeUid);
-        if (existsSync(cachePath)) {
+        const mapping = this.db.getMapping(relativePath) ?? this.db.getMappingByNodeUid(nodeUid);
+        const expectedRevision = mapping?.remote_revision_uid ?? '';
+        if (
+            existsSync(cachePath) &&
+            (
+                this.db.hasPendingFodUpload(relativePath) ||
+                this.cachedRevisionMatches(nodeUid, expectedRevision)
+            )
+        ) {
             return cachePath;
+        }
+        if (existsSync(cachePath)) {
+            await unlink(cachePath).catch(() => {});
+            await unlink(this.getRevisionPath(nodeUid)).catch(() => {});
         }
         if (this.isPaused) {
             throw new Error('FUSE transfers are paused');
@@ -151,7 +205,16 @@ export class FodHydrator extends EventEmitter {
             return this.inFlightHydrations.get(nodeUid)!;
         }
 
-        const hydrationPromise = this.performHydrationWithSlot(nodeUid, relativePath, cachePath);
+        // The scheduler tracks buffered bytes, not total streamed file size.
+        const estimatedBytes = Math.min(
+            this.db.getMapping(relativePath)?.size ?? 0,
+            8 * 1024 * 1024,
+        );
+        const hydrationPromise = this.networkGovernor.schedule(
+            'interactive',
+            estimatedBytes,
+            () => this.performHydrationWithSlot(nodeUid, relativePath, cachePath),
+        );
         this.inFlightHydrations.set(nodeUid, hydrationPromise);
 
         try {
@@ -193,6 +256,7 @@ export class FodHydrator extends EventEmitter {
         this.logger.info(`Hydrating on-demand file for FUSE: ${relativePath} (${nodeUid})...`);
 
         const mapping = this.db.getMappingByNodeUid(nodeUid);
+        const expectedRevision = mapping?.remote_revision_uid ?? '';
         const totalSize = mapping?.size || 0;
 
         const activeItem: ActiveTransferInfo = {
@@ -219,7 +283,7 @@ export class FodHydrator extends EventEmitter {
             let lastProgressEmit = 0;
 
             const writableStream = new WritableStream({
-                write: (chunk: any) => {
+                write: async (chunk: any) => {
                     const buf = Buffer.isBuffer(chunk)
                         ? chunk
                         : (chunk instanceof Uint8Array
@@ -227,6 +291,7 @@ export class FodHydrator extends EventEmitter {
                             : (chunk instanceof ArrayBuffer ? Buffer.from(chunk) : Buffer.from(chunk)));
 
                     if (buf && buf.length) {
+                        await this.networkGovernor.throttle('download', buf.length);
                         transferred += buf.length;
                         activeItem.transferred = transferred;
                         activeItem.percent = size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : 100;
@@ -264,7 +329,34 @@ export class FodHydrator extends EventEmitter {
                 await writableStream.close().catch(() => {});
             }
 
+            const downloaded = await stat(tmpCachePath);
+            if (size > 0 && downloaded.size !== size) {
+                throw new Error(
+                    `Hydration size mismatch for ${relativePath}: expected ${size}, got ${downloaded.size}`,
+                );
+            }
+            const expectedSha1 = node?.activeRevision?.ok
+                ? node.activeRevision.value.claimedDigests?.sha1
+                : undefined;
+            if (expectedSha1) {
+                const actualSha1 = await getSha1(tmpCachePath);
+                if (actualSha1 !== expectedSha1) {
+                    throw new Error(
+                        `Hydration checksum mismatch for ${relativePath}`,
+                    );
+                }
+            }
+            const cacheFd = openSync(tmpCachePath, 'r');
+            try {
+                fsyncSync(cacheFd);
+            } finally {
+                closeSync(cacheFd);
+            }
             await rename(tmpCachePath, cachePath);
+            const revisionUid = node?.activeRevision?.ok
+                ? (node.activeRevision.value.uid ?? node.activeRevision.value.id ?? expectedRevision)
+                : expectedRevision;
+            this.writeRevisionMarker(nodeUid, revisionUid ?? '');
             await this.enforceCacheLimit(nodeUid);
 
             activeItem.transferred = size;
@@ -277,11 +369,34 @@ export class FodHydrator extends EventEmitter {
             await unlink(tmpCachePath).catch(() => {});
             this.logger.error(`Hydration failed for ${relativePath}:`, err);
             this.db.log(relativePath, 'download', 'failed', `Hydration failed for ${relativePath}: ${err?.message || err}`);
-            this.emit('error', { nodeUid, error: err });
+            // EventEmitter treats an unhandled "error" event as a process
+            // crash. Hydration failures are expected under network faults and
+            // must propagate through the returned promise instead.
+            this.emit('hydration_error', { nodeUid, error: err });
             throw err;
         } finally {
             this.activeHydrations.delete(nodeUid);
         }
+    }
+
+    private getRevisionPath(nodeUid: string): string {
+        return `${this.getCachePath(nodeUid)}.revision`;
+    }
+
+    private cachedRevisionMatches(nodeUid: string, expectedRevision: string): boolean {
+        if (!expectedRevision) return true;
+        try {
+            return readFileSync(this.getRevisionPath(nodeUid), 'utf8') === expectedRevision;
+        } catch {
+            return false;
+        }
+    }
+
+    private writeRevisionMarker(nodeUid: string, revisionUid: string): void {
+        const markerPath = this.getRevisionPath(nodeUid);
+        const temporaryPath = `${markerPath}.tmp-${process.pid}`;
+        writeFileSync(temporaryPath, revisionUid, { mode: 0o600 });
+        renameSync(temporaryPath, markerPath);
     }
 
     getCachedFiles(): CachedFileItem[] {
@@ -294,7 +409,8 @@ export class FodHydrator extends EventEmitter {
                 if (
                     entry.isFile() &&
                     !entry.name.includes('.tmp-') &&
-                    !entry.name.includes('.upload-')
+                    !entry.name.includes('.upload-') &&
+                    !entry.name.endsWith('.revision')
                 ) {
                     const nodeUid = entry.name;
                     const fullPath = path.join(this.cacheDir, nodeUid);

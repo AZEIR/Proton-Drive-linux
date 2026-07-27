@@ -163,6 +163,34 @@ describe("SyncEngine", () => {
             expect(fastSyncCalled).toBe(true);
         });
 
+        it("should resume an interrupted full sync after restart even when an older pass completed", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            db.setMapping({
+                local_path: "file.txt",
+                node_uid: "node-1",
+                is_dir: 0,
+                size: 1,
+                mtime: Date.now(),
+                sha1: "abc",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now(),
+            });
+            db.setConfig("full_sync_completed", "1");
+            db.setConfig("full_sync_in_progress", "1");
+
+            let forceSyncCalled = false;
+            let fastSyncCalled = false;
+            engine.forceSync = async () => { forceSyncCalled = true; };
+            engine.fastSync = async () => { fastSyncCalled = true; };
+
+            await engine.startupSync();
+
+            expect(forceSyncCalled).toBe(true);
+            expect(fastSyncCalled).toBe(false);
+        });
+
         it("should execute fresh initial sync end-to-end when starting clean", async () => {
             const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
             await engine.setLocalSyncRoot(syncRoot);
@@ -244,6 +272,124 @@ describe("SyncEngine", () => {
 
             await engine.forceSync();
             expect(engine.getStatus()).toBe("idle");
+            expect(db.getConfig("full_sync_in_progress", "1")).toBe("0");
+        });
+
+        it("should persist an unfinished full scan so the next process retries it", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            db.setConfig("full_sync_completed", "1");
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).scanRemoteDir = async () => {
+                expect(db.getConfig("full_sync_in_progress", "0")).toBe("1");
+                throw new Error("interrupted metadata scan");
+            };
+
+            await engine.forceSync();
+
+            expect(db.getConfig("full_sync_completed", "0")).toBe("1");
+            expect(db.getConfig("full_sync_in_progress", "0")).toBe("1");
+        });
+
+        it("should retry an interrupted full scan after the network reconnects", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+
+            let remoteScanAttempts = 0;
+            (engine as any).scanRemoteDir = async () => {
+                remoteScanAttempts++;
+                if (remoteScanAttempts === 1) {
+                    throw new TypeError("fetch failed");
+                }
+            };
+            // Avoid the monitor's real 15-second timer; this test drives the
+            // same offline/online transition directly.
+            (engine as any).startOfflineMonitor = () => {
+                (engine as any).isOffline = true;
+            };
+
+            await engine.forceSync();
+            expect(engine.getStatus()).toBe("offline");
+            expect(remoteScanAttempts).toBe(1);
+
+            (engine as any).handleOnlineEvent();
+            expect(["error", "scanning"]).toContain(engine.getStatus());
+            await (engine as any).reconnectReconciliationPromise;
+
+            expect(remoteScanAttempts).toBe(2);
+            expect(engine.getStatus()).toBe("synced");
+            expect(
+                db.getRecentLogs(20).some((entry) =>
+                    entry.message.includes("Retrying interrupted synchronization"),
+                ),
+            ).toBe(true);
+        });
+
+        it("should report an error instead of synced after a non-network scan failure", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).scanRemoteDir = async () => {
+                throw new Error("remote metadata is invalid");
+            };
+
+            await engine.forceSync();
+
+            expect(engine.getStatus()).toBe("error");
+        });
+
+        it("should not mark a pass complete when a transfer worker detected an outage", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).scanRemoteDir = async () => {};
+            (engine as any).reconcile = async () => {
+                // Transfer workers intentionally catch their individual errors.
+                // The offline state must still make the overall pass fail.
+                (engine as any).isOffline = true;
+                (engine as any).reconciliationRetryPending = true;
+            };
+            (engine as any).startOfflineMonitor = () => {
+                (engine as any).isOffline = true;
+            };
+
+            await engine.forceSync();
+
+            expect(engine.getStatus()).toBe("offline");
+            expect(db.getConfig("full_sync_completed", "0")).toBe("0");
+            expect(
+                db.getRecentLogs(20).some((entry) =>
+                    entry.message.includes("Synchronization was interrupted"),
+                ),
+            ).toBe(true);
         });
 
         it("should upload local files that are not on remote", async () => {
@@ -827,6 +973,3 @@ describe("SyncEngine", () => {
         });
     });
 });
-
-
-

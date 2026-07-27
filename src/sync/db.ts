@@ -1,7 +1,17 @@
 import { Database } from './sqlite';
-import { mkdirSync } from 'node:fs';
+import {
+    chmodSync,
+    closeSync,
+    copyFileSync,
+    existsSync,
+    fsyncSync,
+    mkdirSync,
+    openSync,
+    renameSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { DurableJournal } from './journal';
 
 export interface SyncMapping {
     local_path: string;           // Relative path from local sync root (e.g. "folder/file.txt")
@@ -25,6 +35,7 @@ export interface SyncLog {
 
 export class SyncDatabase {
     private db: Database;
+    public readonly journal: DurableJournal;
     private _logWriteCount: number = 0;
 
     /**
@@ -37,11 +48,19 @@ export class SyncDatabase {
             resolvedPath = dbPath;
         } else {
             const configDir = path.join(homedir(), '.config', 'proton-drive-sync');
-            mkdirSync(configDir, { recursive: true });
+            mkdirSync(configDir, { recursive: true, mode: 0o700 });
             resolvedPath = path.join(configDir, 'sync_state.db');
         }
-        mkdirSync(path.dirname(resolvedPath), { recursive: true });
+        mkdirSync(path.dirname(resolvedPath), { recursive: true, mode: 0o700 });
+        try {
+            chmodSync(path.dirname(resolvedPath), 0o700);
+        } catch {}
+        backupBeforeJournalMigration(resolvedPath);
         this.db = new Database(resolvedPath);
+        this.journal = new DurableJournal(
+            dbPath ? `${resolvedPath}.journal` : path.join(path.dirname(resolvedPath), 'journal.sqlite'),
+        );
+        this.journal.resetInterruptedWork();
         this.initTables();
     }
 
@@ -61,6 +80,7 @@ export class SyncDatabase {
             CREATE TABLE IF NOT EXISTS sync_mappings (
                 sync_mode TEXT NOT NULL,
                 local_path TEXT NOT NULL,
+                stable_inode_id TEXT NOT NULL DEFAULT '',
                 node_uid TEXT NOT NULL,
                 is_dir INTEGER,
                 size INTEGER,
@@ -79,6 +99,7 @@ export class SyncDatabase {
                 CREATE TABLE sync_mappings (
                     sync_mode TEXT NOT NULL,
                     local_path TEXT NOT NULL,
+                    stable_inode_id TEXT NOT NULL DEFAULT '',
                     node_uid TEXT NOT NULL,
                     is_dir INTEGER,
                     size INTEGER,
@@ -91,12 +112,23 @@ export class SyncDatabase {
             `);
             this.db.prepare(`
                 INSERT INTO sync_mappings
-                    (sync_mode, local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime)
-                SELECT ?, local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
+                    (sync_mode, local_path, stable_inode_id, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime)
+                SELECT ?, local_path, node_uid, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
                 FROM sync_mappings_legacy
             `).run(legacyMode);
             this.db.run('DROP TABLE sync_mappings_legacy');
         }
+        const currentMappingColumns = this.db.prepare(
+            'PRAGMA table_info(sync_mappings)',
+        ).all() as { name: string }[];
+        if (!currentMappingColumns.some((column) => column.name === 'stable_inode_id')) {
+            this.db.run(
+                `ALTER TABLE sync_mappings ADD COLUMN stable_inode_id TEXT NOT NULL DEFAULT ''`,
+            );
+        }
+        this.db.run(
+            `UPDATE sync_mappings SET stable_inode_id = node_uid WHERE stable_inode_id = ''`,
+        );
         this.db.run(`CREATE INDEX IF NOT EXISTS idx_mappings_mode_uid ON sync_mappings(sync_mode, node_uid)`);
 
         // Create sync_logs
@@ -215,13 +247,22 @@ export class SyncDatabase {
     }
 
     setMapping(mapping: SyncMapping): void {
+        const stableInodeId = (
+            this.db.prepare(`
+                SELECT stable_inode_id FROM sync_mappings
+                WHERE sync_mode = ? AND local_path = ?
+            `).get(this.getSyncMode(), mapping.local_path) as
+                | { stable_inode_id: string }
+                | undefined
+        )?.stable_inode_id || mapping.node_uid;
         this.db.prepare(`
             INSERT OR REPLACE INTO sync_mappings (
-                sync_mode, local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
-            ) VALUES ($sync_mode, $local_path, $node_uid, $is_dir, $size, $mtime, $sha1, $remote_revision_uid, $remote_mtime)
+                sync_mode, local_path, stable_inode_id, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
+            ) VALUES ($sync_mode, $local_path, $stable_inode_id, $node_uid, $is_dir, $size, $mtime, $sha1, $remote_revision_uid, $remote_mtime)
         `).run({
             $sync_mode: this.getSyncMode(),
             $local_path: mapping.local_path,
+            $stable_inode_id: stableInodeId,
             $node_uid: mapping.node_uid,
             $is_dir: mapping.is_dir,
             $size: mapping.size,
@@ -230,6 +271,23 @@ export class SyncDatabase {
             $remote_revision_uid: mapping.remote_revision_uid,
             $remote_mtime: mapping.remote_mtime,
         });
+    }
+
+    getStableInodeId(localPath: string): string | undefined {
+        return (this.db.prepare(`
+            SELECT stable_inode_id FROM sync_mappings
+            WHERE sync_mode = ? AND local_path = ?
+        `).get(this.getSyncMode(), localPath) as
+            | { stable_inode_id: string }
+            | undefined
+        )?.stable_inode_id;
+    }
+
+    setStableInodeId(localPath: string, stableInodeId: string): void {
+        this.db.prepare(`
+            UPDATE sync_mappings SET stable_inode_id = ?
+            WHERE sync_mode = ? AND local_path = ?
+        `).run(stableInodeId, this.getSyncMode(), localPath);
     }
 
     deleteMapping(localPath: string): void {
@@ -380,6 +438,14 @@ export class SyncDatabase {
         this.db.prepare('DELETE FROM fod_pending_uploads WHERE local_path = ?').run(localPath);
     }
 
+    renamePendingFodUpload(oldPath: string, newPath: string): void {
+        this.db.prepare(`
+            UPDATE fod_pending_uploads
+            SET local_path = ?, queued_at = ?
+            WHERE local_path = ?
+        `).run(newPath, Date.now(), oldPath);
+    }
+
     getPendingFodUploads(): {
         local_path: string;
         node_uid: string;
@@ -461,6 +527,15 @@ export class SyncDatabase {
         return this.db.prepare('SELECT * FROM sync_logs ORDER BY id DESC LIMIT ?').all(limit) as SyncLog[];
     }
 
+    getLogsAfter(afterId: number, limit: number = 200): SyncLog[] {
+        return this.db.prepare(`
+            SELECT * FROM sync_logs
+            WHERE id > ?
+            ORDER BY id ASC
+            LIMIT ?
+        `).all(Math.max(0, afterId), Math.max(1, Math.min(1000, limit))) as SyncLog[];
+    }
+
     pruneOldLogs(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): void {
         this.db.prepare('DELETE FROM sync_logs WHERE timestamp < ?').run(Date.now() - maxAgeMs);
     }
@@ -478,6 +553,31 @@ export class SyncDatabase {
     }
 
     close() {
+        this.journal.close();
         this.db.close();
+    }
+}
+
+function backupBeforeJournalMigration(databasePath: string): void {
+    if (!existsSync(databasePath)) return;
+    const backupPath = `${databasePath}.pre-journal-v1.bak`;
+    if (existsSync(backupPath)) return;
+
+    // Copy the main database and any WAL sidecar before schema changes. The
+    // daemon is single-instance, so these files are quiescent during startup.
+    for (const suffix of ['', '-wal']) {
+        const source = `${databasePath}${suffix}`;
+        if (!existsSync(source)) continue;
+        const destination = suffix ? `${backupPath}${suffix}` : backupPath;
+        const temporary = `${destination}.tmp-${process.pid}`;
+        copyFileSync(source, temporary);
+        chmodSync(temporary, 0o600);
+        const fd = openSync(temporary, 'r');
+        try {
+            fsyncSync(fd);
+        } finally {
+            closeSync(fd);
+        }
+        renameSync(temporary, destination);
     }
 }

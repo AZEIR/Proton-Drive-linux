@@ -8,10 +8,22 @@ describe("Dashboard API", () => {
     let mockEngine: any;
     let mockSession: any;
     let mockFod: any;
+    let sessionCookie = "";
+    let csrfToken = "";
     const PORT = 8089;
     const BASE_URL = `http://localhost:${PORT}`;
 
-    beforeEach(() => {
+    const apiFetch = (path: string, init: RequestInit = {}) => {
+        const headers = new Headers(init.headers);
+        headers.set("Origin", BASE_URL);
+        headers.set("Cookie", sessionCookie);
+        if (!["GET", "HEAD", "OPTIONS"].includes(String(init.method || "GET").toUpperCase())) {
+            headers.set("X-CSRF-Token", csrfToken);
+        }
+        return fetch(`${BASE_URL}${path}`, { ...init, headers });
+    };
+
+    beforeEach(async () => {
         let concurrencyLimit = 2;
         let maxSpeedKbps = 0;
         let wifiSafeMode = false;
@@ -22,6 +34,11 @@ describe("Dashboard API", () => {
             getSyncMode: mock().mockReturnValue("full"),
             setSyncMode: mock(),
             getFuseMountPoint: mock().mockReturnValue("/tmp/P-Drive-FUSE"),
+            journal: {
+                getPendingOperationCount: mock().mockReturnValue(2),
+                getPendingRemoteEventCount: mock().mockReturnValue(1),
+                getPendingOperations: mock().mockReturnValue([{ op_id: "op-1", state: "queued" }]),
+            },
         };
 
         mockEngine = {
@@ -61,6 +78,11 @@ describe("Dashboard API", () => {
             emit: mock(),
             on: mock(),
             off: mock(),
+            getNetworkSnapshot: mock().mockReturnValue({
+                state: "online",
+                queuedTransfers: 0,
+                activeTransfers: 0,
+            }),
         };
 
         mockSession = {
@@ -80,6 +102,12 @@ describe("Dashboard API", () => {
         };
 
         server = startDashboard(mockDb as any, mockEngine as any, mockSession as any, PORT);
+        const root = await fetch(`${BASE_URL}/`);
+        sessionCookie = root.headers.get("set-cookie")!.split(";")[0];
+        const sessionResponse = await fetch(`${BASE_URL}/api/v1/session`, {
+            headers: { Origin: BASE_URL, Cookie: sessionCookie },
+        });
+        csrfToken = (await sessionResponse.json() as any).csrfToken;
     });
 
     afterEach(() => {
@@ -89,7 +117,7 @@ describe("Dashboard API", () => {
     });
 
     it("GET /api/status should return synced status and email", async () => {
-        const res = await fetch(`${BASE_URL}/api/status`);
+        const res = await apiFetch("/api/status");
         expect(res.status).toBe(200);
         const data: any = await res.json();
         expect(data.status).toBe("synced");
@@ -100,6 +128,10 @@ describe("Dashboard API", () => {
     it("GET / should render the accessible browser UI without the disabled cache tab", async () => {
         const res = await fetch(`${BASE_URL}/`);
         expect(res.status).toBe(200);
+        const csp = res.headers.get("content-security-policy") || "";
+        expect(csp).toContain("script-src 'self'");
+        expect(csp).toContain("style-src 'self'");
+        expect(csp).not.toContain("'unsafe-inline'");
         const html = await res.text();
         expect(html).toContain('aria-label="Dashboard navigation"');
         expect(html).toContain('id="tab-browser"');
@@ -107,23 +139,33 @@ describe("Dashboard API", () => {
         expect(html).not.toContain("cacheMenuItem");
         expect(html).not.toContain("var(--border)");
         expect(html).not.toContain("var(--bg-hover)");
-        expect(html).toContain("isPaused = Boolean(data.isPaused || data.status === 'paused')");
-        expect(html).not.toContain("if (!FOD_MODE)");
-        expect(html).toContain("fetch('/api/set-speed-limit'");
-        expect(html).not.toContain("fetch('/api/set-max-speed'");
-        expect(html).toContain("setNetworkProfile('performance')");
+        expect(html).toContain('src="/assets/dashboard.js?v=network-profile-1"');
+        expect(html).toContain('data-profile="safe"');
+        expect(html).not.toContain('id="wifiSafeToggle"');
+        expect(html).not.toContain('data-change-action="toggle-wifi-safe"');
+        expect(html).not.toContain("fonts.googleapis.com");
+        expect(html).toContain("Drive for Linux");
+        expect(html).not.toContain("Official Proton Drive Folder Icon");
+        expect(html).not.toMatch(/\son(?:click|input|change|submit)=/);
+        expect(html).not.toContain(' style="');
         expect(html).toContain('id="concurrencyRange" min="1" max="5"');
+        const script = await (await fetch(`${BASE_URL}/assets/dashboard.js`)).text();
+        expect(script).toContain("installIconRenderer()");
+        expect(script).toContain("ICON_SHAPES");
+        expect(script).toContain("isPaused = Boolean(data.isPaused || data.status === 'paused')");
+        expect(script).toContain("fetch('/api/set-speed-limit'");
+        expect(script).not.toContain("toggleWifiSafeMode");
     });
 
     it("GET /api/status should handle logged out state", async () => {
         mockSession.auth.isLoggedIn.mockReturnValue(false);
-        const res = await fetch(`${BASE_URL}/api/status`);
+        const res = await apiFetch("/api/status");
         const data: any = await res.json();
         expect(data.email).toBe("Not Logged In");
     });
 
     it("GET /api/quota should return formatted quota", async () => {
-        const res = await fetch(`${BASE_URL}/api/quota`);
+        const res = await apiFetch("/api/quota");
         expect(res.status).toBe(200);
         const data: any = await res.json();
         expect(data.usedSpace).toBe(50);
@@ -132,21 +174,30 @@ describe("Dashboard API", () => {
     });
 
     it("GET /api/logs should return logs from DB", async () => {
-        const res = await fetch(`${BASE_URL}/api/logs`);
+        const res = await apiFetch("/api/logs");
         expect(res.status).toBe(200);
         const data: any = await res.json();
         expect(data.length).toBe(1);
         expect(data[0].message).toBe("test log");
     });
 
+    it("GET /api/v1 exposes authenticated network and journal state", async () => {
+        const network = await (await apiFetch("/api/v1/network-policy")).json() as any;
+        expect(network.state).toBe("online");
+        const journal = await (await apiFetch("/api/v1/journal")).json() as any;
+        expect(journal.pendingOperations).toBe(2);
+        expect(journal.pendingEvents).toBe(1);
+        expect(journal.operations[0].op_id).toBe("op-1");
+    });
+
     it("POST /api/pause should call engine.pause", async () => {
-        const res = await fetch(`${BASE_URL}/api/pause`, { method: "POST" });
+        const res = await apiFetch("/api/pause", { method: "POST" });
         expect(res.status).toBe(200);
         expect(mockEngine.pause).toHaveBeenCalled();
     });
 
     it("POST /api/resume should call engine.resume", async () => {
-        const res = await fetch(`${BASE_URL}/api/resume`, { method: "POST" });
+        const res = await apiFetch("/api/resume", { method: "POST" });
         expect(res.status).toBe(200);
         expect(mockEngine.resume).toHaveBeenCalled();
     });
@@ -164,18 +215,18 @@ describe("Dashboard API", () => {
         };
         server.updateContext(mockEngine, mockSession, mockFod);
 
-        const statusRes = await fetch(`${BASE_URL}/api/status`);
+        const statusRes = await apiFetch("/api/status");
         const status: any = await statusRes.json();
         expect(status.status).toBe("paused");
-        expect(status.mode).toBe("fod");
+        expect(status.mode).toBe("fuse");
         expect(status.isPaused).toBe(true);
         expect(status.concurrencyLimit).toBe(2);
         expect(status.maxSpeedKbps).toBe(0);
         expect(status.wifiSafeMode).toBe(false);
         expect(status.networkProfile).toBe("custom");
 
-        const pauseRes = await fetch(`${BASE_URL}/api/pause`, { method: "POST" });
-        const resumeRes = await fetch(`${BASE_URL}/api/resume`, { method: "POST" });
+        const pauseRes = await apiFetch("/api/pause", { method: "POST" });
+        const resumeRes = await apiFetch("/api/resume", { method: "POST" });
         expect(pauseRes.status).toBe(200);
         expect(resumeRes.status).toBe(200);
         expect(mockFod.pause).toHaveBeenCalled();
@@ -197,7 +248,7 @@ describe("Dashboard API", () => {
         };
         server.updateContext(mockEngine, mockSession, mockFod);
 
-        const response = await fetch(`${BASE_URL}/api/events`);
+        const response = await apiFetch("/api/events");
         const reader = response.body!.getReader();
         const firstEvent = await reader.read();
         const payload = new TextDecoder().decode(firstEvent.value);
@@ -213,20 +264,20 @@ describe("Dashboard API", () => {
     });
 
     it("POST /api/sync should call engine.forceSync", async () => {
-        const res = await fetch(`${BASE_URL}/api/sync`, { method: "POST" });
+        const res = await apiFetch("/api/sync", { method: "POST" });
         expect(res.status).toBe(200);
         expect(mockEngine.forceSync).toHaveBeenCalled();
     });
 
     it("POST /api/logout should stop engine and session auth", async () => {
-        const res = await fetch(`${BASE_URL}/api/logout`, { method: "POST" });
+        const res = await apiFetch("/api/logout", { method: "POST" });
         expect(res.status).toBe(200);
         expect(mockEngine.stop).toHaveBeenCalled();
         expect(mockSession.auth.logout).toHaveBeenCalled();
     });
 
     it("POST /api/login should return 400 if already logged in", async () => {
-        const res = await fetch(`${BASE_URL}/api/login`, { method: "POST" });
+        const res = await apiFetch("/api/login", { method: "POST" });
         expect(res.status).toBe(400);
         const data: any = await res.json();
         expect(data.error).toBe("Already logged in");
@@ -246,14 +297,20 @@ describe("Dashboard API", () => {
     it("GET /api/status should handle null engine and session gracefully when offline", async () => {
         const offlineServer = startDashboard(mockDb as any, null, null, 8090);
         try {
-            const res = await fetch("http://localhost:8090/api/status");
+            const root = await fetch("http://localhost:8090/");
+            const offlineCookie = root.headers.get("set-cookie")!.split(";")[0];
+            const res = await fetch("http://localhost:8090/api/status", {
+                headers: { Cookie: offlineCookie },
+            });
             expect(res.status).toBe(200);
             const data: any = await res.json();
             expect(data.status).toBe("offline");
             expect(data.email).toBe("Not Logged In");
 
             offlineServer.updateContext(mockEngine, mockSession);
-            const recoveredRes = await fetch("http://localhost:8090/api/status");
+            const recoveredRes = await fetch("http://localhost:8090/api/status", {
+                headers: { Cookie: offlineCookie },
+            });
             const recoveredData: any = await recoveredRes.json();
             expect(recoveredData.status).toBe("synced");
             expect(recoveredData.email).toBe("test@example.com");
@@ -267,7 +324,7 @@ describe("Dashboard API", () => {
             { local_path: "document.txt", node_uid: "n1", is_dir: 0, size: 100, mtime: 1000 },
             { local_path: "folder/file2.txt", node_uid: "n2", is_dir: 0, size: 200, mtime: 2000 },
         ]);
-        const res = await fetch(`${BASE_URL}/api/browser/list?path=`);
+        const res = await apiFetch("/api/browser/list?path=");
         expect(res.status).toBe(200);
         const data: any = await res.json();
         expect(data.currentPath).toBe("");
@@ -293,7 +350,7 @@ describe("Dashboard API", () => {
         };
         server.updateContext(mockEngine, mockSession, mockFod);
 
-        const res = await fetch(`${BASE_URL}/api/browser/open-item`, {
+        const res = await apiFetch("/api/browser/open-item", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ relPath: "not-in-drive" }),
@@ -304,7 +361,7 @@ describe("Dashboard API", () => {
     });
 
     it("POST /api/set-concurrency should update concurrency limit", async () => {
-        const res = await fetch(`${BASE_URL}/api/set-concurrency`, {
+        const res = await apiFetch("/api/set-concurrency", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ concurrency: 3 }),
@@ -318,7 +375,7 @@ describe("Dashboard API", () => {
     });
 
     it("POST /api/set-concurrency should reject values above the real SDK queue capacity", async () => {
-        const res = await fetch(`${BASE_URL}/api/set-concurrency`, {
+        const res = await apiFetch("/api/set-concurrency", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ concurrency: 6 }),
@@ -328,7 +385,7 @@ describe("Dashboard API", () => {
     });
 
     it("POST /api/set-network-profile should apply the performance profile", async () => {
-        const res = await fetch(`${BASE_URL}/api/set-network-profile`, {
+        const res = await apiFetch("/api/set-network-profile", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ profile: "performance" }),
@@ -343,7 +400,7 @@ describe("Dashboard API", () => {
     });
 
     it("POST /api/set-speed-limit should update max speed limit", async () => {
-        const res = await fetch(`${BASE_URL}/api/set-speed-limit`, {
+        const res = await apiFetch("/api/set-speed-limit", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ maxSpeedKbps: 2048 }),
@@ -356,7 +413,7 @@ describe("Dashboard API", () => {
     });
 
     it("POST /api/set-wifi-safe-mode should update Wi-Fi Safe Mode", async () => {
-        const res = await fetch(`${BASE_URL}/api/set-wifi-safe-mode`, {
+        const res = await apiFetch("/api/set-wifi-safe-mode", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ enabled: true }),
@@ -377,15 +434,30 @@ describe("Dashboard API", () => {
         expect(mockEngine.pause).not.toHaveBeenCalled();
     });
 
-    it("should authorize same-origin API requests with the dashboard cookie", async () => {
-        const page = await fetch(`${BASE_URL}/`);
-        const cookie = page.headers.get("set-cookie");
-        expect(cookie).toContain("proton_dashboard=");
+    it("should reject unauthenticated local API reads", async () => {
+        const res = await fetch(`${BASE_URL}/api/status`);
+        expect(res.status).toBe(403);
+    });
+
+    it("should reject non-browser mutations without an Origin header", async () => {
+        const res = await fetch(`${BASE_URL}/api/pause`, {
+            method: "POST",
+            headers: {
+                Cookie: sessionCookie,
+                "X-CSRF-Token": csrfToken,
+            },
+        });
+        expect(res.status).toBe(403);
+        expect(mockEngine.pause).not.toHaveBeenCalled();
+    });
+
+    it("should authorize same-origin API requests with cookie and CSRF token", async () => {
         const res = await fetch(`${BASE_URL}/api/pause`, {
             method: "POST",
             headers: {
                 Origin: BASE_URL,
-                Cookie: cookie!.split(";")[0],
+                Cookie: sessionCookie,
+                "X-CSRF-Token": csrfToken,
             },
         });
         expect(res.status).toBe(200);
@@ -393,7 +465,7 @@ describe("Dashboard API", () => {
     });
 
     it("should reject browser paths that escape the configured root", async () => {
-        const res = await fetch(`${BASE_URL}/api/browser/open-item`, {
+        const res = await apiFetch("/api/browser/open-item", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ relPath: "../../etc/passwd" }),

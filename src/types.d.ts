@@ -9,3 +9,8 @@ declare module "*.js" {
 }
 
 declare module "fuse-native";
+
+declare module "better-sqlite3" {
+    const Database: new (filename: string, options?: Record<string, unknown>) => any;
+    export default Database;
+}

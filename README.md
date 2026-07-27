@@ -1,4 +1,4 @@
-# Proton Drive Linux
+# Drive for Linux
 
 > An unofficial Proton Drive Linux sync client built using the [Official Proton Drive SDK](https://github.com/ProtonDriveApps/sdk) in compliance with [Proton SDK Guidelines](https://github.com/ProtonDriveApps/sdk#usage-guidelines-for-personal-projects).
 
@@ -26,7 +26,7 @@ cd Proton-Drive-linux
 ```
 *(If you already cloned without submodules, run `git submodule update --init sdk`. Do not initialize the SDK's unrelated nested platform submodules.)*
 
-### 2. Install [Bun](https://bun.sh) (required to build)
+### 2. Install Node 22, Rust, FUSE 3/libsecret, and [Bun](https://bun.sh)
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -38,7 +38,10 @@ curl -fsSL https://bun.sh/install | bash
 ./setup.sh
 ```
 
-This builds the sync binary, installs it as a systemd service that auto-starts on login, installs the system tray icon, and asks you which local folder to sync to (default: `~/P-Drive`).
+This builds an immutable, versioned release under
+`~/.local/lib/drive-for-linux`, installs the hardened `drive-core.service`,
+and installs the system tray icon. Failed upgrades automatically roll back to
+the previous release.
 
 ### 4. Sign in
 
@@ -57,12 +60,14 @@ A **system tray icon** also appears in your taskbar for quick access to status a
 
 - **Two-way sync** — local changes upload, remote changes download
 - **Real-time** — uses a file watcher + Proton's event stream, no polling
-- **Works offline** — keeps a full local copy; queued changes sync when you reconnect
+- **Works offline** — full-sync keeps a local copy, while FUSE preserves verified cached content and durably queues local writeback
 - **Conflict handling** — if the same file is edited on two devices simultaneously, a conflict copy (`file (Conflict 2026-06-20).txt`) is created so no work is lost
 - **Bulk-delete protection** — if an accidental mass deletion is detected, the daemon pauses and requests confirmation before touching the cloud
 - **Web dashboard** — monitor sync status, active transfers, storage quota, activity logs, and settings at `http://localhost:8085`
 - **System tray icon** — check status or open the dashboard with a click
 - **Ignore rules** — create a `.protonignore` file in your sync folder (same syntax as `.gitignore`) to exclude files/folders
+- **Adaptive network governor** — one bounded scheduler and aggregate bandwidth budget shared by full sync and FUSE transfers
+- **Durable FUSE writeback** — local flush/close state is committed to a power-loss durable journal before background upload
 
 ### Built-in ignores (always skipped)
 
@@ -155,10 +160,12 @@ Stops the service, removes the systemd unit, and removes the tray icon. Your loc
 
 - Linux (x86_64)
 - [Bun](https://bun.sh) (for building)
-- Node.js 20.18 or newer (runtime)
+- Node.js 22 or newer (runtime)
+- Rust 1.85+ and FUSE 3 development headers (native sidecar build)
+- Secret Service/libsecret (`secret-tool`) for the default credential store
 - Python 3 with GTK/AppIndicator bindings (system tray)
 - SQLite 3 command-line tools
-- FUSE 3 userspace tools (`fusermount3`, or `fusermount` on compatible distributions)
+- FUSE 3 userspace tools (`fusermount3`)
 - A C/C++ build toolchain if prebuilt native modules are unavailable
 
 ---
@@ -168,6 +175,12 @@ Stops the service, removes the systemd unit, and removes the tray icon. Your loc
 - Unofficial client — not affiliated with Proton AG
 - Only tested on x86_64 Linux (ARM untested)
 - Very large files (multi-GB) stream directly (same as web app)
+- The new Rust FUSE 3 sidecar is experimental and is not selected by default until its metadata/cache IPC and crash-injection gates are complete
+
+For a headless machine without Secret Service, plaintext credential persistence
+is available only by explicitly setting
+`PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file`. The containing directory is
+restricted to `0700` and the atomically-written session file to `0600`.
 
 ---
 

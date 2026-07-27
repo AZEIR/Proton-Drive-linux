@@ -1,7 +1,101 @@
         let isPaused = false;
         let currentTab = 'dashboard';
         let concurrencyDraft;
-        const IS_FOD = typeof FOD_MODE !== 'undefined' ? FOD_MODE : false;
+        const FOD_MODE = document.body.dataset.fodMode === 'true';
+        const IS_FOD = FOD_MODE;
+        const nativeFetch = window.fetch.bind(window);
+        let csrfTokenPromise;
+
+        const ICON_SHAPES = {
+            dashboard: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
+            menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+            settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
+            cloud: '<path d="M7 18h11a4 4 0 0 0 .6-8 6.5 6.5 0 0 0-12.3-1.8A5 5 0 0 0 7 18Z"/>',
+            cloud_done: '<path d="M7 18h11a4 4 0 0 0 .6-8 6.5 6.5 0 0 0-12.3-1.8A5 5 0 0 0 7 18Z"/><path d="m9 13 2 2 4-4"/>',
+            cloud_off: '<path d="m3 3 18 18M7.2 7.2A5 5 0 0 0 7 17h10M10.2 5.3a6.5 6.5 0 0 1 8.4 4.7 4 4 0 0 1 2.1 6.7"/>',
+            sync: '<path d="M20 7h-5V2M4 17h5v5M19 12a7 7 0 0 0-12-5L4 10M5 12a7 7 0 0 0 12 5l3-3"/>',
+            refresh: '<path d="M20 6v5h-5M19 11a7 7 0 1 0-1.5 6.3"/>',
+            search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+            search_off: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M4 4l16 16"/>',
+            folder: '<path d="M3 6h7l2 2h9v10H3Z"/>',
+            folder_open: '<path d="M3 7h7l2 2h9l-2 9H3Z"/>',
+            folder_copy: '<path d="M5 7h6l2 2h8v10H5Z"/><path d="M3 15V5h7l2 2"/>',
+            folder_managed: '<path d="M3 6h7l2 2h9v10H3Z"/><circle cx="15" cy="13" r="2"/><path d="M15 9v2M15 15v2M11 13h2M17 13h2"/>',
+            folder_zip: '<path d="M3 6h7l2 2h9v10H3Z"/><path d="M13 8v2h2v2h-2v2h2v2"/>',
+            description: '<path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+            draft: '<path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h5"/>',
+            code: '<path d="m9 8-4 4 4 4M15 8l4 4-4 4M13 6l-2 12"/>',
+            image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m4 17 5-5 4 4 2-2 5 5"/>',
+            video_file: '<path d="M5 3h10l4 4v14H5Z"/><path d="M15 3v5h5M9 11l5 3-5 3Z"/>',
+            audio_file: '<path d="M9 18V7l9-2v11"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="15.5" cy="16" r="2.5"/>',
+            download: '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+            open_in_new: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v7H4V6h7"/>',
+            push_pin: '<path d="m8 4 8 8M15 3l6 6-4 1-4 4-1 4-6-6 4-1 4-4Z"/><path d="m9 15-5 5"/>',
+            delete_sweep: '<path d="M4 7h10M7 7V4h4v3M6 10l1 10h6l1-10M17 13h5M18 17h4M16 21h6"/>',
+            warning: '<path d="M12 3 2.5 20h19Z"/><path d="M12 9v5M12 17h.01"/>',
+            check_circle: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+            error: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 17h.01"/>',
+            info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
+            pause_circle: '<circle cx="12" cy="12" r="9"/><path d="M9 9v6M15 9v6"/>',
+            stop_circle: '<circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6"/>',
+            speed: '<path d="M5 19a8 8 0 1 1 14 0M12 17l4-6"/><path d="M7 15H4M20 15h-3M12 7V4"/>',
+            terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>',
+            manage_accounts: '<circle cx="9" cy="8" r="3"/><path d="M3 19a6 6 0 0 1 12 0M17 11l4 4M19 9l2 2-5 5-3 1 1-3Z"/>',
+            dark_mode: '<path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>',
+            light_mode: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+            chevron_right: '<path d="m9 5 7 7-7 7"/>',
+            expand_more: '<path d="m5 9 7 7 7-7"/>',
+        };
+
+        const ICON_ALIASES = {
+            cloud_sync: 'sync',
+        };
+
+        function renderIcon(element) {
+            if (element.classList.contains('icon-ready')) return;
+            const requestedName = element.textContent.trim();
+            const iconName = ICON_ALIASES[requestedName] || requestedName;
+            const shape = ICON_SHAPES[iconName] || ICON_SHAPES.info;
+            element.textContent = '';
+            element.dataset.icon = requestedName;
+            element.setAttribute('aria-hidden', 'true');
+            element.innerHTML = `<svg class="ui-icon" viewBox="0 0 24 24" focusable="false">${shape}</svg>`;
+            element.classList.add('icon-ready');
+        }
+
+        function installIconRenderer() {
+            const renderWithin = node => {
+                if (node.nodeType !== Node.ELEMENT_NODE) return;
+                if (node.matches?.('.material-symbols-outlined')) renderIcon(node);
+                node.querySelectorAll?.('.material-symbols-outlined').forEach(renderIcon);
+            };
+            renderWithin(document.body);
+            new MutationObserver(mutations => {
+                for (const mutation of mutations) {
+                    mutation.addedNodes.forEach(renderWithin);
+                }
+            }).observe(document.body, { childList: true, subtree: true });
+        }
+
+        async function getCsrfToken() {
+            csrfTokenPromise ??= nativeFetch('/api/v1/session')
+                .then(response => {
+                    if (!response.ok) throw new Error('Dashboard session is not authorized');
+                    return response.json();
+                })
+                .then(payload => payload.csrfToken);
+            return csrfTokenPromise;
+        }
+
+        window.fetch = async function secureDashboardFetch(input, init = {}) {
+            const method = String(init.method || 'GET').toUpperCase();
+            if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+                const headers = new Headers(init.headers || {});
+                headers.set('X-CSRF-Token', await getCsrfToken());
+                init = { ...init, headers };
+            }
+            return nativeFetch(input, init);
+        };
 
         function escapeHtml(str) {
             if (!str) return '';
@@ -74,9 +168,8 @@
         function updateSpeedPresetButtons(val) {
             const btns = document.querySelectorAll('.speed-preset-btn');
             btns.forEach(btn => {
-                const onclickAttr = btn.getAttribute('onclick') || '';
-                const match = onclickAttr.match(/setSpeedPreset\((\d+)\)/);
-                if (match && parseInt(match[1], 10) === val) {
+                const preset = Number(btn.dataset.speedKbps);
+                if (Number.isFinite(preset) && preset === val) {
                     btn.classList.add('active');
                 } else {
                     btn.classList.remove('active');
@@ -113,14 +206,69 @@
             }
         }
 
+        function installDeclarativeHandlers() {
+            document.addEventListener('click', event => {
+                const element = event.target.closest('[data-action]');
+                if (!element) return;
+                const value = element.dataset.actionValue || '';
+                const decodedValue = element.dataset.encodedValue
+                    ? decodeActionValue(element.dataset.encodedValue)
+                    : value;
+                const actions = {
+                    'toggle-theme': toggleTheme,
+                    'toggle-sidebar': toggleSidebar,
+                    'confirm-bulk-deletions': confirmBulkDeletions,
+                    'restore-bulk-deletions': restoreBulkDeletions,
+                    'toggle-pause': togglePause,
+                    'force-sync': forceSync,
+                    'open-folder': openFolder,
+                    login,
+                    'save-path': savePath,
+                    'save-max-speed': saveMaxSpeed,
+                    'save-concurrency': saveConcurrency,
+                    logout,
+                    'restart-daemon': restartDaemon,
+                    'stop-daemon': stopDaemon,
+                    'refresh-browser': refreshBrowser,
+                    'show-tab': () => showTab(value),
+                    'set-log-filter': () => setLogFilter(value),
+                    'switch-sync-mode': () => switchSyncMode(value),
+                    'set-network-profile': () => setNetworkProfile(value),
+                    'set-speed-preset': () => setSpeedPreset(Number(element.dataset.speedKbps)),
+                    'navigate-browser': () => navigateToBrowserPath(decodedValue),
+                    'hydrate-browser-item': () => hydrateBrowserItem(decodedValue),
+                    'evict-browser-item': () => evictBrowserItem(decodedValue),
+                    'pin-browser-item': () => pinBrowserItem(decodedValue),
+                    'open-browser-item': () => openBrowserItem(decodedValue),
+                    'load-more-logs': () => {
+                        visibleLogsCount += 100;
+                        renderLogs();
+                    },
+                };
+                actions[element.dataset.action]?.();
+            });
+            document.addEventListener('input', event => {
+                const action = event.target.dataset.inputAction;
+                if (action === 'filter-logs') filterLogs();
+                else if (action === 'filter-browser-items') filterBrowserItems();
+                else if (action === 'update-concurrency-input') {
+                    updateConcurrencyInput(event.target.value);
+                } else if (action === 'update-concurrency-range') {
+                    updateConcurrencyRange(event.target.value);
+                }
+            });
+        }
+
         function init() {
+            installIconRenderer();
+            installDeclarativeHandlers();
             // Load theme from localStorage
             loadTheme();
 
             // Create sidebar overlay for mobile
             const overlay = document.createElement('div');
             overlay.className = 'sidebar-overlay';
-            overlay.onclick = toggleSidebar;
+            overlay.dataset.action = 'toggle-sidebar';
             document.body.appendChild(overlay);
 
             if (IS_FOD) {
@@ -255,7 +403,7 @@
             currentBrowserPath = relPath || '';
             const tbody = document.getElementById('browserTableBody');
             if (tbody) {
-                tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">Loading files...</td></tr>`;
+                tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center browser-empty-cell is-muted">Loading files...</td></tr>`;
             }
             fetch('/api/browser/list?path=' + encodeURIComponent(currentBrowserPath))
                 .then(async (response) => {
@@ -273,7 +421,7 @@
                 .catch(err => {
                     console.error('Failed to fetch browser list:', err);
                     if (tbody) {
-                        tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center text-danger" style="padding: 24px;">Failed to load files: ${escapeHtml(err.message)}</td></tr>`;
+                        tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center text-danger browser-empty-cell">Failed to load files: ${escapeHtml(err.message)}</td></tr>`;
                     }
                 });
         }
@@ -294,7 +442,7 @@
                 if (isLast) {
                     html += `<span class="breadcrumb-item active" aria-current="page">${escapeHtml(b.name)}</span>`;
                 } else {
-                    html += `<button type="button" class="breadcrumb-item" onclick="navigateToBrowserPath(decodeActionValue('${encodeActionValue(b.path)}'))">${escapeHtml(b.name)}</button>`;
+                    html += `<button type="button" class="breadcrumb-item" data-action="navigate-browser" data-encoded-value="${encodeActionValue(b.path)}">${escapeHtml(b.name)}</button>`;
                 }
             });
             container.innerHTML = html;
@@ -366,7 +514,7 @@
             if (summaryEl) summaryEl.innerText = `${formatBytes(cachedBytes)} cached of ${formatBytes(totalBytes)}`;
 
             if (items.length === 0) {
-                tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">No items found in this directory.</td></tr>`;
+                tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center browser-empty-cell is-muted">No items found in this directory.</td></tr>`;
                 return;
             }
 
@@ -376,18 +524,18 @@
                 const encodedPath = encodeActionValue(item.relPath);
                 const encodedUid = encodeActionValue(item.nodeUid || '');
                 const nameDisplay = item.isDir 
-                    ? `<button type="button" class="browser-item-name is-dir" onclick="navigateToBrowserPath(decodeActionValue('${encodedPath}'))">${icon}<span>${escapeHtml(item.name)}</span></button>`
+                    ? `<button type="button" class="browser-item-name is-dir" data-action="navigate-browser" data-encoded-value="${encodedPath}">${icon}<span>${escapeHtml(item.name)}</span></button>`
                     : `<div class="browser-item-name">${icon}<span>${escapeHtml(item.name)}</span></div>`;
 
                 let statusBadge = '';
                 if (item.isDir) {
                     statusBadge = `<span class="browser-status-na" aria-label="Not applicable">—</span>`;
                 } else if (item.isPinned) {
-                    statusBadge = `<span class="badge-status badge-pinned"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pinned</span>`;
+                    statusBadge = `<span class="badge-status badge-pinned"><span class="material-symbols-outlined icon-sm">push_pin</span> Pinned</span>`;
                 } else if (item.isCached) {
-                    statusBadge = `<span class="badge-status badge-cached"><span class="material-symbols-outlined" style="font-size:14px;">cloud_done</span> Locally Cached</span>`;
+                    statusBadge = `<span class="badge-status badge-cached"><span class="material-symbols-outlined icon-sm">cloud_done</span> Locally Cached</span>`;
                 } else {
-                    statusBadge = `<span class="badge-status badge-virtual"><span class="material-symbols-outlined" style="font-size:14px;">cloud</span> Cloud Only</span>`;
+                    statusBadge = `<span class="badge-status badge-virtual"><span class="material-symbols-outlined icon-sm">cloud</span> Cloud Only</span>`;
                 }
 
                 const sizeDisplay = item.isDir ? '--' : formatBytes(item.size);
@@ -395,24 +543,24 @@
                 let actions = `<div class="browser-actions">`;
                 if (!item.isDir && item.nodeUid) {
                     if (!item.isCached) {
-                        actions += `<button type="button" class="btn btn-sm btn-primary" onclick="hydrateBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">download</span> Download</button>`;
+                        actions += `<button type="button" class="btn btn-sm btn-primary" data-action="hydrate-browser-item" data-encoded-value="${encodedUid}"><span class="material-symbols-outlined icon-sm">download</span> Download</button>`;
                     } else if (IS_FOD) {
-                        actions += `<button type="button" class="btn btn-sm" onclick="evictBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">delete_sweep</span> Free Space</button>`;
+                        actions += `<button type="button" class="btn btn-sm" data-action="evict-browser-item" data-encoded-value="${encodedUid}"><span class="material-symbols-outlined icon-sm">delete_sweep</span> Free Space</button>`;
                     }
                     if (item.isPinned) {
-                        actions += `<button type="button" class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined text-warning" style="font-size:14px;">push_pin</span> Unpin</button>`;
+                        actions += `<button type="button" class="btn btn-sm" data-action="pin-browser-item" data-encoded-value="${encodedUid}"><span class="material-symbols-outlined text-warning icon-sm">push_pin</span> Unpin</button>`;
                     } else {
-                        actions += `<button type="button" class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pin</button>`;
+                        actions += `<button type="button" class="btn btn-sm" data-action="pin-browser-item" data-encoded-value="${encodedUid}"><span class="material-symbols-outlined icon-sm">push_pin</span> Pin</button>`;
                     }
                 }
-                actions += `<button type="button" class="btn btn-sm" onclick="openBrowserItem(decodeActionValue('${encodedPath}'))"><span class="material-symbols-outlined" style="font-size:14px;">open_in_new</span> Open</button>`;
+                actions += `<button type="button" class="btn btn-sm" data-action="open-browser-item" data-encoded-value="${encodedPath}"><span class="material-symbols-outlined icon-sm">open_in_new</span> Open</button>`;
                 actions += `</div>`;
 
                 html += `<tr class="${item.isDir ? 'browser-directory-row' : ''}">
                     <td class="browser-name-cell">${nameDisplay}</td>
                     <td class="browser-status-cell">${statusBadge}</td>
                     <td class="browser-size-cell">${sizeDisplay}</td>
-                    <td class="browser-actions-cell" style="text-align: right;">${actions}</td>
+                    <td class="browser-actions-cell">${actions}</td>
                 </tr>`;
             });
 
@@ -420,7 +568,11 @@
         }
 
         function hydrateBrowserItem(nodeUid) {
-            fetch('/api/fod/hydrate?nodeUid=' + encodeURIComponent(nodeUid))
+            fetch('/api/fod/hydrate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nodeUid }),
+            })
                 .then(r => r.json())
                 .then(res => {
                     if (res.ok) {
@@ -540,7 +692,6 @@
                 .map(t => {
                     const name      = escapeHtml(t.filePath || t.localPath || 'file');
                     const isUpload  = t.type === 'upload';
-                    const dirColor  = isUpload ? '#a78bfa' : '#10b981';
                     const dirLabel  = isUpload ? 'upload' : 'download';
                     const ringClass = isUpload ? 'upload-ring' : 'download-ring';
                     const percent   = t.percent || 0;
@@ -548,7 +699,7 @@
                     const sizeTxt   = t.size > 0 ? `${formatBytes(t.transferred)} / ${formatBytes(t.size)}` : '';
                     return `<tr class="transfer-active-row">
                         <td class="time-col">${new Date().toLocaleString()}</td>
-                        <td class="log-direction" style="color:${dirColor}">${dirLabel}</td>
+                        <td class="log-direction ${isUpload ? 'direction-upload' : 'direction-download'}">${dirLabel}</td>
                         <td>
                             <span class="transfer-progress-cell">
                                 <svg class="transfer-mini-ring" viewBox="0 0 22 22" width="20" height="20">
@@ -581,8 +732,8 @@
             if (activeRows.length === 0 && filtered.length === 0) {
                 const isEmpty = !cachedLogs || cachedLogs.length === 0;
                 body.innerHTML = isEmpty
-                    ? '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">cloud_off</span><span class="empty-title">No recent sync activity</span><span class="empty-desc">Proton Drive is scanning your files. Activity logs will appear here as changes are detected.</span></div></td></tr>'
-                    : '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">search_off</span><span class="empty-title">No matches found</span><span class="empty-desc">Try adjusting your search query or filters.</span></div></td></tr>';
+                    ? '<tr><td colspan="4" class="log-empty-cell"><div class="empty-state"><span class="material-symbols-outlined empty-icon">cloud_off</span><span class="empty-title">No recent sync activity</span><span class="empty-desc">Proton Drive is scanning your files. Activity logs will appear here as changes are detected.</span></div></td></tr>'
+                    : '<tr><td colspan="4" class="log-empty-cell"><div class="empty-state"><span class="material-symbols-outlined empty-icon">search_off</span><span class="empty-title">No matches found</span><span class="empty-desc">Try adjusting your search query or filters.</span></div></td></tr>';
                 return;
             }
 
@@ -595,7 +746,7 @@
                 const msg         = l.message ? `<span class="log-message">${escapeHtml(l.message)}</span>` : '';
                 return `<tr>
                     <td class="time-col">${time}</td>
-                    <td class="log-direction" style="color: ${l.direction.startsWith('up') ? '#a78bfa' : '#10b981'}">${action}</td>
+                    <td class="log-direction ${l.direction.startsWith('up') ? 'direction-upload' : 'direction-download'}">${action}</td>
                     <td><span class="log-status ${statusClass}">${escapeHtml(l.status)}</span></td>
                     <td><strong class="file-path-text">${path}</strong>${msg}</td>
                 </tr>`;
@@ -603,9 +754,9 @@
 
             if (filtered.length > visibleLogsCount) {
                 html += `<tr>
-                    <td colspan="4" style="text-align: center; padding: 1rem;">
-                        <button class="btn" style="font-size: 0.8rem; padding: 0.4rem 1rem;" onclick="loadMoreLogs(event)">
-                            <span class="material-symbols-outlined" style="font-size:16px; vertical-align:middle; margin-right:4px;">expand_more</span>
+                    <td colspan="4" class="load-more-cell">
+                        <button type="button" class="btn btn-load-more" data-action="load-more-logs">
+                            <span class="material-symbols-outlined icon-load-more">expand_more</span>
                             Show More (showing ${visibleLogsCount} of ${filtered.length})
                         </button>
                     </td>
@@ -615,22 +766,16 @@
             body.innerHTML = html;
         }
 
-        window.loadMoreLogs = function(event) {
-            if (event) event.preventDefault();
-            visibleLogsCount += 100;
-            renderLogs();
-        };
-
         function renderStatus(data) {
             // Check auth state to show login page or main dashboard
             const appLayout = document.querySelector('.app-layout');
             const loginView = document.getElementById('loginView');
             if (data.status === 'auth_required') {
-                if (appLayout) appLayout.style.display = 'none';
-                if (loginView) loginView.style.display = 'flex';
+                if (appLayout) appLayout.classList.add('hidden');
+                if (loginView) loginView.classList.add('is-visible-flex');
             } else {
-                if (appLayout) appLayout.style.display = 'flex';
-                if (loginView) loginView.style.display = 'none';
+                if (appLayout) appLayout.classList.remove('hidden');
+                if (loginView) loginView.classList.remove('is-visible-flex');
             }
 
             // Status badge in topbar & Dashboard Hero
@@ -639,8 +784,50 @@
             badge.className = 'status-badge status-' + data.status;
             text.innerText = data.status.replace('_', ' ');
 
-            const currentMode = data.mode || (FOD_MODE ? 'fod' : 'full');
-            const isFuseMode = currentMode === 'fod' || currentMode === 'fuse';
+            const currentMode = data.mode || (FOD_MODE ? 'fuse' : 'full');
+            const isFuseMode = currentMode === 'fuse';
+            const network = data.network || {};
+            const networkState = network.state || (data.status === 'offline' ? 'offline' : 'starting');
+            const uploadBps = Number(network.uploadBps) || 0;
+            const downloadBps = Number(network.downloadBps) || 0;
+            const totalBps = uploadBps + downloadBps;
+            const queued = Number(network.queuedTransfers) || 0;
+            const activeCount = Number(network.activeTransfers) || (data.activeTransfers || []).length;
+            const pendingOperations = Number(data.pendingOperations) || 0;
+            const pendingEvents = Number(data.pendingEvents) || 0;
+            const durableCount = pendingOperations + pendingEvents;
+            document.getElementById('networkState').innerText = networkState.replace('_', ' ');
+            document.getElementById('networkState').className =
+                networkState === 'online' ? 'text-success'
+                    : networkState === 'offline' ? 'text-danger'
+                    : 'text-warning';
+            const retrySeconds = network.retryAfter
+                ? Math.max(0, Math.ceil((Number(network.retryAfter) - Date.now()) / 1000))
+                : 0;
+            document.getElementById('networkDetail').innerText = retrySeconds > 0
+                ? `Rate limited; retrying in ${retrySeconds}s`
+                : `${Number(network.effectiveFileTransfers) || 0} adaptive file slots`;
+            document.getElementById('throughputValue').innerText = `${formatBytes(totalBps)}/s`;
+            document.getElementById('queueDepth').innerText = String(queued);
+            document.getElementById('queueDetail').innerText =
+                `${activeCount} active · ${queued} queued`;
+            document.getElementById('durablePending').innerText = String(durableCount);
+            document.getElementById('durableDetail').innerText = durableCount > 0
+                ? `${pendingOperations} local · ${pendingEvents} remote events`
+                : 'All changes committed';
+            const firstTransfer = (data.activeTransfers || [])[0];
+            if (firstTransfer && totalBps > 0 && Number(firstTransfer.size) > 0) {
+                const remaining = Math.max(
+                    0,
+                    Number(firstTransfer.size) - Number(firstTransfer.transferred || 0),
+                );
+                const seconds = Math.ceil(remaining / totalBps);
+                document.getElementById('transferEta').innerText =
+                    `${formatBytes(uploadBps)} up · ${formatBytes(downloadBps)} down · ETA ${formatDuration(seconds)}`;
+            } else {
+                document.getElementById('transferEta').innerText =
+                    `${formatBytes(uploadBps)} up · ${formatBytes(downloadBps)} down`;
+            }
 
             // Highlight active mode card in Settings
             const cardFull = document.getElementById('cardModeFull');
@@ -654,12 +841,10 @@
                     cardFull.classList.add('active');
                     cardFuse.classList.remove('active');
                 }
+                cardFuse.setAttribute('aria-checked', String(isFuseMode));
+                cardFull.setAttribute('aria-checked', String(!isFuseMode));
             }
 
-            const wifiSafeToggle = document.getElementById('wifiSafeToggle');
-            if (wifiSafeToggle && data.wifiSafeMode !== undefined && document.activeElement !== wifiSafeToggle) {
-                wifiSafeToggle.checked = Boolean(data.wifiSafeMode);
-            }
             const maxSpeedInput = document.getElementById('maxSpeedInput');
             if (maxSpeedInput && data.maxSpeedKbps !== undefined && document.activeElement !== maxSpeedInput) {
                 maxSpeedInput.value = data.maxSpeedKbps ?? 0;
@@ -668,12 +853,14 @@
             const concurrencyInput = document.getElementById('concurrencyInput');
             const concurrencyRange = document.getElementById('concurrencyRange');
             const concurrencySaveBtn = document.getElementById('concurrencySaveBtn');
-            const wifiSafeMode = Boolean(data.wifiSafeMode);
-            updateNetworkProfileButtons(data.networkProfile || (wifiSafeMode ? 'safe' : 'custom'));
-            if (concurrencyInput) concurrencyInput.disabled = wifiSafeMode;
-            if (concurrencyRange) concurrencyRange.disabled = wifiSafeMode;
-            if (concurrencySaveBtn) concurrencySaveBtn.disabled = wifiSafeMode;
-            if (wifiSafeMode) {
+            const activeNetworkProfile =
+                data.networkProfile || (data.wifiSafeMode ? 'safe' : 'custom');
+            const isSafeProfile = activeNetworkProfile === 'safe';
+            updateNetworkProfileButtons(activeNetworkProfile);
+            if (concurrencyInput) concurrencyInput.disabled = isSafeProfile;
+            if (concurrencyRange) concurrencyRange.disabled = isSafeProfile;
+            if (concurrencySaveBtn) concurrencySaveBtn.disabled = isSafeProfile;
+            if (isSafeProfile) {
                 concurrencyDraft = undefined;
                 applyConcurrencyValue(1);
             } else if (data.concurrencyLimit !== undefined && concurrencyDraft === undefined) {
@@ -683,8 +870,8 @@
             // Sync action button visibility per mode
             const pauseBtn = document.getElementById('btnPause');
             const syncNowBtn = document.getElementById('syncNowBtn');
-            if (pauseBtn) pauseBtn.style.display = 'inline-flex';
-            if (syncNowBtn) syncNowBtn.style.display = 'inline-flex';
+            if (pauseBtn) pauseBtn.classList.remove('hidden');
+            if (syncNowBtn) syncNowBtn.classList.remove('hidden');
 
             // Update status description and icon in hero card
             const heroTitle = document.getElementById('syncStateTitle');
@@ -695,14 +882,14 @@
             const warningCard = document.getElementById('bulkDeletionWarningCard');
             const warningDesc = document.getElementById('bulkDeletionWarningDesc');
             if (data.status === 'bulk_deletion_warning') {
-                warningCard.style.display = 'block';
+                warningCard.classList.remove('hidden');
                 if (data.bulkDeletionCount > 0) {
                     warningDesc.innerText = `The sync engine detected that ${data.bulkDeletionCount} local files were deleted. Synchronization has been paused to protect your remote files in the cloud from being deleted.`;
                 } else {
                     warningDesc.innerText = `The sync engine detected that your local sync folder was emptied. Synchronization has been paused to protect your remote files in the cloud from being deleted.`;
                 }
             } else {
-                warningCard.style.display = 'none';
+                warningCard.classList.add('hidden');
             }
 
             // Inject the Material Symbol icon
@@ -737,11 +924,11 @@
             const authActions = document.getElementById('authActions');
             if (syncActions && authActions) {
                 if (data.status === 'auth_required') {
-                    syncActions.style.display = 'none';
-                    authActions.style.display = 'flex';
+                    syncActions.classList.add('hidden');
+                    authActions.classList.remove('hidden');
                 } else {
-                    syncActions.style.display = 'flex';
-                    authActions.style.display = 'none';
+                    syncActions.classList.remove('hidden');
+                    authActions.classList.add('hidden');
                 }
             }
 
@@ -781,14 +968,14 @@
                     if (avatarLetter) avatarLetter.innerText = letter;
                     if (settingsAvatar) settingsAvatar.innerText = letter;
 
-                    if (userStatus) { userStatus.innerText = 'Connected'; userStatus.style.color = 'var(--success)'; }
-                    if (settingsUserStatus) { settingsUserStatus.innerText = 'Connected'; settingsUserStatus.style.color = 'var(--success)'; }
+                    if (userStatus) { userStatus.innerText = 'Connected'; userStatus.classList.remove('is-disconnected'); }
+                    if (settingsUserStatus) { settingsUserStatus.innerText = 'Connected'; settingsUserStatus.classList.remove('is-disconnected'); }
                 } else {
                     if (avatarLetter) avatarLetter.innerText = '?';
                     if (settingsAvatar) settingsAvatar.innerText = '?';
 
-                    if (userStatus) { userStatus.innerText = 'Disconnected'; userStatus.style.color = 'var(--danger)'; }
-                    if (settingsUserStatus) { settingsUserStatus.innerText = 'Disconnected'; settingsUserStatus.style.color = 'var(--danger)'; }
+                    if (userStatus) { userStatus.innerText = 'Disconnected'; userStatus.classList.add('is-disconnected'); }
+                    if (settingsUserStatus) { settingsUserStatus.innerText = 'Disconnected'; settingsUserStatus.classList.add('is-disconnected'); }
                 }
             }
 
@@ -816,6 +1003,14 @@
             }
         }
 
+        function formatDuration(seconds) {
+            if (!Number.isFinite(seconds) || seconds <= 0) return 'less than a minute';
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.floor(seconds / 60);
+            const remainder = seconds % 60;
+            return `${minutes}m ${remainder}s`;
+        }
+
         async function fetchStatus() {
             try {
                 const res = await fetch('/api/status');
@@ -831,7 +1026,7 @@
                 const res  = await fetch('/api/quota');
                 const data = await res.json();
                 document.getElementById('quotaPercent').innerText    = data.percent + '%';
-                document.getElementById('quotaBar').style.width       = data.percent + '%';
+                document.getElementById('quotaBar').value             = Math.max(0, Math.min(100, Number(data.percent) || 0));
                 document.getElementById('quotaText').innerText        = `${data.usedSpaceFormatted} of ${data.maxSpaceFormatted}`;
             } catch (err) {
                 console.error('Failed to fetch quota:', err);
@@ -1025,25 +1220,6 @@
                 }
             } catch (err) {
                 showToast('Network error switching mode: ' + err.message, 'danger');
-            }
-        };
-
-        window.toggleWifiSafeMode = async function(enabled) {
-            try {
-                const res = await fetch('/api/set-wifi-safe-mode', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled })
-                });
-                const data = await res.json();
-                if (data.ok) {
-                    showToast(`Wi-Fi Safe Mode ${enabled ? 'Enabled' : 'Disabled'}`, 'success');
-                    await fetchStatus();
-                } else {
-                    showToast('Error: ' + (data.error || 'Failed to update Wi-Fi Safe Mode'), 'danger');
-                }
-            } catch (err) {
-                showToast('Network error: ' + err.message, 'danger');
             }
         };
 

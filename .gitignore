@@ -1,6 +1,7 @@
 node_modules
 release
 dist
+native/fuse-sidecar/target/
 *.log
 .DS_Store
 Thumbs.db
@@ -9,5 +10,4 @@ desktop.ini
 *.swp
 *.swo
 *.tmp-*
-
 

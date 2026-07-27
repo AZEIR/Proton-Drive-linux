@@ -51,7 +51,13 @@ terminate_processes_with_exact_arg() {
     fi
 }
 
-DAEMON_BIN="${SCRIPT_DIR}/release/proton-sync"
+IMMUTABLE_DAEMON_BIN="${HOME}/.local/lib/drive-for-linux/current/proton-sync"
+if [ -x "$IMMUTABLE_DAEMON_BIN" ]; then
+    DAEMON_BIN="$IMMUTABLE_DAEMON_BIN"
+else
+    DAEMON_BIN="${SCRIPT_DIR}/release/proton-sync"
+fi
+DAEMON_JS="$(cd "$(dirname "$DAEMON_BIN")" && pwd)/proton-sync.js"
 TRAY_SCRIPT="${SCRIPT_DIR}/proton-drive-tray.py"
 
 show_help() {
@@ -151,11 +157,11 @@ start_daemon() {
     # Use setsid to create a new session so the daemon survives shell exit
     if [ "$SYNC_MODE" = "fuse" ]; then
         setsid env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_FUSE_MOUNT_POINT="$TARGET_DIR" \
-            "$NODE_BIN" "${SCRIPT_DIR}/release/proton-sync.js" \
+            "$NODE_BIN" "$DAEMON_JS" \
             > "$LOGFILE" 2>&1 &
     else
         setsid env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_FULL_SYNC_PATH="$TARGET_DIR" \
-            "$NODE_BIN" "${SCRIPT_DIR}/release/proton-sync.js" \
+            "$NODE_BIN" "$DAEMON_JS" \
             > "$LOGFILE" 2>&1 &
     fi
     DAEMON_PID=$!
@@ -185,6 +191,7 @@ start_daemon() {
 
 stop_daemon() {
     echo "Stopping Proton Drive daemon, systemd service, unmounting FUSE, and stopping tray..."
+    systemctl --user stop drive-core.service 2>/dev/null || true
     systemctl --user stop proton-sync.service 2>/dev/null || true
 
     DB_FILE="${CONFIG_DIR}/sync_state.db"
@@ -200,7 +207,10 @@ stop_daemon() {
         fi
         rm -f "$DAEMON_PID_FILE"
     fi
-    terminate_processes_with_exact_arg "${SCRIPT_DIR}/release/proton-sync.js"
+    terminate_processes_with_exact_arg "$DAEMON_JS"
+    if [ "$DAEMON_JS" != "${SCRIPT_DIR}/release/proton-sync.js" ]; then
+        terminate_processes_with_exact_arg "${SCRIPT_DIR}/release/proton-sync.js"
+    fi
     terminate_processes_with_exact_arg "${SCRIPT_DIR}/proton-drive-launcher.sh"
     terminate_processes_with_exact_arg "$TRAY_SCRIPT"
 
@@ -276,6 +286,9 @@ case "$cmd" in
             fi
         fi
         if [ -z "$DPID" ]; then
+            DPID="$(find_processes_with_exact_arg "$DAEMON_JS" | head -n 1)"
+        fi
+        if [ -z "$DPID" ] && [ "$DAEMON_JS" != "${SCRIPT_DIR}/release/proton-sync.js" ]; then
             DPID="$(find_processes_with_exact_arg "${SCRIPT_DIR}/release/proton-sync.js" | head -n 1)"
         fi
         if [ -n "$DPID" ]; then

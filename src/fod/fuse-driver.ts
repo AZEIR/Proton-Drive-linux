@@ -8,8 +8,10 @@ import {
     openSync,
     readSync,
     statSync,
+    statfsSync,
     truncateSync,
     unlinkSync,
+    utimesSync,
     writeSync,
 } from 'node:fs';
 import { copyFile, unlink as unlinkFile } from 'node:fs/promises';
@@ -22,6 +24,8 @@ import { SyncDatabase } from '../sync/db';
 import { FodHydrator } from './hydrator';
 import { getSha1 } from '../sdk/adapter';
 import { openFileReadableStream } from '../utils/fileStreams';
+import type { JournalOperation } from '../sync/journal';
+import { getNetworkGovernor } from '../utils/networkGovernor';
 
 interface OpenHandle {
     relPath: string;
@@ -50,6 +54,9 @@ export class FuseDriver extends EventEmitter {
     private nextFd: number = 100;
     private openHandles: Map<number, OpenHandle> = new Map();
     private isPaused = false;
+    private journalReplayPromise: Promise<void> | null = null;
+    private journalReplayTimer: ReturnType<typeof setTimeout> | null = null;
+    private readonly networkGovernor = getNetworkGovernor();
 
     constructor(
         private mountPoint: string,
@@ -68,7 +75,10 @@ export class FuseDriver extends EventEmitter {
 
     setPaused(paused: boolean): void {
         this.isPaused = paused;
-        if (!paused && this.isMounted) this.resumePendingUploads();
+        if (!paused && this.isMounted) {
+            this.resumePendingUploads();
+            this.scheduleJournalReplay(0);
+        }
     }
 
     /**
@@ -85,6 +95,7 @@ export class FuseDriver extends EventEmitter {
             const cachePath = this.hydrator.getCachePath(mapping.node_uid);
             if (!existsSync(cachePath)) continue;
             this.db.setPendingFodUpload(relPath, mapping.node_uid, cachePath);
+            this.queueDurableWriteback(relPath, mapping.node_uid, cachePath);
             recovered++;
         }
         if (recovered > 0) {
@@ -167,6 +178,37 @@ export class FuseDriver extends EventEmitter {
                 cb(0, directChildren.map((mapping) => path.basename(mapping.local_path)));
             },
 
+            access(filePath: string, mode: number, cb: (code: number) => void) {
+                if (filePath === '/') return cb(0);
+                const relPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+                cb(self.db.getMapping(relPath) || self.db.hasMappingsByPrefix(relPath)
+                    ? 0
+                    : Fuse.ENOENT);
+            },
+
+            utimens(filePath: string, atime: Date, mtime: Date, cb: (code: number) => void) {
+                const relPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+                const mapping = self.db.getMapping(relPath);
+                if (!mapping) return cb(Fuse.ENOENT);
+                try {
+                    const cachePath = self.hydrator.getCachePath(mapping.node_uid);
+                    if (existsSync(cachePath)) utimesSync(cachePath, atime, mtime);
+                    mapping.mtime = mtime.getTime();
+                    self.db.setMapping(mapping);
+                    if (mapping.is_dir === 0 && existsSync(cachePath)) {
+                        self.queueDurableWriteback(relPath, mapping.node_uid, cachePath);
+                        self.scheduleBackgroundUpload(relPath, mapping.node_uid, cachePath);
+                    }
+                    cb(0);
+                } catch {
+                    cb(Fuse.EIO);
+                }
+            },
+
+            chmod(filePath: string, mode: number, cb: (code: number) => void) {
+                cb(Fuse.ENOSYS);
+            },
+
             open(filePath: string, flags: number, cb: (code: number, fd?: number) => void) {
                 const relPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
                 const mapping = self.db.getMapping(relPath);
@@ -180,7 +222,10 @@ export class FuseDriver extends EventEmitter {
                         const cachePath =
                             mapping.node_uid.startsWith('local-new-')
                                 ? self.hydrator.getCachePath(mapping.node_uid)
-                                : await self.hydrator.hydrateNode(mapping.node_uid, relPath);
+                                : await withFuseDeadline(
+                                    self.hydrator.hydrateNode(mapping.node_uid, relPath),
+                                    relPath,
+                                );
                         const localFd = openSync(cachePath, flags);
                         const fd = self.nextFd++;
                         self.openHandles.set(fd, {
@@ -220,7 +265,7 @@ export class FuseDriver extends EventEmitter {
                     }
                 }
 
-                self.hydrator.hydrateNode(mapping.node_uid, relPath)
+                withFuseDeadline(self.hydrator.hydrateNode(mapping.node_uid, relPath), relPath)
                     .then((cachePath) => {
                         let cacheFd: number | null = null;
                         try {
@@ -293,7 +338,10 @@ export class FuseDriver extends EventEmitter {
                     const resolvedCachePath =
                         handle || existsSync(cachePath) || mapping!.node_uid.startsWith('local-new-')
                             ? cachePath
-                            : await self.hydrator.hydrateNode(mapping!.node_uid, relPath);
+                            : await withFuseDeadline(
+                                self.hydrator.hydrateNode(mapping!.node_uid, relPath),
+                                relPath,
+                            );
                     let cacheFd: number | null = null;
                     let ownsCacheFd = false;
                     try {
@@ -334,7 +382,10 @@ export class FuseDriver extends EventEmitter {
                 const truncateFile = async () => {
                     const cachePath = mapping.node_uid.startsWith('local-new-')
                         ? self.hydrator.getCachePath(mapping.node_uid)
-                        : await self.hydrator.hydrateNode(mapping.node_uid, relPath);
+                        : await withFuseDeadline(
+                            self.hydrator.hydrateNode(mapping.node_uid, relPath),
+                            relPath,
+                        );
                     truncateSync(cachePath, size);
                     mapping.size = size;
                     mapping.mtime = Date.now();
@@ -376,7 +427,7 @@ export class FuseDriver extends EventEmitter {
                 const handle = self.openHandles.get(fd);
                 if (!handle?.isDirty) return cb(0);
                 try {
-                    fsyncSync(handle.localFd);
+                    self.persistDirtyHandle(handle);
                     handle.isDirty = false;
                     self.scheduleBackgroundUpload(handle.relPath, handle.nodeUid, handle.cachePath);
                     cb(0);
@@ -394,6 +445,13 @@ export class FuseDriver extends EventEmitter {
                 const handle = self.openHandles.get(fd);
                 if (handle) {
                     if (handle.isDirty) {
+                        try {
+                            self.persistDirtyHandle(handle);
+                            handle.isDirty = false;
+                        } catch (err) {
+                            self.logger.error(`Failed to durably close cached file ${handle.relPath}:`, err);
+                            return cb(Fuse.EIO);
+                        }
                         self.scheduleBackgroundUpload(handle.relPath, handle.nodeUid, handle.cachePath);
                     }
                     self.openHandles.delete(fd);
@@ -415,22 +473,26 @@ export class FuseDriver extends EventEmitter {
                     return cb(Fuse.ENOENT);
                 }
 
-                self.deleteRemoteMapping(relPath, mapping)
-                    .then(() => cb(0))
-                    .catch((err) => {
-                        self.logger.error(`Failed to unlink ${relPath}:`, err);
-                        cb(Fuse.EIO);
-                    });
+                if (self.db.hasPendingFodUpload(relPath)) return cb(Fuse.EBUSY);
+                try {
+                    self.deleteLocalFirst(relPath, mapping);
+                    cb(0);
+                } catch (err) {
+                    self.logger.error(`Failed to queue unlink ${relPath}:`, err);
+                    cb(Fuse.EIO);
+                }
             },
 
             mkdir(filePath: string, mode: number, cb: (code: number) => void) {
                 const relPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
-                self.createRemoteFolder(relPath)
-                    .then(() => cb(0))
-                    .catch((err) => {
-                        self.logger.error(`Remote folder creation failed for ${relPath}:`, err);
-                        cb(Fuse.EIO);
-                    });
+                if (self.db.getMapping(relPath)) return cb(Fuse.EEXIST);
+                try {
+                    self.createFolderLocalFirst(relPath);
+                    cb(0);
+                } catch (err) {
+                    self.logger.error(`Failed to queue folder creation for ${relPath}:`, err);
+                    cb(Fuse.EIO);
+                }
             },
 
             rmdir(filePath: string, cb: (code: number) => void) {
@@ -446,12 +508,13 @@ export class FuseDriver extends EventEmitter {
                     return cb(Fuse.ENOTEMPTY);
                 }
 
-                self.deleteRemoteMapping(relPath, mapping)
-                    .then(() => cb(0))
-                    .catch((err) => {
-                        self.logger.error(`Failed to remove directory ${relPath}:`, err);
-                        cb(Fuse.EIO);
-                    });
+                try {
+                    self.deleteLocalFirst(relPath, mapping);
+                    cb(0);
+                } catch (err) {
+                    self.logger.error(`Failed to queue directory removal ${relPath}:`, err);
+                    cb(Fuse.EIO);
+                }
             },
 
             rename(srcPath: string, destPath: string, cb: (code: number) => void) {
@@ -464,28 +527,34 @@ export class FuseDriver extends EventEmitter {
                 }
 
                 if (self.db.getMapping(destRel)) return cb(Fuse.EEXIST);
-                self.renameRemoteMapping(srcRel, destRel, mapping)
-                    .then(() => cb(0))
-                    .catch((err) => {
-                        self.logger.error(`Remote rename failed for ${srcRel} -> ${destRel}:`, err);
-                        cb(Fuse.EIO);
-                    });
+                try {
+                    self.renameLocalFirst(srcRel, destRel, mapping);
+                    cb(0);
+                } catch (err) {
+                    self.logger.error(`Failed to queue rename ${srcRel} -> ${destRel}:`, err);
+                    cb(Fuse.EIO);
+                }
             },
 
             statfs(filePath: string, cb: (code: number, fsStat?: any) => void) {
-                cb(0, {
-                    bsize: 4096,
-                    frsize: 4096,
-                    blocks: 10000000,
-                    bfree: 8000000,
-                    bavail: 8000000,
-                    files: 1000000,
-                    ffree: 800000,
-                    favail: 800000,
-                    fsid: 42,
-                    flag: 0,
-                    namemax: 255,
-                });
+                try {
+                    const local = statfsSync(self.hydrator.getCacheDir());
+                    cb(0, {
+                        bsize: Number(local.bsize),
+                        frsize: Number(local.bsize),
+                        blocks: Number(local.blocks),
+                        bfree: Number(local.bfree),
+                        bavail: Number(local.bavail),
+                        files: Number(local.files),
+                        ffree: Number(local.ffree),
+                        favail: Number(local.ffree),
+                        fsid: 0,
+                        flag: 0,
+                        namemax: 255,
+                    });
+                } catch {
+                    cb(Fuse.EIO);
+                }
             },
         };
 
@@ -500,12 +569,34 @@ export class FuseDriver extends EventEmitter {
                     this.isMounted = true;
                     this.logger.info(`Proton Drive FUSE filesystem mounted cleanly on ${this.mountPoint}`);
                     this.resumePendingUploads();
+                    this.scheduleJournalReplay(0);
                     resolve();
                 });
             } catch (err) {
                 this.logger.error('Error instantiating fuse-native:', err);
                 reject(err);
             }
+        });
+    }
+
+    private persistDirtyHandle(handle: OpenHandle): void {
+        fsyncSync(handle.localFd);
+        fsyncParentDirectory(handle.cachePath);
+        this.queueDurableWriteback(handle.relPath, handle.nodeUid, handle.cachePath);
+    }
+
+    private queueDurableWriteback(relPath: string, nodeUid: string, cachePath: string): string {
+        const mapping = this.db.getMapping(relPath);
+        this.db.setPendingFodUpload(relPath, nodeUid, cachePath);
+        return this.db.journal.enqueueOperation({
+            syncMode: 'fuse',
+            stableInodeId: this.db.getStableInodeId(relPath) ?? nodeUid,
+            kind: nodeUid.startsWith('local-new-') ? 'create_file' : 'update_file',
+            localPath: relPath,
+            nodeUid,
+            baseRevisionUid: mapping?.remote_revision_uid ?? '',
+            cachePath,
+            dedupeKey: `write:${relPath}`,
         });
     }
 
@@ -536,6 +627,80 @@ export class FuseDriver extends EventEmitter {
             remote_revision_uid: '',
             remote_mtime: Date.now(),
         });
+    }
+
+    private createFolderLocalFirst(relPath: string): void {
+        const temporaryUid = `local-dir-${randomUUID()}`;
+        const now = Date.now();
+        this.db.setMapping({
+            local_path: relPath,
+            node_uid: temporaryUid,
+            is_dir: 1,
+            size: 0,
+            mtime: now,
+            sha1: '',
+            remote_revision_uid: '',
+            remote_mtime: now,
+        });
+        this.db.journal.enqueueOperation({
+            syncMode: 'fuse',
+            stableInodeId: temporaryUid,
+            kind: 'mkdir',
+            localPath: relPath,
+            nodeUid: temporaryUid,
+            dedupeKey: `mkdir:${temporaryUid}`,
+        });
+        this.db.log(relPath, 'upload', 'syncing', 'Folder creation queued for cloud replay');
+        this.scheduleJournalReplay(0);
+    }
+
+    private deleteLocalFirst(relPath: string, mapping: any): void {
+        this.db.journal.enqueueOperation({
+            syncMode: 'fuse',
+            stableInodeId: mapping.node_uid,
+            kind: 'delete',
+            localPath: relPath,
+            nodeUid: mapping.node_uid,
+            cachePath: this.hydrator.getCachePath(mapping.node_uid),
+            payload: { isDir: mapping.is_dir === 1 },
+            dedupeKey: `delete:${mapping.node_uid}`,
+        });
+        this.db.deletePendingFodUpload(relPath);
+        this.db.deleteMapping(relPath);
+        if (mapping.is_dir === 1) this.db.deleteMappingsByPrefix(relPath);
+        this.db.log(relPath, 'delete_remote', 'syncing', 'Deletion queued for cloud replay');
+        this.scheduleJournalReplay(0);
+    }
+
+    private renameLocalFirst(srcRel: string, destRel: string, mapping: any): void {
+        const stableInodeId = this.db.getStableInodeId(srcRel) ?? mapping.node_uid;
+        this.db.deleteMapping(srcRel);
+        this.db.setMapping({ ...mapping, local_path: destRel, mtime: Date.now() });
+        this.db.setStableInodeId(destRel, stableInodeId);
+        if (mapping.is_dir === 1) this.db.renameMappingsByPrefix(srcRel, destRel);
+        if (this.db.hasPendingFodUpload(srcRel)) {
+            this.db.renamePendingFodUpload(srcRel, destRel);
+            this.db.journal.markDedupeKeyCompleted(`write:${srcRel}`);
+            this.queueDurableWriteback(
+                destRel,
+                mapping.node_uid,
+                this.hydrator.getCachePath(mapping.node_uid),
+            );
+        }
+        this.db.journal.enqueueOperation({
+            syncMode: 'fuse',
+            stableInodeId,
+            kind: 'rename',
+            localPath: destRel,
+            nodeUid: mapping.node_uid,
+            payload: { sourcePath: srcRel, destinationPath: destRel },
+            dedupeKey: `rename:${mapping.node_uid}`,
+        });
+        for (const handle of this.openHandles.values()) {
+            if (handle.relPath === srcRel) handle.relPath = destRel;
+        }
+        this.db.log(destRel, 'rename_remote', 'syncing', `Rename from ${srcRel} queued for cloud replay`);
+        this.scheduleJournalReplay(0);
     }
 
     private async consumeNodeResults(results: AsyncIterable<any>): Promise<void> {
@@ -591,6 +756,7 @@ export class FuseDriver extends EventEmitter {
         delayMs = this.options.uploadDebounceMs ?? 750,
     ): void {
         this.db.setPendingFodUpload(relPath, nodeUid, cachePath);
+        this.queueDurableWriteback(relPath, nodeUid, cachePath);
         this.uploadGenerations.set(relPath, (this.uploadGenerations.get(relPath) ?? 0) + 1);
 
         const existingTimer = this.uploadTimers.get(relPath);
@@ -628,6 +794,105 @@ export class FuseDriver extends EventEmitter {
         this.scheduleBackgroundUpload(relPath, nodeUid, cachePath, retryDelay);
     }
 
+    private scheduleJournalReplay(delayMs: number): void {
+        if (this.isPaused || !this.isMounted) return;
+        if (this.journalReplayTimer) clearTimeout(this.journalReplayTimer);
+        this.journalReplayTimer = setTimeout(() => {
+            this.journalReplayTimer = null;
+            void this.replayMetadataJournal();
+        }, Math.max(0, delayMs));
+        this.journalReplayTimer.unref();
+    }
+
+    private replayMetadataJournal(): Promise<void> {
+        if (this.journalReplayPromise) return this.journalReplayPromise;
+        this.journalReplayPromise = (async () => {
+            for (const operation of this.db.journal.getReadyOperations(100)) {
+                if (
+                    operation.sync_mode !== 'fuse' ||
+                    operation.kind === 'create_file' ||
+                    operation.kind === 'update_file'
+                ) {
+                    continue;
+                }
+                this.db.journal.markOperationRunning(operation.op_id);
+                try {
+                    await this.applyMetadataOperation(operation);
+                    this.db.journal.markOperationCompleted(operation.op_id);
+                } catch (error: any) {
+                    const attempts = operation.attempt_count + 1;
+                    const ceiling = Math.min(60_000, 1_000 * (2 ** Math.min(attempts, 6)));
+                    const delay = Math.max(250, Math.floor(Math.random() * ceiling));
+                    this.db.journal.markOperationRetry(
+                        operation.op_id,
+                        error?.message ?? String(error),
+                        delay,
+                    );
+                    this.logger.warn(
+                        `Offline operation ${operation.kind} for ${operation.local_path} remains queued:`,
+                        error,
+                    );
+                    this.scheduleJournalReplay(delay);
+                    break;
+                }
+            }
+        })().finally(() => {
+            this.journalReplayPromise = null;
+        });
+        return this.journalReplayPromise;
+    }
+
+    private async applyMetadataOperation(operation: JournalOperation): Promise<void> {
+        if (operation.kind === 'mkdir') {
+            const current = this.db.getMappingByNodeUid(operation.stable_inode_id);
+            if (!current) return;
+            const parentUid = await this.getRemoteParentUid(current.local_path);
+            let nodeUid = '';
+            try {
+                nodeUid = (await this.sdk.createFolder(
+                    parentUid,
+                    path.basename(current.local_path),
+                )).uid;
+            } catch (error: any) {
+                if (!error?.existingNodeUid) throw error;
+                nodeUid = error.existingNodeUid;
+            }
+            this.db.deleteMapping(current.local_path);
+            this.db.setMapping({ ...current, node_uid: nodeUid, remote_mtime: Date.now() });
+            this.db.log(current.local_path, 'upload', 'completed', 'Queued folder created in cloud');
+            return;
+        }
+        if (operation.kind === 'delete') {
+            if (!operation.node_uid.startsWith('local-')) {
+                await this.consumeNodeResults(this.sdk.trashNodes([operation.node_uid]));
+            }
+            if (operation.cache_path && existsSync(operation.cache_path)) {
+                unlinkSync(operation.cache_path);
+            }
+            this.db.log(operation.local_path, 'delete_remote', 'completed', 'Queued cloud deletion completed');
+            return;
+        }
+        if (operation.kind === 'rename') {
+            const payload = JSON.parse(operation.payload_json) as {
+                sourcePath: string;
+                destinationPath: string;
+            };
+            const current = this.db.getMapping(operation.local_path);
+            if (!current) return;
+            if (current.node_uid.startsWith('local-')) {
+                throw new Error('Waiting for local node creation before rename');
+            }
+            if (path.basename(payload.sourcePath) !== path.basename(payload.destinationPath)) {
+                await this.sdk.renameNode(current.node_uid, path.basename(payload.destinationPath));
+            }
+            if (path.dirname(payload.sourcePath) !== path.dirname(payload.destinationPath)) {
+                const parentUid = await this.getRemoteParentUid(payload.destinationPath);
+                await this.consumeNodeResults(this.sdk.moveNodes([current.node_uid], parentUid));
+            }
+            this.db.log(operation.local_path, 'rename_remote', 'completed', 'Queued cloud rename completed');
+        }
+    }
+
     private queueBackgroundUpload(relPath: string, nodeUid: string, cachePath: string): Promise<void> {
         const existing = this.uploadPromises.get(relPath);
         if (existing) {
@@ -654,10 +919,15 @@ export class FuseDriver extends EventEmitter {
         this.db.log(relPath, 'upload', 'syncing', `Starting upload for ${relPath}`);
         const uploadGeneration = this.uploadGenerations.get(relPath) ?? 0;
 
-        const promise = this.performUpload(relPath, nodeUid, cachePath, uploadInfo)
+        const promise = this.networkGovernor.schedule(
+            'writeback',
+            Math.min(uploadInfo.size, 8 * 1024 * 1024),
+            () => this.performUpload(relPath, nodeUid, cachePath, uploadInfo),
+        )
             .then(() => {
                 if ((this.uploadGenerations.get(relPath) ?? 0) === uploadGeneration) {
                     this.db.deletePendingFodUpload(relPath);
+                    this.db.journal.markDedupeKeyCompleted(`write:${relPath}`);
                     this.uploadGenerations.delete(relPath);
                 }
                 this.emit('upload_complete', uploadInfo);
@@ -665,6 +935,12 @@ export class FuseDriver extends EventEmitter {
             .catch((err: any) => {
                 const message = err?.message || String(err);
                 this.db.markPendingFodUploadFailed(relPath, message);
+                const pending = this.db.getPendingFodUploads().find(
+                    (item) => item.local_path === relPath,
+                );
+                const attempts = Math.max(1, pending?.attempts ?? 1);
+                const delay = Math.min(30_000, 1_000 * (2 ** Math.min(attempts, 5)));
+                this.db.journal.markDedupeKeyRetry(`write:${relPath}`, message, delay);
                 this.db.log(relPath, 'upload', 'failed', `Upload failed for ${relPath}: ${message}`);
                 this.emit('upload_error', { ...uploadInfo, error: message });
                 throw err;
@@ -737,8 +1013,16 @@ export class FuseDriver extends EventEmitter {
                     } else {
                         uploader = await this.sdk.getFileRevisionUploader(effectiveNodeUid, metadata);
                     }
+                    const throttledUpload = openFileReadableStream(snapshotPath).pipeThrough(
+                        new TransformStream<Uint8Array, Uint8Array>({
+                            transform: async (chunk, controller) => {
+                                await this.networkGovernor.throttle('upload', chunk.byteLength);
+                                controller.enqueue(chunk);
+                            },
+                        }),
+                    );
                     const controller = await uploader.uploadFromStream(
-                        openFileReadableStream(snapshotPath) as any,
+                        throttledUpload as any,
                         [],
                         progress,
                     );
@@ -800,6 +1084,10 @@ export class FuseDriver extends EventEmitter {
                 remote_revision_uid: uploadResult.nodeRevisionUid || '',
                 remote_mtime: mtime,
             });
+            this.hydrator.setCachedRevision(
+                finalNodeUid,
+                uploadResult.nodeRevisionUid || '',
+            );
             this.db.setPendingFodUpload(relPath, finalNodeUid, finalCachePath);
             uploadInfo.nodeUid = finalNodeUid;
             uploadInfo.percent = 100;
@@ -830,10 +1118,15 @@ export class FuseDriver extends EventEmitter {
     }
 
     async unmount(): Promise<void> {
+        if (this.journalReplayTimer) {
+            clearTimeout(this.journalReplayTimer);
+            this.journalReplayTimer = null;
+        }
         for (const timer of this.uploadTimers.values()) clearTimeout(timer);
         this.uploadTimers.clear();
         for (const handle of this.openHandles.values()) {
             try {
+                if (handle.isDirty) this.persistDirtyHandle(handle);
                 closeSync(handle.localFd);
             } catch {}
         }
@@ -859,4 +1152,36 @@ export class FuseDriver extends EventEmitter {
         this.isMounted = false;
         this.fuse = null;
     }
+}
+
+function fsyncParentDirectory(filePath: string): void {
+    let directoryFd: number | null = null;
+    try {
+        directoryFd = openSync(path.dirname(filePath), constants.O_RDONLY);
+        fsyncSync(directoryFd);
+    } finally {
+        if (directoryFd !== null) closeSync(directoryFd);
+    }
+}
+
+function withFuseDeadline<T>(promise: Promise<T>, relativePath: string, timeoutMs = 12_000): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(Object.assign(
+                new Error(`FUSE operation deadline exceeded for ${relativePath}`),
+                { code: 'ETIMEDOUT' },
+            ));
+        }, timeoutMs);
+        timeout.unref();
+        promise.then(
+            (value) => {
+                clearTimeout(timeout);
+                resolve(value);
+            },
+            (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            },
+        );
+    });
 }

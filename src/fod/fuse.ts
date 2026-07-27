@@ -167,10 +167,12 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
             let activeWorkers = 0;
             let lastProgressAt = Date.now();
             const seenPaths = new Set<string>();
+            let scanIncomplete = false;
 
             const processNode = (currentRelPath: string, node: any) => {
                 if (signal.aborted) return;
                 if ('missingUid' in node || node.trashTime) return;
+                if (this.db.journal.hasPendingDeleteForNode(node.uid)) return;
 
                 const name = node.name.ok ? node.name.value : 'degraded_name';
                 const relPath = currentRelPath ? `${currentRelPath}/${name}` : name;
@@ -262,12 +264,18 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
                                         }
                                     } catch (nodeError) {
                                         if (signal.aborted) throw nodeError;
+                                        scanIncomplete = true;
+                                        this.logger.error(
+                                            `Error scanning node ${singleUid} under ${current.relPath}:`,
+                                            nodeError,
+                                        );
                                     }
                                 }
                             }
                         }
                     } catch (folderErr) {
                         if (signal.aborted) break;
+                        scanIncomplete = true;
                         this.logger.error(`Error scanning folder ${current.relPath}:`, folderErr);
                     } finally {
                         activeWorkers--;
@@ -277,6 +285,11 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
 
             await Promise.all(workers);
             if (signal.aborted) throw new DOMException('FUSE metadata scan cancelled', 'AbortError');
+            if (scanIncomplete) {
+                throw new Error(
+                    'FUSE metadata scan was incomplete; cached mappings were preserved and no sweep was performed',
+                );
+            }
             for (const mapping of this.db.getAllMappings()) {
                 if (!seenPaths.has(mapping.local_path) && !this.db.hasPendingFodUpload(mapping.local_path)) {
                     this.db.deleteMapping(mapping.local_path);

@@ -1,0 +1,30 @@
+[Unit]
+Description=Drive for Linux FUSE 3 sidecar
+After=drive-core.service
+PartOf=drive-core.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/lib/drive-for-linux/current/drive-fuse-sidecar --mountpoint %h/P-Drive-FUSE --control-socket %t/drive-for-linux/fuse.sock
+ExecStop=-/usr/bin/fusermount3 -u -z %h/P-Drive-FUSE
+Restart=on-failure
+RestartSec=2
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+SystemCallArchitectures=native
+LimitNOFILE=65536
+MemoryHigh=512M
+OOMPolicy=stop
+
+[Install]
+WantedBy=default.target

@@ -6,6 +6,8 @@ import { SyncEngine } from './engine';
 import { ProtonFuseEngine } from '../fod/fuse';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { startControlSocket } from './controlSocket';
 
 const APP_VERSION = 'external-drive-azeir_proton_drive_linux@1.3.0-stable';
 const SDK_VERSION = 'js@0.19.2';
@@ -88,6 +90,32 @@ export async function runSync(port: number = 8085) {
 
     // Start Dashboard HTTP Server immediately
     const server = startDashboard(db, engine, session, port, fuseEngine || undefined);
+    const controlSocket = startControlSocket({
+        status: () => ({
+            status: fuseEngine?.getStatus() ?? engine?.getStatus() ?? 'offline',
+            mode: db.getSyncMode(),
+            isPaused: fuseEngine?.getIsPaused() ?? engine?.getStatus() === 'paused',
+            pendingOperations: db.journal.getPendingOperationCount(),
+            pendingEvents: db.journal.getPendingRemoteEventCount(),
+        }),
+        pause: async () => {
+            if (fuseEngine) await fuseEngine.pause();
+            else await engine?.pause();
+        },
+        resume: async () => {
+            if (fuseEngine) await fuseEngine.resume();
+            else await engine?.resume();
+        },
+        sync: async () => {
+            if (fuseEngine) await fuseEngine.scanRemoteTree();
+            else await engine?.forceSync();
+        },
+        openFolder: async () => {
+            const target = fuseEngine?.mountPoint ?? engine?.getLocalSyncRoot();
+            if (!target) throw new Error('No configured filesystem root');
+            execFile('xdg-open', [target]);
+        },
+    });
 
     if (session && session.auth.isLoggedIn()) {
         if (fuseEngine && engine) {
@@ -159,6 +187,7 @@ export async function runSync(port: number = 8085) {
             if (reconnectInterval) clearInterval(reconnectInterval);
             clearInterval(keepAliveInterval);
             server.stop();
+            await controlSocket.stop().catch(() => {});
 
             // Unmount and cancel the FUSE metadata scan before disposing the
             // event loop or SDK session. This keeps shutdown bounded even when

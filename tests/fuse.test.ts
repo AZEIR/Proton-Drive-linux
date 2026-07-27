@@ -109,7 +109,7 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
             local_path: "file.txt",
             node_uid: "node-dedup-1",
             is_dir: 0,
-            size: 100,
+            size: 18,
             mtime: Date.now(),
             sha1: "",
             remote_revision_uid: "",
@@ -122,6 +122,25 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
         const [path1, path2] = await Promise.all([p1, p2]);
         expect(path1).toBe(path2);
         expect(existsSync(path1)).toBe(true);
+    });
+
+    it("FodHydrator should reject truncated cache publications", async () => {
+        const hydrator = new FodHydrator(db, mockSdk, mockLogger);
+        db.setMapping({
+            local_path: "truncated.bin",
+            node_uid: "node-truncated",
+            is_dir: 0,
+            size: 1_000,
+            mtime: Date.now(),
+            sha1: "",
+            remote_revision_uid: "rev-truncated",
+            remote_mtime: Date.now(),
+        });
+
+        await expect(
+            hydrator.hydrateNode("node-truncated", "truncated.bin"),
+        ).rejects.toThrow("Hydration size mismatch");
+        expect(hydrator.isHydrated("node-truncated")).toBe(false);
     });
 
     it("FodHydrator should honor the application concurrency limit", async () => {
@@ -177,6 +196,40 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
         expect(engine.getCacheStats()).toBeObject();
         expect(engine.getUploads()).toBeArray();
         expect(engine.getActiveTransfers()).toBeArray();
+    });
+
+    it("preserves cached mappings when a remote metadata scan is incomplete", async () => {
+        db.setSyncMode("fuse");
+        db.setMapping({
+            local_path: "preserve-me.txt",
+            node_uid: "existing-node",
+            is_dir: 0,
+            size: 42,
+            mtime: Date.now(),
+            sha1: "",
+            remote_revision_uid: "rev-existing",
+            remote_mtime: Date.now(),
+        });
+        mockSdk.iterateFolderChildrenNodeUids = async function* () {
+            throw new TypeError("network disconnected");
+        };
+        const engine = new ProtonFuseEngine(
+            db,
+            mockSdk,
+            mockAuth,
+            mockLogger,
+            `${testDir}/mount`,
+        );
+
+        await engine.scanRemoteTree();
+
+        expect(db.getMapping("preserve-me.txt")).toBeDefined();
+        expect(engine.getStatus()).toBe("error");
+        expect(
+            db.getRecentLogs(20).some((entry) =>
+                entry.message.includes("cached mappings were preserved"),
+            ),
+        ).toBe(true);
     });
 
     it("ProtonFuseEngine should persist and publish pause/resume transitions", async () => {

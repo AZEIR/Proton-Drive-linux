@@ -1,12 +1,17 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
 import { openBrowserUrl } from '../sdk/adapter';
-import { getHtmlContent } from './dashboard/template';
+import {
+    getDashboardCss,
+    getDashboardJs,
+    getHtmlContent,
+} from './dashboard/template';
+import { serveFetch } from '../utils/fetchServer';
 import {
     inferNetworkProfile,
     MAX_PARALLEL_FILE_TRANSFERS,
@@ -64,16 +69,10 @@ export function startDashboard(
     let logger = session?.logger ?? console;
     let isAuthenticating = false;
     let cachedEmail = 'Not Logged In';
-    let dashboardToken =
-        typeof (db as any).getConfig === 'function'
-            ? db.getConfig('dashboard_token', '')
-            : '';
-    if (!dashboardToken) {
-        dashboardToken = randomBytes(32).toString('hex');
-        if (typeof (db as any).setConfig === 'function') {
-            db.setConfig('dashboard_token', dashboardToken);
-        }
-    }
+    // Browser authority is deliberately in-memory and expires on daemon
+    // restart; it is not a long-lived bearer secret stored beside sync state.
+    const dashboardToken = randomBytes(32).toString('hex');
+    const csrfToken = randomBytes(32).toString('hex');
     const readConfig = (key: string, fallback: string): string =>
         typeof (db as any).getConfig === 'function' ? db.getConfig(key, fallback) : fallback;
     const writeConfig = (key: string, value: string): void => {
@@ -100,11 +99,14 @@ export function startDashboard(
         `localhost:${port}`,
     ]);
 
-    const server = Bun.serve({
+    const server = serveFetch({
         port,
         hostname: "127.0.0.1",
         async fetch(req) {
             const url = new URL(req.url);
+            if (url.pathname.startsWith('/api/v1/') && url.pathname !== '/api/v1/session') {
+                url.pathname = `/api/${url.pathname.slice('/api/v1/'.length)}`;
+            }
             const host = req.headers.get('host') ?? '';
             if (!validHosts.has(host)) {
                 return Response.json({ ok: false, error: 'Invalid Host header' }, { status: 421 });
@@ -113,13 +115,46 @@ export function startDashboard(
             if (origin && !allowedOrigins.has(origin)) {
                 return Response.json({ ok: false, error: 'Cross-origin request rejected' }, { status: 403 });
             }
-            if (url.pathname.startsWith('/api/') && origin) {
-                const cookie = req.headers.get('cookie') ?? '';
-                if (!cookie.split(';').some((part) => part.trim() === `proton_dashboard=${dashboardToken}`)) {
-                    return Response.json({ ok: false, error: 'Dashboard authorization required' }, { status: 403 });
+            const cookie = req.headers.get('cookie') ?? '';
+            const hasDashboardSession = cookie
+                .split(';')
+                .some((part) => part.trim() === `proton_dashboard=${dashboardToken}`);
+            if (url.pathname.startsWith('/api/') && !hasDashboardSession) {
+                return Response.json({ ok: false, error: 'Dashboard authorization required' }, { status: 403 });
+            }
+            if (
+                url.pathname.startsWith('/api/') &&
+                !['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+            ) {
+                if (!origin || !allowedOrigins.has(origin) || !hasDashboardSession) {
+                    return Response.json({ ok: false, error: 'Authenticated browser origin required' }, { status: 403 });
+                }
+                if (!safeTokenEqual(req.headers.get('x-csrf-token'), csrfToken)) {
+                    return Response.json({ ok: false, error: 'Invalid CSRF token' }, { status: 403 });
                 }
             }
-
+            if (url.pathname === '/api/v1/session') {
+                if (!hasDashboardSession) {
+                    return Response.json({ ok: false, error: 'Dashboard authorization required' }, { status: 403 });
+                }
+                return Response.json({ csrfToken });
+            }
+            if (url.pathname === '/assets/dashboard.css') {
+                return new Response(getDashboardCss(), {
+                    headers: {
+                        'Content-Type': 'text/css; charset=utf-8',
+                        'Cache-Control': 'no-store',
+                    },
+                });
+            }
+            if (url.pathname === '/assets/dashboard.js') {
+                return new Response(getDashboardJs(), {
+                    headers: {
+                        'Content-Type': 'text/javascript; charset=utf-8',
+                        'Cache-Control': 'no-store',
+                    },
+                });
+            }
             // API ENDPOINTS
             if (url.pathname === '/api/status') {
                 let email = 'Not Logged In';
@@ -142,12 +177,16 @@ export function startDashboard(
                     const transfers = fod.getActiveTransfers ? fod.getActiveTransfers() : fod.getUploads().map((u: any) => ({ ...u, type: 'upload' }));
                     return Response.json({
                         status:          session?.auth?.isLoggedIn() ? (fod.getStatus?.() ?? 'error') : 'auth_required',
-                        mode:            'fod',
+                        mode:            'fuse',
                         mountPoint:      fod.mountPoint,
                         activeTransfers: transfers,
                         isPaused:        fod.getIsPaused?.() ?? false,
                         bulkDeletionCount: 0,
                         ...getPerformanceSettings(),
+                        network: engine?.getNetworkSnapshot?.(),
+                        pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                        pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                        statusDetail: engine?.getDetailedStatus?.(),
                         email,
                         isAuthenticating,
                     });
@@ -161,6 +200,10 @@ export function startDashboard(
                     isPaused:          engine?.getStatus() === 'paused',
                     bulkDeletionCount: engine?.getBulkDeletionCount() ?? 0,
                     ...getPerformanceSettings(),
+                    network: engine?.getNetworkSnapshot?.(),
+                    pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                    pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                    statusDetail: engine?.getDetailedStatus?.(),
                     email,
                     isAuthenticating,
                 });
@@ -271,8 +314,9 @@ export function startDashboard(
                 }
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/fod/hydrate') {
-                const nodeUid = url.searchParams.get('nodeUid');
+            if (req.method === 'POST' && url.pathname === '/api/fod/hydrate') {
+                const body = await req.json() as { nodeUid?: string };
+                const nodeUid = body.nodeUid;
                 if (!nodeUid) return Response.json({ ok: false, error: 'Missing nodeUid' }, { status: 400 });
                 try {
                     const mapping = db.getMappingByNodeUid(nodeUid);
@@ -377,14 +421,42 @@ export function startDashboard(
             if (url.pathname === '/api/logs') {
                 const requestedLimit = parseInt(url.searchParams.get('limit') || '500', 10) || 500;
                 const limit = Math.min(1000, Math.max(1, requestedLimit));
-                const logs = db.getRecentLogs(limit);
+                const afterId = parseInt(url.searchParams.get('after_id') || '0', 10) || 0;
+                const logs =
+                    afterId > 0 && typeof (db as any).getLogsAfter === 'function'
+                        ? db.getLogsAfter(afterId, limit)
+                        : db.getRecentLogs(limit);
                 return Response.json(logs);
+            }
+
+            if (url.pathname === '/api/network-policy') {
+                return Response.json(
+                    engine?.getNetworkSnapshot?.() ?? {
+                        state: 'offline',
+                        policy: null,
+                        activeTransfers: 0,
+                        queuedTransfers: 0,
+                    },
+                );
+            }
+
+            if (url.pathname === '/api/journal') {
+                const requestedLimit = parseInt(url.searchParams.get('limit') || '100', 10) || 100;
+                const limit = Math.min(1000, Math.max(1, requestedLimit));
+                return Response.json({
+                    pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                    pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                    operations: db.journal?.getPendingOperations?.(limit) ?? [],
+                });
             }
 
             // ── Integrated File Browser Endpoint ────────────────────────────
             if (url.pathname === '/api/browser/list') {
                 const requestedPath = (url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
-                const allMappings = db.getAllMappings();
+                const allMappings =
+                    typeof (db as any).getDirectChildren === 'function'
+                        ? db.getDirectChildren(requestedPath)
+                        : db.getAllMappings();
 
                 // Build Breadcrumbs
                 const breadcrumbs: { name: string; path: string }[] = [{ name: 'My Files', path: '' }];
@@ -506,11 +578,15 @@ export function startDashboard(
                     // validation, then let xdg-open access the mount from a
                     // separate process.
                     const relPath = body.relPath.replace(/^\/+|\/+$/g, '');
-                    const mapped = relPath === '' || db.getAllMappings().some(
-                        (mapping) =>
-                            mapping.local_path === relPath ||
-                            mapping.local_path.startsWith(`${relPath}/`),
-                    );
+                    const mapped =
+                        relPath === '' ||
+                        Boolean((db as any).getMapping?.(relPath)) ||
+                        Boolean((db as any).hasMappingsByPrefix?.(relPath)) ||
+                        Boolean((db as any).getAllMappings?.().some(
+                            (mapping: any) =>
+                                mapping.local_path === relPath ||
+                                mapping.local_path.startsWith(`${relPath}/`),
+                        ));
                     if (!mapped) {
                         return Response.json({ ok: false, error: 'File/directory not found in Proton Drive.' }, { status: 404 });
                     }
@@ -641,7 +717,7 @@ export function startDashboard(
                 if (url.pathname === '/api/daemon/stop') {
                     db.log('system', 'system', 'syncing', 'Daemon stop requested from dashboard');
                     setTimeout(() => {
-                        execFile('systemctl', ['--user', 'stop', 'proton-sync.service'], () => {
+                        execFile('systemctl', ['--user', 'stop', 'drive-core.service'], () => {
                             process.kill(process.pid, 'SIGTERM');
                         });
                         process.kill(process.pid, 'SIGTERM');
@@ -652,7 +728,7 @@ export function startDashboard(
                 if (url.pathname === '/api/daemon/restart') {
                     db.log('system', 'system', 'syncing', 'Daemon restart requested from dashboard');
                     setTimeout(() => {
-                        execFile('systemctl', ['--user', 'restart', 'proton-sync.service'], (err) => {
+                        execFile('systemctl', ['--user', 'restart', 'drive-core.service'], (err) => {
                             if (err) process.exit(1); // non-zero so systemd restarts us
                         });
                     }, 300);
@@ -684,7 +760,7 @@ export function startDashboard(
                                     const status = fod.getStatus?.() ?? (isTransferring ? 'syncing' : 'synced');
                                     payload = JSON.stringify({
                                         status:          session?.auth?.isLoggedIn() ? status : 'auth_required',
-                                        mode:            'fod',
+                                        mode:            'fuse',
                                         mountPoint:      fod.mountPoint,
                                         activeTransfers: transfers,
                                         isPaused:        fod.getIsPaused?.() ?? status === 'paused',
@@ -769,7 +845,7 @@ export function startDashboard(
                 return new Response(getHtmlContent(isFod), {
                     headers: {
                         'Content-Type': 'text/html; charset=utf-8',
-                        'Set-Cookie': `proton_dashboard=${dashboardToken}; HttpOnly; SameSite=Strict; Path=/`,
+                        'Set-Cookie': `proton_dashboard=${dashboardToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`,
                     },
                 });
             }
@@ -824,4 +900,14 @@ function formatBytes(bytes: number): string {
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function safeTokenEqual(candidate: string | null, expected: string): boolean {
+    if (!candidate) return false;
+    const candidateBuffer = Buffer.from(candidate);
+    const expectedBuffer = Buffer.from(expected);
+    return (
+        candidateBuffer.length === expectedBuffer.length &&
+        timingSafeEqual(candidateBuffer, expectedBuffer)
+    );
 }

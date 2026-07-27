@@ -4,6 +4,8 @@ import { Agent, setGlobalDispatcher } from 'undici';
 
 let activeMaxSockets = 4;
 let activeDispatcher: Agent | null = null;
+let activeDispatcherSockets = 0;
+const retiredDispatchers = new Set<Agent>();
 
 export const MAX_PARALLEL_FILE_TRANSFERS = 5;
 
@@ -61,14 +63,24 @@ export function updateNetworkSocketLimits(maxSockets: number): void {
 }
 
 function replaceFetchDispatcher(maxSockets: number): void {
+    if (activeDispatcher && activeDispatcherSockets === maxSockets) return;
     const previous = activeDispatcher;
     activeDispatcher = new Agent({
         connections: maxSockets,
         keepAliveTimeout: 15000,
         keepAliveMaxTimeout: 60000,
     });
+    activeDispatcherSockets = maxSockets;
     setGlobalDispatcher(activeDispatcher);
     if (previous && typeof previous.close === 'function') {
-        void Promise.resolve(previous.close()).catch(() => {});
+        // Do not abort requests that were leased from the old pool. Undici
+        // dispatchers cannot change their connection limit in place, so retire
+        // the pool after its maximum request lifetime instead.
+        retiredDispatchers.add(previous);
+        const timer = setTimeout(() => {
+            retiredDispatchers.delete(previous);
+            void Promise.resolve(previous.close()).catch(() => {});
+        }, 65_000);
+        timer.unref();
     }
 }
