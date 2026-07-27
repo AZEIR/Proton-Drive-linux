@@ -1,5 +1,8 @@
-import { exec, execFile } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
 import { openBrowserUrl } from '../sdk/adapter';
@@ -17,24 +20,82 @@ export interface FodHooks {
     getUploads:         () => any[];
     getActiveTransfers?: () => any[];
     scanRemoteTree?:     () => Promise<void>;
+    pause?:              () => Promise<void>;
+    resume?:             () => Promise<void>;
+    start?:              () => Promise<void>;
+    stop?:               () => Promise<void>;
+    getStatus?:          () => string;
+    getIsPaused?:        () => boolean;
+}
+
+export async function startAuthenticatedSync(
+    engine: SyncEngine | null,
+    fod?: FodHooks,
+): Promise<void> {
+    if (fod?.isFuseMode) {
+        if (!fod.start) throw new Error('FUSE engine is unavailable after authentication');
+        await fod.start();
+        await engine?.startFodEventLoop();
+        engine?.emit('statusChanged');
+        return;
+    }
+    if (engine) {
+        await engine.start();
+        engine.emit('statusChanged');
+    }
 }
 
 export function startDashboard(
     db: SyncDatabase,
-    engine: SyncEngine | null,
-    session: any,
+    initialEngine: SyncEngine | null,
+    initialSession: any,
     port: number = 8085,
-    fod?: FodHooks,
+    initialFod?: FodHooks,
 ) {
-    const logger = session?.logger ?? console;
+    let engine = initialEngine;
+    let session = initialSession;
+    let fod = initialFod;
+    let logger = session?.logger ?? console;
     let isAuthenticating = false;
     let cachedEmail = 'Not Logged In';
+    let dashboardToken =
+        typeof (db as any).getConfig === 'function'
+            ? db.getConfig('dashboard_token', '')
+            : '';
+    if (!dashboardToken) {
+        dashboardToken = randomBytes(32).toString('hex');
+        if (typeof (db as any).setConfig === 'function') {
+            db.setConfig('dashboard_token', dashboardToken);
+        }
+    }
+    const allowedOrigins = new Set([
+        `http://127.0.0.1:${port}`,
+        `http://localhost:${port}`,
+    ]);
+    const validHosts = new Set([
+        `127.0.0.1:${port}`,
+        `localhost:${port}`,
+    ]);
 
     const server = Bun.serve({
         port,
         hostname: "127.0.0.1",
         async fetch(req) {
             const url = new URL(req.url);
+            const host = req.headers.get('host') ?? '';
+            if (!validHosts.has(host)) {
+                return Response.json({ ok: false, error: 'Invalid Host header' }, { status: 421 });
+            }
+            const origin = req.headers.get('origin');
+            if (origin && !allowedOrigins.has(origin)) {
+                return Response.json({ ok: false, error: 'Cross-origin request rejected' }, { status: 403 });
+            }
+            if (url.pathname.startsWith('/api/') && origin) {
+                const cookie = req.headers.get('cookie') ?? '';
+                if (!cookie.split(';').some((part) => part.trim() === `proton_dashboard=${dashboardToken}`)) {
+                    return Response.json({ ok: false, error: 'Dashboard authorization required' }, { status: 403 });
+                }
+            }
 
             // API ENDPOINTS
             if (url.pathname === '/api/status') {
@@ -55,15 +116,13 @@ export function startDashboard(
                 } catch {}
 
                 if (fod?.isFuseMode) {
-                    // FOD mode status
                     const transfers = fod.getActiveTransfers ? fod.getActiveTransfers() : fod.getUploads().map((u: any) => ({ ...u, type: 'upload' }));
-                    const isTransferring = transfers.length > 0;
                     return Response.json({
-                        status:          session?.auth?.isLoggedIn() ? (isTransferring ? 'syncing' : 'synced') : 'auth_required',
+                        status:          session?.auth?.isLoggedIn() ? (fod.getStatus?.() ?? 'error') : 'auth_required',
                         mode:            'fod',
                         mountPoint:      fod.mountPoint,
                         activeTransfers: transfers,
-                        isPaused:        false,
+                        isPaused:        fod.getIsPaused?.() ?? false,
                         bulkDeletionCount: 0,
                         email,
                         isAuthenticating,
@@ -89,19 +148,16 @@ export function startDashboard(
                 try {
                     const body = await req.json() as { mode?: string };
                     const targetMode = body.mode === 'fuse' ? 'fuse' : 'full';
+                    await engine?.stop();
+                    await fod?.stop?.();
                     db.setSyncMode(targetMode);
-                    if (targetMode === 'fuse') {
-                        db.setConfig('is_sync_paused', '0');
-                    }
                     db.log('system', 'system', 'completed', `Sync mode updated to ${targetMode.toUpperCase()}. Applying changes...`);
 
                     setTimeout(() => {
                         process.kill(process.pid, 'SIGTERM');
                     }, 500);
 
-                    return Response.json({ ok: true, mode: targetMode, message: 'Sync mode updated. Daemon restarting...' }, {
-                        headers: { 'Access-Control-Allow-Origin': '*' }
-                    });
+                    return Response.json({ ok: true, mode: targetMode, message: 'Sync mode updated. Daemon restarting...' });
                 } catch (err: any) {
                     return Response.json({ ok: false, error: err?.message || 'Failed to set sync mode' }, { status: 500 });
                 }
@@ -118,9 +174,7 @@ export function startDashboard(
                             db.setConfig('sync_concurrency', limit.toString());
                         }
                         db.log('system', 'system', 'completed', `Network concurrency updated to ${limit}.`);
-                        return Response.json({ ok: true, concurrency: limit }, {
-                            headers: { 'Access-Control-Allow-Origin': '*' }
-                        });
+                        return Response.json({ ok: true, concurrency: limit });
                     }
                     return Response.json({ ok: false, error: 'Invalid concurrency limit (must be between 1 and 10)' }, { status: 400 });
                 } catch (err: any) {
@@ -132,18 +186,16 @@ export function startDashboard(
                 try {
                     const body = await req.json() as { maxSpeedKbps?: number | string };
                     const kbps = typeof body.maxSpeedKbps === 'number' ? body.maxSpeedKbps : parseInt(String(body.maxSpeedKbps || '0'), 10);
-                    if (!isNaN(kbps) && kbps >= 0) {
+                    if (!isNaN(kbps) && kbps >= 0 && kbps <= 10_000_000) {
                         if (engine) {
                             engine.setMaxSpeedKbps(kbps);
                         } else {
                             db.setConfig('sync_max_speed_kbps', kbps.toString());
                         }
                         db.log('system', 'system', 'completed', `Network bandwidth limit set to ${kbps === 0 ? 'Unlimited' : `${kbps} KB/s`}.`);
-                        return Response.json({ ok: true, maxSpeedKbps: kbps }, {
-                            headers: { 'Access-Control-Allow-Origin': '*' }
-                        });
+                        return Response.json({ ok: true, maxSpeedKbps: kbps });
                     }
-                    return Response.json({ ok: false, error: 'Invalid speed limit (must be >= 0)' }, { status: 400 });
+                    return Response.json({ ok: false, error: 'Invalid speed limit (must be between 0 and 10,000,000 KB/s)' }, { status: 400 });
                 } catch (err: any) {
                     return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
                 }
@@ -159,9 +211,7 @@ export function startDashboard(
                         db.setConfig('sync_wifi_safe_mode', enabled ? '1' : '0');
                     }
                     db.log('system', 'system', 'completed', `Wi-Fi Safe Mode ${enabled ? 'enabled' : 'disabled'}.`);
-                    return Response.json({ ok: true, wifiSafeMode: enabled }, {
-                        headers: { 'Access-Control-Allow-Origin': '*' }
-                    });
+                    return Response.json({ ok: true, wifiSafeMode: enabled });
                 } catch (err: any) {
                     return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
                 }
@@ -174,7 +224,7 @@ export function startDashboard(
                     const mapping = db.getMappingByNodeUid(nodeUid);
                     if (fod && mapping) {
                         const cachePath = await fod.hydrateFile?.(nodeUid, mapping.local_path);
-                        return Response.json({ ok: true, cachePath }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+                        return Response.json({ ok: true, cachePath });
                     }
                     return Response.json({ ok: false, error: 'Hydrator unavailable or mapping not found' }, { status: 404 });
                 } catch (err: any) {
@@ -206,16 +256,29 @@ export function startDashboard(
                             openBrowserUrl(signInUrl);
                         }).then(async () => {
                             isAuthenticating = false;
-                            db.log('system', 'system', 'completed', 'Authentication successful. Starting sync engine...');
+                            db.log(
+                                'system',
+                                'system',
+                                'completed',
+                                `Authentication successful. Starting ${fod?.isFuseMode ? 'FUSE engine' : 'sync engine'}...`,
+                            );
                             try {
                                 if (session.auth.isLoggedIn()) {
                                     const primaryAddress = await session.addresses.getOwnPrimaryAddress();
                                     cachedEmail = primaryAddress.email;
                                 }
                             } catch {}
-                            if (engine) {
-                                await engine.start();
-                                engine.emit('statusChanged');
+                            try {
+                                await startAuthenticatedSync(engine, fod);
+                            } catch (startupErr: any) {
+                                const message = startupErr?.message || String(startupErr);
+                                db.log(
+                                    'system',
+                                    'system',
+                                    'failed',
+                                    `Authentication succeeded but sync startup failed: ${message}`,
+                                );
+                                logger.error('Post-authentication sync startup failed:', startupErr);
                             }
                         }).catch((err: any) => {
                             isAuthenticating = false;
@@ -258,7 +321,8 @@ export function startDashboard(
             }
 
             if (url.pathname === '/api/logs') {
-                const limit = parseInt(url.searchParams.get('limit') || '500', 10) || 500;
+                const requestedLimit = parseInt(url.searchParams.get('limit') || '500', 10) || 500;
+                const limit = Math.min(1000, Math.max(1, requestedLimit));
                 const logs = db.getRecentLogs(limit);
                 return Response.json(logs);
             }
@@ -267,7 +331,6 @@ export function startDashboard(
             if (url.pathname === '/api/browser/list') {
                 const requestedPath = (url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
                 const allMappings = db.getAllMappings();
-                const pathModule = require('node:path');
 
                 // Build Breadcrumbs
                 const breadcrumbs: { name: string; path: string }[] = [{ name: 'My Files', path: '' }];
@@ -333,7 +396,7 @@ export function startDashboard(
                             if (fod?.isFuseMode) {
                                 isCached = isDirItem || cachedSet.has(m.node_uid);
                             } else {
-                                const fullPath = pathModule.join(localRoot, itemRelPath);
+                                const fullPath = path.join(localRoot, itemRelPath);
                                 isCached = existsSync(fullPath);
                             }
 
@@ -368,9 +431,7 @@ export function startDashboard(
                     return a.name.localeCompare(b.name);
                 });
 
-                return Response.json({ currentPath: requestedPath, breadcrumbs, items }, {
-                    headers: { 'Access-Control-Allow-Origin': '*' }
-                });
+                return Response.json({ currentPath: requestedPath, breadcrumbs, items });
             }
 
             if (req.method === 'POST' && url.pathname === '/api/browser/open-item') {
@@ -378,9 +439,11 @@ export function startDashboard(
                 if (!body?.relPath && body?.relPath !== '') {
                     return Response.json({ ok: false, error: 'relPath required' }, { status: 400 });
                 }
-                const pathModule = require('node:path');
                 const localRoot = fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? '');
-                const fullPath = pathModule.join(localRoot, body.relPath);
+                const fullPath = resolveContainedPath(localRoot, body.relPath);
+                if (!fullPath) {
+                    return Response.json({ ok: false, error: 'Path escapes the configured root' }, { status: 400 });
+                }
                 if (existsSync(fullPath)) {
                     execFile('xdg-open', [fullPath]);
                     return Response.json({ ok: true });
@@ -424,6 +487,8 @@ export function startDashboard(
 
                 if (req.method === 'POST' && url.pathname === '/api/logout') {
                     db.log('system', 'system', 'syncing', 'Logging out from Proton Drive');
+                    await fod.stop?.();
+                    await engine?.stop();
                     await session.auth.logout();
                     return Response.json({ ok: true });
                 }
@@ -432,12 +497,14 @@ export function startDashboard(
             // ── Legacy full-sync endpoints ──────────────────────────────────
             if (req.method === 'POST') {
                 if (url.pathname === '/api/pause') {
-                    await engine?.pause();
+                    if (fod?.isFuseMode) await fod.pause?.();
+                    else await engine?.pause();
                     return Response.json({ ok: true });
                 }
 
                 if (url.pathname === '/api/resume') {
-                    await engine?.resume();
+                    if (fod?.isFuseMode) await fod.resume?.();
+                    else await engine?.resume();
                     return Response.json({ ok: true });
                 }
 
@@ -453,8 +520,7 @@ export function startDashboard(
 
                 if (url.pathname === '/api/sync') {
                     if (fod?.isFuseMode && fod) {
-                        fod.scanRemoteTree?.();
-                        if (engine) engine.syncFodMetadata().catch(() => {});
+                        void fod.scanRemoteTree?.();
                     } else if (engine) {
                         engine.forceSync(); // Run async
                     }
@@ -465,10 +531,11 @@ export function startDashboard(
                     const body = await req.json() as { path?: string };
                     if (body && body.path) {
                         try {
+                            const safePath = validateConfiguredPath(body.path);
                             if (fod?.isFuseMode) {
-                                db.setFuseMountPoint(body.path);
+                                db.setFuseMountPoint(safePath);
                             } else if (engine) {
-                                await engine.setLocalSyncRoot(body.path);
+                                await engine.setLocalSyncRoot(safePath);
                             }
                             return Response.json({ ok: true });
                         } catch (err: any) {
@@ -499,7 +566,7 @@ export function startDashboard(
                 if (url.pathname === '/api/daemon/stop') {
                     db.log('system', 'system', 'syncing', 'Daemon stop requested from dashboard');
                     setTimeout(() => {
-                        exec('systemctl --user stop proton-sync.service 2>/dev/null', () => {
+                        execFile('systemctl', ['--user', 'stop', 'proton-sync.service'], () => {
                             process.kill(process.pid, 'SIGTERM');
                         });
                         process.kill(process.pid, 'SIGTERM');
@@ -510,7 +577,7 @@ export function startDashboard(
                 if (url.pathname === '/api/daemon/restart') {
                     db.log('system', 'system', 'syncing', 'Daemon restart requested from dashboard');
                     setTimeout(() => {
-                        exec('systemctl --user restart proton-sync.service 2>/dev/null', (err) => {
+                        execFile('systemctl', ['--user', 'restart', 'proton-sync.service'], (err) => {
                             if (err) process.exit(1); // non-zero so systemd restarts us
                         });
                     }, 300);
@@ -583,22 +650,25 @@ export function startDashboard(
                         // Send immediately on connect, then on every change
                         send();
                         if (fod?.isFuseMode) {
-                            const interval = setInterval(send, 1000);
+                            const subscribedFod = fod;
+                            const subscribedEngine = engine;
+                            const interval = setInterval(send, 15000);
                             const onTransfersChanged = () => send();
-                            (fod as any).on?.('transfersChanged', onTransfersChanged);
-                            if (engine) {
-                                engine.on('statusChanged', send);
+                            (subscribedFod as any).on?.('transfersChanged', onTransfersChanged);
+                            if (subscribedEngine) {
+                                subscribedEngine.on('statusChanged', send);
                             }
                             cleanup = () => {
                                 clearInterval(interval);
-                                (fod as any).off?.('transfersChanged', onTransfersChanged);
-                                if (engine) {
-                                    engine.off('statusChanged', send);
+                                (subscribedFod as any).off?.('transfersChanged', onTransfersChanged);
+                                if (subscribedEngine) {
+                                    subscribedEngine.off('statusChanged', send);
                                 }
                             };
                         } else if (engine) {
-                            engine.on('statusChanged', send);
-                            cleanup = () => engine.off('statusChanged', send);
+                            const subscribedEngine = engine;
+                            subscribedEngine.on('statusChanged', send);
+                            cleanup = () => subscribedEngine.off('statusChanged', send);
                         }
                     },
                     cancel() {
@@ -619,7 +689,10 @@ export function startDashboard(
             if (url.pathname === '/' || url.pathname === '/index.html') {
                 const isFod = fod?.isFuseMode ?? false;
                 return new Response(getHtmlContent(isFod), {
-                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                    headers: {
+                        'Content-Type': 'text/html; charset=utf-8',
+                        'Set-Cookie': `proton_dashboard=${dashboardToken}; HttpOnly; SameSite=Strict; Path=/`,
+                    },
                 });
             }
 
@@ -628,7 +701,42 @@ export function startDashboard(
     });
 
     logger.info(`Dashboard server running at http://localhost:${port}`);
-    return server;
+    return Object.assign(server, {
+        updateContext(nextEngine: SyncEngine | null, nextSession: any, nextFod?: FodHooks) {
+            engine = nextEngine;
+            session = nextSession;
+            fod = nextFod;
+            logger = session?.logger ?? console;
+        },
+    });
+}
+
+function resolveContainedPath(root: string, relativePath: string): string | null {
+    if (!root || path.isAbsolute(relativePath) || relativePath.includes('\0')) return null;
+    const resolvedRoot = path.resolve(root);
+    const candidate = path.resolve(resolvedRoot, relativePath);
+    if (candidate !== resolvedRoot && !candidate.startsWith(`${resolvedRoot}${path.sep}`)) return null;
+    if (!existsSync(candidate)) return candidate;
+    try {
+        const realRoot = realpathSync(resolvedRoot);
+        const realCandidate = realpathSync(candidate);
+        if (realCandidate !== realRoot && !realCandidate.startsWith(`${realRoot}${path.sep}`)) return null;
+        return realCandidate;
+    } catch {
+        return null;
+    }
+}
+
+function validateConfiguredPath(rawPath: string): string {
+    if (rawPath.includes('\0') || !path.isAbsolute(rawPath)) {
+        throw new Error('Path must be an absolute filesystem path');
+    }
+    const resolved = path.resolve(rawPath);
+    const forbidden = new Set(['/', homedir(), '/etc', '/usr', '/bin', '/sbin', '/var', '/proc', '/sys', '/dev']);
+    if (forbidden.has(resolved)) {
+        throw new Error('Refusing to use a system or home root as a sync path');
+    }
+    return resolved;
 }
 
 function formatBytes(bytes: number): string {
@@ -638,4 +746,3 @@ function formatBytes(bytes: number): string {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
-

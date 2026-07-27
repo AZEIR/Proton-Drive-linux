@@ -12,6 +12,19 @@
                 .replace(/'/g, '&#039;');
         }
 
+        function encodeActionValue(value) {
+            const bytes = new TextEncoder().encode(String(value ?? ''));
+            let binary = '';
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary);
+        }
+
+        function decodeActionValue(value) {
+            const binary = atob(value);
+            const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+            return new TextDecoder().decode(bytes);
+        }
+
         // Local UI State for Search/Filters
         let logSearchQuery = '';
         let logFilterCategory = 'all';
@@ -99,7 +112,7 @@
                 document.getElementById('modeLabel').innerText = 'FOD';
                 document.getElementById('cacheMenuItem').style.display = 'flex';
                 fetchCachedFiles();
-                setInterval(fetchCachedFiles, 5000);
+                setInterval(fetchCachedFiles, 15000);
             }
 
             // Infinite scroll for logs
@@ -239,7 +252,7 @@
                 if (isLast) {
                     html += `<span class="breadcrumb-item active">${escapeHtml(b.name)}</span>`;
                 } else {
-                    html += `<span class="breadcrumb-item" onclick="navigateToBrowserPath('${escapeHtml(b.path)}')">${escapeHtml(b.name)}</span>`;
+                    html += `<span class="breadcrumb-item" onclick="navigateToBrowserPath(decodeActionValue('${encodeActionValue(b.path)}'))">${escapeHtml(b.name)}</span>`;
                 }
             });
             container.innerHTML = html;
@@ -317,8 +330,10 @@
             let html = '';
             items.forEach(item => {
                 const icon = getFileIcon(item.name, item.isDir);
+                const encodedPath = encodeActionValue(item.relPath);
+                const encodedUid = encodeActionValue(item.nodeUid || '');
                 const nameDisplay = item.isDir 
-                    ? `<div class="browser-item-name is-dir" onclick="navigateToBrowserPath('${escapeHtml(item.relPath)}')">${icon}<span>${escapeHtml(item.name)}</span></div>`
+                    ? `<div class="browser-item-name is-dir" onclick="navigateToBrowserPath(decodeActionValue('${encodedPath}'))">${icon}<span>${escapeHtml(item.name)}</span></div>`
                     : `<div class="browser-item-name">${icon}<span>${escapeHtml(item.name)}</span></div>`;
 
                 let statusBadge = '';
@@ -335,17 +350,17 @@
                 let actions = `<div class="browser-actions">`;
                 if (!item.isDir && item.nodeUid) {
                     if (!item.isCached) {
-                        actions += `<button class="btn btn-sm btn-primary" onclick="hydrateBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined" style="font-size:14px;">download</span> Hydrate</button>`;
+                        actions += `<button class="btn btn-sm btn-primary" onclick="hydrateBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">download</span> Hydrate</button>`;
                     } else if (IS_FOD) {
-                        actions += `<button class="btn btn-sm" onclick="evictBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined" style="font-size:14px;">delete_sweep</span> Free Space</button>`;
+                        actions += `<button class="btn btn-sm" onclick="evictBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">delete_sweep</span> Free Space</button>`;
                     }
                     if (item.isPinned) {
-                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined text-warning" style="font-size:14px;">push_pin</span> Unpin</button>`;
+                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined text-warning" style="font-size:14px;">push_pin</span> Unpin</button>`;
                     } else {
-                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem('${escapeHtml(item.nodeUid)}')"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pin</button>`;
+                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pin</button>`;
                     }
                 }
-                actions += `<button class="btn btn-sm" onclick="openBrowserItem('${escapeHtml(item.relPath)}')"><span class="material-symbols-outlined" style="font-size:14px;">open_in_new</span> Open</button>`;
+                actions += `<button class="btn btn-sm" onclick="openBrowserItem(decodeActionValue('${encodedPath}'))"><span class="material-symbols-outlined" style="font-size:14px;">open_in_new</span> Open</button>`;
                 actions += `</div>`;
 
                 html += `<tr>
@@ -473,7 +488,7 @@
                     return true;
                 })
                 .map(t => {
-                    const name      = t.filePath || t.localPath || 'file';
+                    const name      = escapeHtml(t.filePath || t.localPath || 'file');
                     const isUpload  = t.type === 'upload';
                     const dirColor  = isUpload ? '#a78bfa' : '#10b981';
                     const dirLabel  = isUpload ? 'upload' : 'download';
@@ -525,7 +540,7 @@
             let html = activeRows.join('') + visibleLogs.map(l => {
                 const time        = new Date(l.timestamp).toLocaleString();
                 const action      = escapeHtml(l.direction.replace('_', ' '));
-                const statusClass = 'status-' + escapeHtml(l.status);
+                const statusClass = 'status-' + String(l.status || '').replace(/[^a-z0-9_-]/gi, '');
                 const path        = escapeHtml(l.file_path);
                 const msg         = l.message ? `<span class="log-message">${escapeHtml(l.message)}</span>` : '';
                 return `<tr>
@@ -606,13 +621,13 @@
                 const name    = escapeHtml(rawName);
                 const size    = formatBytes(f.size || 0);
                 const isLocal = f.is_local;
-                const uid     = f.node_uid ? escapeHtml(f.node_uid) : '';
+                const uid     = f.node_uid ? encodeActionValue(f.node_uid) : '';
                 const status  = isLocal
                     ? `<span class="log-status status-completed"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">check_circle</span>Local</span>`
                     : `<span class="log-status" style="color:var(--text-muted);background:rgba(255,255,255,0.05);"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">cloud_queue</span>Stub</span>`;
                 const actions = uid ? `
-                    ${isLocal ? `<button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="evictFile('${uid}')">Evict</button>` : ''}
-                    ${!isLocal ? `<button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="pinFile('${uid}')">Pin</button>` : ''}
+                    ${isLocal ? `<button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="evictFile(decodeActionValue('${uid}'))">Evict</button>` : ''}
+                    ${!isLocal ? `<button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="pinFile(decodeActionValue('${uid}'))">Pin</button>` : ''}
                 ` : '';
                 return `<tr>
                     <td><strong class="file-path-text" title="${name}">${name}</strong></td>
@@ -1039,7 +1054,7 @@
         };
 
         // Logs and quota remain poll-based
-        setInterval(fetchLogs, 2000);
+        setInterval(fetchLogs, 5000);
         setInterval(fetchQuota, 30000);
 
         window.switchSyncMode = async function(targetMode) {

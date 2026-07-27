@@ -1,7 +1,9 @@
 import http from 'node:http';
 import https from 'node:https';
+import { Agent, setGlobalDispatcher } from 'undici';
 
 let activeMaxSockets = 4;
+let activeDispatcher: Agent | null = null;
 
 /**
  * Configures global HTTP/HTTPS agents and undici fetch dispatchers with conservative
@@ -20,18 +22,7 @@ export function setupNetworkSocketLimits(maxSockets = 4): void {
     http.globalAgent = new http.Agent(defaultOptions);
     https.globalAgent = new https.Agent(defaultOptions);
 
-    try {
-        const req = typeof eval !== 'undefined' ? eval('require') : require;
-        const undici = req('undici');
-        if (undici && typeof undici.setGlobalDispatcher === 'function' && undici.Agent) {
-            const dispatcher = new undici.Agent({
-                connections: maxSockets,
-                keepAliveTimeout: 15000,
-                keepAliveMaxTimeout: 60000,
-            });
-            undici.setGlobalDispatcher(dispatcher);
-        }
-    } catch {}
+    replaceFetchDispatcher(maxSockets);
 }
 
 export function updateNetworkSocketLimits(maxSockets: number): void {
@@ -40,16 +31,18 @@ export function updateNetworkSocketLimits(maxSockets: number): void {
     if (http.globalAgent) http.globalAgent.maxSockets = maxSockets;
     if (https.globalAgent) https.globalAgent.maxSockets = maxSockets;
 
-    try {
-        const req = typeof eval !== 'undefined' ? eval('require') : require;
-        const undici = req('undici');
-        if (undici && typeof undici.setGlobalDispatcher === 'function' && undici.Agent) {
-            const dispatcher = new undici.Agent({
-                connections: maxSockets,
-                keepAliveTimeout: 15000,
-                keepAliveMaxTimeout: 60000,
-            });
-            undici.setGlobalDispatcher(dispatcher);
-        }
-    } catch {}
+    replaceFetchDispatcher(maxSockets);
+}
+
+function replaceFetchDispatcher(maxSockets: number): void {
+    const previous = activeDispatcher;
+    activeDispatcher = new Agent({
+        connections: maxSockets,
+        keepAliveTimeout: 15000,
+        keepAliveMaxTimeout: 60000,
+    });
+    setGlobalDispatcher(activeDispatcher);
+    if (previous && typeof previous.close === 'function') {
+        void Promise.resolve(previous.close()).catch(() => {});
+    }
 }

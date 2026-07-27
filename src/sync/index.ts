@@ -4,9 +4,11 @@ import { SyncDatabase } from './db';
 import { startDashboard } from './dashboard';
 import { SyncEngine } from './engine';
 import { ProtonFuseEngine } from '../fod/fuse';
+import { homedir } from 'node:os';
+import path from 'node:path';
 
-declare const APP_VERSION: string;
-declare const SDK_VERSION: string | undefined;
+const APP_VERSION = 'external-drive-azeir_proton_drive_linux@1.3.0-stable';
+const SDK_VERSION = 'js@0.19.2';
 
 export async function runSync(port: number = 8085) {
     const clientUidPrefix = 'sdk-js-cli';
@@ -14,12 +16,27 @@ export async function runSync(port: number = 8085) {
 
     // Check requested mode from ENV or Database
     const requestedMode = (process.env.PROTON_SYNC_MODE as 'full' | 'fuse') || db.getSyncMode();
+    if (requestedMode === 'fuse') {
+        const requestedMount = process.env.PROTON_FUSE_MOUNT_POINT;
+        if (requestedMount) db.setFuseMountPoint(path.resolve(requestedMount));
+        const fullPath = db.getConfig('local_sync_path', '');
+        if (fullPath && path.resolve(fullPath) === path.resolve(db.getFuseMountPoint())) {
+            db.setConfig(
+                'local_sync_path',
+                db.getConfig('last_full_sync_path', path.join(homedir(), 'P-Drive')),
+            );
+        }
+    } else if (process.env.PROTON_FULL_SYNC_PATH) {
+        const fullPath = path.resolve(process.env.PROTON_FULL_SYNC_PATH);
+        db.setConfig('local_sync_path', fullPath);
+        db.setConfig('last_full_sync_path', fullPath);
+    }
     db.setSyncMode(requestedMode);
 
     const initOptions = {
         clientUidPrefix,
-        appVersion: typeof APP_VERSION !== 'undefined' ? APP_VERSION : 'external-drive-azeir_proton_drive_linux@1.0.0-stable',
-        sdkVersion: typeof SDK_VERSION !== 'undefined' ? SDK_VERSION : 'js@0.0.0',
+        appVersion: APP_VERSION,
+        sdkVersion: SDK_VERSION,
         enablePersistedEvents: true,
         enableConsoleLog: false,
         enableMetrics: false,
@@ -46,7 +63,7 @@ export async function runSync(port: number = 8085) {
         logger.info(`Initializing Proton Drive Sync Daemon in ${requestedMode.toUpperCase()} Mode...`);
 
         if (requestedMode === 'fuse') {
-            fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger);
+            fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger, undefined, session.clientUid);
             engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
         } else {
             engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
@@ -100,8 +117,16 @@ export async function runSync(port: number = 8085) {
                 logger.info('Connection established! Initializing sync engine...');
 
                 if (requestedMode === 'fuse') {
-                    fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger);
+                    fuseEngine = new ProtonFuseEngine(
+                        db,
+                        session.sdk,
+                        session.auth,
+                        logger,
+                        undefined,
+                        session.clientUid,
+                    );
                     engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+                    server.updateContext(engine, session, fuseEngine);
                     if (session.auth.isLoggedIn()) {
                         await fuseEngine.start();
                         engine.startFodEventLoop().catch((err) => {
@@ -110,6 +135,7 @@ export async function runSync(port: number = 8085) {
                     }
                 } else {
                     engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+                    server.updateContext(engine, session);
                     if (session.auth.isLoggedIn()) {
                         await engine.start().catch((err) => {
                             logger.error('SyncEngine startup error:', err);

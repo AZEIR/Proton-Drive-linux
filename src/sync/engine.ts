@@ -13,6 +13,11 @@ import { mkdir, readdir, rename, rm, stat, lstat, unlink } from "node:fs/promise
 import { homedir } from "node:os";
 import path from "node:path";
 import { getSha1, type EventsProvider } from "../sdk/adapter";
+import {
+  closeWritableStream,
+  openFileReadableStream,
+  openFileWritableStream,
+} from "../utils/fileStreams";
 import { updateNetworkSocketLimits } from "../utils/httpAgent";
 import { SyncDatabase, SyncMapping } from "./db";
 import { IgnoreMatcher, PROTONIGNORE_FILENAME } from "./ignore";
@@ -115,11 +120,18 @@ export class SyncEngine extends EventEmitter {
     const oldSyncPath = this.db.getConfig("local_sync_path", "");
     const oldMode = this.db.getConfig("sync_mode", "");
 
-    const envPath = process.env.PROTON_MOUNT_POINT;
+    const requestedMode =
+      (process.env.PROTON_SYNC_MODE as "full" | "fuse" | undefined) ||
+      (oldMode === "fuse" ? "fuse" : "full");
+    const envPath =
+      requestedMode === "full"
+        ? process.env.PROTON_FULL_SYNC_PATH || process.env.PROTON_MOUNT_POINT
+        : undefined;
     let newSyncPath = oldSyncPath;
     if (envPath) {
       newSyncPath = path.resolve(envPath);
       this.db.setConfig("local_sync_path", newSyncPath);
+      this.db.setConfig("last_full_sync_path", newSyncPath);
     }
     const defaultPath = path.join(homedir(), "P-Drive");
     this.localSyncRoot = newSyncPath || defaultPath;
@@ -614,6 +626,9 @@ export class SyncEngine extends EventEmitter {
 
   async startFodEventLoop(): Promise<void> {
     try {
+      this.isStarted = true;
+      this.isPaused = this.db.getConfig("is_sync_paused", "0") === "1";
+      if (this.isPaused) return;
       const rootFolder = await this.sdk.getMyFilesRootFolder();
       this.remoteRootUid = rootFolder.uid;
       await this.subscribeToRemoteEvents(rootFolder.treeEventScopeId);
@@ -998,7 +1013,7 @@ export class SyncEngine extends EventEmitter {
       while (true) {
         if (folderQueue.length === 0) {
           if (activeTasks === 0) break;
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await new Promise((resolve) => setTimeout(resolve, 5));
           continue;
         }
 
@@ -1020,7 +1035,7 @@ export class SyncEngine extends EventEmitter {
           });
 
           const childFolders: { uid: string; relPath: string }[] = [];
-          const chunkSize = 10;
+          const chunkSize = 50;
           for (let i = 0; i < childrenUids.length; i += chunkSize) {
             const chunk = childrenUids.slice(i, i + chunkSize);
             const chunkFolders = await this.runWithRetry(async () => {
@@ -2603,7 +2618,6 @@ export class SyncEngine extends EventEmitter {
               lastProgressEmit = now;
             }
           }
-          this.rateLimitTransfer(relativePath, uploadedBytes).catch(() => {});
         };
 
         // Track the current stream so abort() can cancel it regardless of which
@@ -2659,7 +2673,7 @@ export class SyncEngine extends EventEmitter {
             const transfer = this.activeTransfers.get(relativePath);
             if (transfer) transfer.size = size;
 
-            const rawStream = file.stream();
+            const rawStream = openFileReadableStream(localPath);
             let totalUploadedBytes = 0;
             const reader = rawStream.getReader();
             const self = this;
@@ -2981,45 +2995,7 @@ export class SyncEngine extends EventEmitter {
 
         const tmpPath = `${localPath}.tmp-${Date.now()}`;
 
-        this.ignoredLocalChanges.add(tmpPath);
-        const bunFile = Bun.file(tmpPath);
-        const writer = bunFile.writer();
-        let totalDownloadedBytes = 0;
-        const self = this;
-        const throttledWriter = {
-          write: async (chunk: Uint8Array) => {
-            totalDownloadedBytes += chunk.byteLength;
-            await self.rateLimitTransfer(relativePath, totalDownloadedBytes);
-            return await writer.write(chunk);
-          },
-          end: async () => {
-            return await writer.end();
-          },
-          flush: async () => {
-            if (typeof writer.flush === "function") {
-              return await writer.flush();
-            }
-          },
-        };
-        const writableStream = {
-          getWriter: () => throttledWriter,
-          close: async () => {
-            await writer.end();
-          },
-          abort: async () => {
-            try {
-              await writer.end();
-            } catch (e) {}
-            await unlink(tmpPath).catch(() => {});
-          },
-          locked: false,
-        };
-
-        this.activeDownloads.set(relativePath, {
-          abort: async () => {
-            await writableStream.abort();
-          },
-        });
+        this.ignorePathTemporarily(tmpPath, 60_000);
 
         const size = revision.claimedSize ?? 0;
         this.activeTransfers.set(relativePath, {
@@ -3040,21 +3016,56 @@ export class SyncEngine extends EventEmitter {
               lastProgressEmit = now;
             }
           }
-          this.rateLimitTransfer(relativePath, downloadedBytes).catch(() => {});
         };
+
+        let activeAbortController: AbortController | null = null;
+        const syncEngine = this;
+        this.activeDownloads.set(relativePath, {
+          abort: async () => activeAbortController?.abort(),
+        });
 
         try {
           await this.runWithRetry(async () => {
             if (this.isPaused || !this.isStarted) {
               throw new Error("Sync paused or stopped");
             }
-            const downloader = await this.sdk.getFileDownloader(node);
-            const downloadController = downloader.downloadToStream(
-              writableStream as any,
-              progressCallback,
+            await unlink(tmpPath).catch(() => {});
+            let totalDownloadedBytes = 0;
+            const fileStream = openFileWritableStream(tmpPath);
+            const throttledStream = new TransformStream<Uint8Array, Uint8Array>({
+              async transform(chunk, controller) {
+                totalDownloadedBytes += chunk.byteLength;
+                await syncEngine.rateLimitTransfer(
+                  relativePath,
+                  totalDownloadedBytes,
+                );
+                controller.enqueue(chunk);
+              },
+            });
+            const pipePromise = throttledStream.readable.pipeTo(fileStream);
+            activeAbortController = new AbortController();
+            const downloader = await this.sdk.getFileDownloader(
+              node,
+              activeAbortController.signal,
             );
-            await downloadController.completion();
-            await writer.end();
+            try {
+              const downloadController = downloader.downloadToStream(
+                throttledStream.writable as any,
+                progressCallback,
+              );
+              await downloadController.completion();
+              await closeWritableStream(throttledStream.writable);
+              await pipePromise;
+            } catch (error) {
+              activeAbortController.abort();
+              if (!throttledStream.writable.locked) {
+                const writer = throttledStream.writable.getWriter();
+                await writer.abort(error).catch(() => {});
+                writer.releaseLock();
+              }
+              await pipePromise.catch(() => {});
+              throw error;
+            }
 
             // 1. Pre-Swap Byte-Count Verification
             const tmpStat = await stat(tmpPath);
@@ -3066,7 +3077,10 @@ export class SyncEngine extends EventEmitter {
             }
 
             // 2. Pre-Swap SHA-1 Checksum Verification
-            const expectedSha1 = (revision as any).claimedSha1 ?? (revision as any).sha1;
+            const expectedSha1 =
+              revision.claimedDigests?.sha1 ??
+              (revision as any).claimedSha1 ??
+              (revision as any).sha1;
             if (expectedSha1) {
               const actualSha1 = await getSha1(tmpPath);
               if (actualSha1 !== expectedSha1) {
@@ -3078,7 +3092,7 @@ export class SyncEngine extends EventEmitter {
             }
           });
         } catch (downloadErr) {
-          await writableStream.abort().catch(() => {});
+          (activeAbortController as AbortController | null)?.abort();
           await unlink(tmpPath).catch(() => {});
           throw downloadErr;
         } finally {
@@ -3166,8 +3180,8 @@ export class SyncEngine extends EventEmitter {
     );
 
     // Rename local file to conflict path (ensure parent exists in case it was concurrently deleted)
-    this.ignoredLocalChanges.add(localPath);
-    this.ignoredLocalChanges.add(conflictAbsPath);
+    this.ignorePathTemporarily(localPath, 3000);
+    this.ignorePathTemporarily(conflictAbsPath, 3000);
     mkdirSync(path.dirname(conflictAbsPath), { recursive: true });
     await Bun.write(conflictAbsPath, Bun.file(localPath));
     await unlink(localPath);
@@ -3398,7 +3412,7 @@ export class SyncEngine extends EventEmitter {
     }
 
     this.db.log(relativePath, "delete_local", "syncing", "Deleting local file");
-    this.ignoredLocalChanges.add(localPath);
+    this.ignorePathTemporarily(localPath, 2500);
     try {
       await rm(localPath, { recursive: true, force: true });
       this.db.deleteMapping(relativePath);
@@ -3513,7 +3527,15 @@ export class SyncEngine extends EventEmitter {
       } catch (error: any) {
         // Never retry not-found errors — these are intentional (e.g. parent
         // folder deleted while an upload was in flight).
-        if (error.code === "ENOENT" || error.code === "ENOTDIR") {
+        if (
+          error.code === "ENOENT" ||
+          error.code === "ENOTDIR" ||
+          error.name === "IntegrityError" ||
+          error.name === "ValidationError" ||
+          error.name === "AbortError" ||
+          error.status === 401 ||
+          error.status === 403
+        ) {
           throw error;
         }
 
@@ -3522,7 +3544,7 @@ export class SyncEngine extends EventEmitter {
           `Operation failed (attempt ${i + 1}/${retries}). Error: ${error.message || error}. NetworkError=${isNetworkError}`,
         );
 
-        if (i === retries - 1) {
+        if (!isNetworkError || i === retries - 1) {
           if (isNetworkError) {
             this.startOfflineMonitor();
           }
@@ -3632,7 +3654,7 @@ export class SyncEngine extends EventEmitter {
   }
 
   private ignorePathTemporarily(absolutePath: string, durationMs = 2500) {
-    this.ignoredLocalChanges.add(absolutePath);
+    this.ignoredLocalChanges.set(absolutePath, Date.now() + durationMs);
     setTimeout(() => {
       this.ignoredLocalChanges.delete(absolutePath);
     }, durationMs);

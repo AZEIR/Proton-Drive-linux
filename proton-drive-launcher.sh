@@ -13,6 +13,17 @@ TRAY_SCRIPT="${SCRIPT_DIR}/proton-drive-tray.py"
 DAEMON_PID=""
 TRAY_PID=""
 
+unmount_fuse_path() {
+    local mount_path="$1"
+    if command -v fusermount3 >/dev/null 2>&1; then
+        fusermount3 -u -z "$mount_path" 2>/dev/null || umount -l "$mount_path" 2>/dev/null || true
+    elif command -v fusermount >/dev/null 2>&1; then
+        fusermount -u -z "$mount_path" 2>/dev/null || umount -l "$mount_path" 2>/dev/null || true
+    else
+        umount -l "$mount_path" 2>/dev/null || true
+    fi
+}
+
 DB_FILE="${HOME}/.config/proton-drive-sync/sync_state.db"
 STORED_MODE=""
 STORED_FUSE=""
@@ -24,9 +35,9 @@ fi
 cleanup() {
     [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null
     [ -n "$TRAY_PID" ] && kill "$TRAY_PID" 2>/dev/null
-    fusermount -u -z "${HOME}/P-Drive-FUSE" 2>/dev/null || umount -l "${HOME}/P-Drive-FUSE" 2>/dev/null || true
+    unmount_fuse_path "${HOME}/P-Drive-FUSE"
     if [ -n "$STORED_FUSE" ] && [ "$STORED_FUSE" != "${HOME}/P-Drive-FUSE" ]; then
-        fusermount -u -z "$STORED_FUSE" 2>/dev/null || umount -l "$STORED_FUSE" 2>/dev/null || true
+        unmount_fuse_path "$STORED_FUSE"
     fi
     wait 2>/dev/null
     exit 0

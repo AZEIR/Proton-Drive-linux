@@ -1,7 +1,56 @@
 #!/bin/bash
 # Proton Drive Linux — Management Script (no systemd)
 
+umask 077
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_DIR="${HOME}/.config/proton-drive-sync"
+DAEMON_LOG="${CONFIG_DIR}/daemon.log"
+DAEMON_PID_FILE="${CONFIG_DIR}/daemon.pid"
+
+unmount_fuse_path() {
+    local mount_path="$1"
+    if command -v fusermount3 >/dev/null 2>&1; then
+        fusermount3 -u -z "$mount_path" 2>/dev/null || umount -l "$mount_path" 2>/dev/null || true
+    elif command -v fusermount >/dev/null 2>&1; then
+        fusermount -u -z "$mount_path" 2>/dev/null || umount -l "$mount_path" 2>/dev/null || true
+    else
+        umount -l "$mount_path" 2>/dev/null || true
+    fi
+}
+
+find_processes_with_exact_arg() {
+    local target_arg="$1"
+    local cmdline_file pid arg matched
+
+    for cmdline_file in /proc/[0-9]*/cmdline; do
+        matched=0
+        while IFS= read -r -d '' arg; do
+            if [ "$arg" = "$target_arg" ]; then
+                matched=1
+                break
+            fi
+        done 2>/dev/null < "$cmdline_file" || true
+        if [ "$matched" -eq 1 ]; then
+            pid="${cmdline_file#/proc/}"
+            pid="${pid%/cmdline}"
+            if [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ]; then
+                echo "$pid"
+            fi
+        fi
+    done
+}
+
+terminate_processes_with_exact_arg() {
+    local target_arg="$1"
+    local -a matched_pids=()
+    mapfile -t matched_pids < <(find_processes_with_exact_arg "$target_arg")
+
+    if [ "${#matched_pids[@]}" -gt 0 ]; then
+        kill "${matched_pids[@]}" 2>/dev/null || true
+    fi
+}
+
 DAEMON_BIN="${SCRIPT_DIR}/release/proton-sync"
 TRAY_SCRIPT="${SCRIPT_DIR}/proton-drive-tray.py"
 
@@ -44,7 +93,7 @@ start_daemon() {
         fi
     done
 
-    DB_FILE="${HOME}/.config/proton-drive-sync/sync_state.db"
+    DB_FILE="${CONFIG_DIR}/sync_state.db"
     STORED_MODE=""
     STORED_PATH=""
     STORED_FUSE_MOUNT=""
@@ -78,19 +127,15 @@ start_daemon() {
     stop_daemon >/dev/null 2>&1 || true
 
     mkdir -p "$TARGET_DIR"
-    export PROTON_MOUNT_POINT="$TARGET_DIR"
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
     export PROTON_SYNC_MODE="$SYNC_MODE"
-
-    # Persist config state into SQLite DB for cross-process consistency
-    mkdir -p "${HOME}/.config/proton-drive-sync"
-    if command -v sqlite3 >/dev/null 2>&1; then
-        sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS sync_config (key TEXT PRIMARY KEY, value TEXT);" 2>/dev/null || true
-        sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO sync_config (key, value) VALUES ('sync_mode', '${SYNC_MODE}');" 2>/dev/null || true
-        if [ "$SYNC_MODE" = "fuse" ]; then
-            sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO sync_config (key, value) VALUES ('fuse_mount_point', '${TARGET_DIR}');" 2>/dev/null || true
-        else
-            sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO sync_config (key, value) VALUES ('local_sync_path', '${TARGET_DIR}');" 2>/dev/null || true
-        fi
+    if [ "$SYNC_MODE" = "fuse" ]; then
+        export PROTON_FUSE_MOUNT_POINT="$TARGET_DIR"
+        unset PROTON_FULL_SYNC_PATH
+    else
+        export PROTON_FULL_SYNC_PATH="$TARGET_DIR"
+        unset PROTON_FUSE_MOUNT_POINT
     fi
 
     echo "============================================="
@@ -100,14 +145,23 @@ start_daemon() {
     echo "============================================="
 
     NODE_BIN="$(command -v node || echo /usr/bin/node)"
-    LOGFILE="${HOME}/.config/proton-drive-sync/daemon.log"
+    LOGFILE="$DAEMON_LOG"
+    touch "$LOGFILE"
+    chmod 600 "$LOGFILE"
     # Use setsid to create a new session so the daemon survives shell exit
-    setsid env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_MOUNT_POINT="$TARGET_DIR" \
-        "$NODE_BIN" "${SCRIPT_DIR}/release/proton-sync.js" \
-        > "$LOGFILE" 2>&1 &
+    if [ "$SYNC_MODE" = "fuse" ]; then
+        setsid env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_FUSE_MOUNT_POINT="$TARGET_DIR" \
+            "$NODE_BIN" "${SCRIPT_DIR}/release/proton-sync.js" \
+            > "$LOGFILE" 2>&1 &
+    else
+        setsid env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_FULL_SYNC_PATH="$TARGET_DIR" \
+            "$NODE_BIN" "${SCRIPT_DIR}/release/proton-sync.js" \
+            > "$LOGFILE" 2>&1 &
+    fi
     DAEMON_PID=$!
     disown "$DAEMON_PID" 2>/dev/null || true
-    echo "$DAEMON_PID" > "${HOME}/.config/proton-drive-sync/daemon.pid"
+    echo "$DAEMON_PID" > "$DAEMON_PID_FILE"
+    chmod 600 "$DAEMON_PID_FILE"
     sleep 1
 
     if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
@@ -120,9 +174,10 @@ start_daemon() {
 
     if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
         if [ -f "$TRAY_SCRIPT" ]; then
-            if ! pgrep -f "proton-drive-tray.py" > /dev/null 2>&1; then
+            if [ -z "$(find_processes_with_exact_arg "$TRAY_SCRIPT" | head -n 1)" ]; then
                 echo "Starting system tray..."
-                nohup python3 "$TRAY_SCRIPT" > "${HOME}/.config/proton-drive-sync/tray.log" 2>&1 &
+                setsid -f python3 "$TRAY_SCRIPT" \
+                    > "${CONFIG_DIR}/tray.log" 2>&1 < /dev/null
             fi
         fi
     fi
@@ -132,27 +187,27 @@ stop_daemon() {
     echo "Stopping Proton Drive daemon, systemd service, unmounting FUSE, and stopping tray..."
     systemctl --user stop proton-sync.service 2>/dev/null || true
 
-    DB_FILE="${HOME}/.config/proton-drive-sync/sync_state.db"
+    DB_FILE="${CONFIG_DIR}/sync_state.db"
     STORED_FUSE=""
     if [ -f "$DB_FILE" ] && command -v sqlite3 >/dev/null 2>&1; then
         STORED_FUSE="$(sqlite3 "$DB_FILE" "SELECT value FROM sync_config WHERE key='fuse_mount_point';" 2>/dev/null)"
     fi
 
-    if [ -f "${HOME}/.config/proton-drive-sync/daemon.pid" ]; then
-        STORED_PID="$(cat "${HOME}/.config/proton-drive-sync/daemon.pid" 2>/dev/null)"
+    if [ -f "$DAEMON_PID_FILE" ]; then
+        STORED_PID="$(cat "$DAEMON_PID_FILE" 2>/dev/null)"
         if [ -n "$STORED_PID" ] && kill -0 "$STORED_PID" 2>/dev/null; then
             kill "$STORED_PID" 2>/dev/null && sleep 1
         fi
-        rm -f "${HOME}/.config/proton-drive-sync/daemon.pid"
+        rm -f "$DAEMON_PID_FILE"
     fi
-    pkill -f "[p]roton-sync" 2>/dev/null || true
-    pkill -f "[p]roton-drive-launcher.sh" 2>/dev/null || true
-    pkill -f "[p]roton-drive-tray.py" 2>/dev/null || true
+    terminate_processes_with_exact_arg "${SCRIPT_DIR}/release/proton-sync.js"
+    terminate_processes_with_exact_arg "${SCRIPT_DIR}/proton-drive-launcher.sh"
+    terminate_processes_with_exact_arg "$TRAY_SCRIPT"
 
     # Clean unmount default & stored FUSE mount points
-    fusermount -u -z "${HOME}/P-Drive-FUSE" 2>/dev/null || umount -l "${HOME}/P-Drive-FUSE" 2>/dev/null || true
+    unmount_fuse_path "${HOME}/P-Drive-FUSE"
     if [ -n "$STORED_FUSE" ] && [ "$STORED_FUSE" != "${HOME}/P-Drive-FUSE" ]; then
-        fusermount -u -z "$STORED_FUSE" 2>/dev/null || umount -l "$STORED_FUSE" 2>/dev/null || true
+        unmount_fuse_path "$STORED_FUSE"
     fi
     echo "Stopped cleanly."
 }
@@ -181,7 +236,7 @@ case "$cmd" in
         start_daemon "$2" "$3"
         ;;
     status)
-        DB_FILE="${HOME}/.config/proton-drive-sync/sync_state.db"
+        DB_FILE="${CONFIG_DIR}/sync_state.db"
         MODE_VAL="full"
         PATH_VAL="${HOME}/P-Drive"
         FUSE_VAL="${HOME}/P-Drive-FUSE"
@@ -213,16 +268,25 @@ case "$cmd" in
 
         # Daemon Process Status
         DAEMON_INFO="Not Running"
-        if pgrep -f "[p]roton-sync" >/dev/null 2>&1; then
-            DPID="$(pgrep -f "[p]roton-sync" | head -n 1)"
+        DPID=""
+        if [ -f "$DAEMON_PID_FILE" ]; then
+            DPID="$(cat "$DAEMON_PID_FILE" 2>/dev/null)"
+            if [ -z "$DPID" ] || ! kill -0 "$DPID" 2>/dev/null; then
+                DPID=""
+            fi
+        fi
+        if [ -z "$DPID" ]; then
+            DPID="$(find_processes_with_exact_arg "${SCRIPT_DIR}/release/proton-sync.js" | head -n 1)"
+        fi
+        if [ -n "$DPID" ]; then
             DAEMON_INFO="Running (PID: $DPID)"
         fi
         echo " Daemon Status:   ${DAEMON_INFO}"
 
         # Tray Icon Status
         TRAY_INFO="Not Running"
-        if pgrep -f "[p]roton-drive-tray.py" >/dev/null 2>&1; then
-            TPID="$(pgrep -f "[p]roton-drive-tray.py" | head -n 1)"
+        TPID="$(find_processes_with_exact_arg "$TRAY_SCRIPT" | head -n 1)"
+        if [ -n "$TPID" ]; then
             TRAY_INFO="Running (PID: $TPID)"
         fi
         echo " System Tray:     ${TRAY_INFO}"
@@ -232,14 +296,13 @@ case "$cmd" in
         ;;
     logs)
         LOG_FILE="${HOME}/.local/state/proton-drive-cli/proton-drive.log"
-        DAEMON_LOG="${HOME}/.config/proton-drive-sync/daemon.log"
         echo "Tailing daemon logs (Ctrl+C to exit)..."
         if [ -f "$LOG_FILE" ] && [ -f "$DAEMON_LOG" ]; then
             tail -F "$DAEMON_LOG" "$LOG_FILE"
         elif [ -f "$LOG_FILE" ]; then
             tail -F "$LOG_FILE"
         else
-            mkdir -p "${HOME}/.config/proton-drive-sync"
+            mkdir -p "$CONFIG_DIR"
             touch "$DAEMON_LOG"
             tail -F "$DAEMON_LOG"
         fi
@@ -263,7 +326,7 @@ case "$cmd" in
         echo "Stopping daemon, systemd service, and tray..."
         stop_daemon
         echo "Clearing local sync databases, state, and caches..."
-        rm -rf "${HOME}/.config/proton-drive-sync"
+        rm -rf "$CONFIG_DIR"
         rm -rf "${HOME}/.config/proton-drive"
         rm -rf "${HOME}/.local/share/proton-drive-cli"
         rm -rf "${HOME}/.local/state/proton-drive-cli"

@@ -13,28 +13,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
+
+      - name: Initialize application SDK only
+        run: git submodule update --init sdk
 
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Install JS Dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build Proton Sync Binary
         run: bun run build
 
       - name: Create Release Package
         run: |
-          tar -czvf proton-drive-linux.tar.gz release/proton-sync proton-drive-tray.py proton-drive-launcher.sh setup.sh drive.sh uninstall.sh icons/
+          tar -czf proton-drive-linux.tar.gz \
+            release/proton-sync release/proton-sync.js \
+            package.json bun.lockb tsconfig.json \
+            src/ scripts/ sdk/ \
+            proton-drive-tray.py proton-drive-launcher.sh \
+            setup.sh drive.sh uninstall.sh icons/ README.md LICENSE
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             release/proton-sync
+            release/proton-sync.js
             proton-drive-linux.tar.gz
           draft: true
           prerelease: false

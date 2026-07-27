@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { init } from '../../sdk/cli/src/init';
-import type { InitConfig } from '../../sdk/cli/src/config';
+import { getConfig, type InitConfig } from '../../sdk/cli/src/config';
 import type { EventsProvider } from '../../sdk/cli/src/events/interface';
 
 export type { InitConfig, EventsProvider };
@@ -13,6 +15,7 @@ export interface AccountQuota {
 }
 
 export type SdkClientInstance = Awaited<ReturnType<typeof init>> & {
+    clientUid: string;
     getQuota: () => Promise<AccountQuota>;
 };
 
@@ -21,6 +24,13 @@ export type SdkClientInstance = Awaited<ReturnType<typeof init>> & {
  */
 export async function initSdk(configOptions: InitConfig): Promise<SdkClientInstance> {
     const client = await init(configOptions);
+    const config = getConfig(configOptions);
+    const clientUidFile = JSON.parse(
+        await readFile(path.join(config.appDir, 'clientUid.json'), 'utf8'),
+    ) as { clientUid?: unknown };
+    if (typeof clientUidFile.clientUid !== 'string') {
+        throw new Error('Proton Drive SDK client UID is missing or invalid');
+    }
 
     const getQuota = async (): Promise<AccountQuota> => {
         const apiClient = (client as any).apiClient;
@@ -36,6 +46,7 @@ export async function initSdk(configOptions: InitConfig): Promise<SdkClientInsta
 
     return {
         ...client,
+        clientUid: clientUidFile.clientUid,
         getQuota,
     };
 }

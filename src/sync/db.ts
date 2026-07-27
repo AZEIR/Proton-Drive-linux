@@ -46,28 +46,58 @@ export class SyncDatabase {
     }
 
     private initTables() {
-        // Create sync_mappings
-        this.db.run(`
-            CREATE TABLE IF NOT EXISTS sync_mappings (
-                local_path TEXT PRIMARY KEY,
-                node_uid TEXT NOT NULL,
-                is_dir INTEGER,
-                size INTEGER,
-                mtime INTEGER,
-                sha1 TEXT,
-                remote_revision_uid TEXT,
-                remote_mtime INTEGER
-            )
-        `);
-        this.db.run(`CREATE INDEX IF NOT EXISTS idx_mappings_uid ON sync_mappings(node_uid)`);
-
-        // Create sync_config
+        // Config must exist before mapping migration so legacy rows can be
+        // assigned to the mode that owned them.
         this.db.run(`
             CREATE TABLE IF NOT EXISTS sync_config (
                 key TEXT PRIMARY KEY,
                 value TEXT
             )
         `);
+
+        // Mappings are isolated by sync mode. A FUSE inode cache is not a
+        // full-sync filesystem snapshot and must never drive full-sync deletes.
+        this.db.run(`
+            CREATE TABLE IF NOT EXISTS sync_mappings (
+                sync_mode TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                node_uid TEXT NOT NULL,
+                is_dir INTEGER,
+                size INTEGER,
+                mtime INTEGER,
+                sha1 TEXT,
+                remote_revision_uid TEXT,
+                remote_mtime INTEGER,
+                PRIMARY KEY (sync_mode, local_path)
+            )
+        `);
+        const mappingColumns = this.db.prepare('PRAGMA table_info(sync_mappings)').all() as { name: string }[];
+        if (!mappingColumns.some((column) => column.name === 'sync_mode')) {
+            const legacyMode = this.getSyncMode();
+            this.db.run('ALTER TABLE sync_mappings RENAME TO sync_mappings_legacy');
+            this.db.run(`
+                CREATE TABLE sync_mappings (
+                    sync_mode TEXT NOT NULL,
+                    local_path TEXT NOT NULL,
+                    node_uid TEXT NOT NULL,
+                    is_dir INTEGER,
+                    size INTEGER,
+                    mtime INTEGER,
+                    sha1 TEXT,
+                    remote_revision_uid TEXT,
+                    remote_mtime INTEGER,
+                    PRIMARY KEY (sync_mode, local_path)
+                )
+            `);
+            this.db.prepare(`
+                INSERT INTO sync_mappings
+                    (sync_mode, local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime)
+                SELECT ?, local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
+                FROM sync_mappings_legacy
+            `).run(legacyMode);
+            this.db.run('DROP TABLE sync_mappings_legacy');
+        }
+        this.db.run(`CREATE INDEX IF NOT EXISTS idx_mappings_mode_uid ON sync_mappings(sync_mode, node_uid)`);
 
         // Create sync_logs
         this.db.run(`
@@ -84,10 +114,48 @@ export class SyncDatabase {
         // Persist pending local deletes across crashes/restarts
         this.db.run(`
             CREATE TABLE IF NOT EXISTS pending_deletes (
-                local_path TEXT PRIMARY KEY,
+                sync_mode TEXT NOT NULL,
+                local_path TEXT NOT NULL,
                 node_uid TEXT NOT NULL,
                 is_dir INTEGER NOT NULL,
-                queued_at INTEGER NOT NULL
+                queued_at INTEGER NOT NULL,
+                PRIMARY KEY (sync_mode, local_path)
+            )
+        `);
+        const pendingColumns = this.db.prepare('PRAGMA table_info(pending_deletes)').all() as { name: string }[];
+        if (!pendingColumns.some((column) => column.name === 'sync_mode')) {
+            const legacyMode = this.getSyncMode();
+            this.db.run('ALTER TABLE pending_deletes RENAME TO pending_deletes_legacy');
+            this.db.run(`
+                CREATE TABLE pending_deletes (
+                    sync_mode TEXT NOT NULL,
+                    local_path TEXT NOT NULL,
+                    node_uid TEXT NOT NULL,
+                    is_dir INTEGER NOT NULL,
+                    queued_at INTEGER NOT NULL,
+                    PRIMARY KEY (sync_mode, local_path)
+                )
+            `);
+            this.db.prepare(`
+                INSERT INTO pending_deletes
+                    (sync_mode, local_path, node_uid, is_dir, queued_at)
+                SELECT ?, local_path, node_uid, is_dir, queued_at
+                FROM pending_deletes_legacy
+            `).run(legacyMode);
+            this.db.run('DROP TABLE pending_deletes_legacy');
+        }
+
+        // FUSE writes are acknowledged by the kernel before a cloud upload can
+        // necessarily finish. Persist that writeback queue so a crash or network
+        // outage cannot silently forget cache-only user data.
+        this.db.run(`
+            CREATE TABLE IF NOT EXISTS fod_pending_uploads (
+                local_path TEXT PRIMARY KEY,
+                node_uid TEXT NOT NULL,
+                cache_path TEXT NOT NULL,
+                queued_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT ''
             )
         `);
     }
@@ -135,19 +203,24 @@ export class SyncDatabase {
 
     // Mapping Methods
     getMapping(localPath: string): SyncMapping | undefined {
-        return this.db.prepare('SELECT * FROM sync_mappings WHERE local_path = ?').get(localPath) as SyncMapping | undefined;
+        return this.db.prepare(
+            'SELECT local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime FROM sync_mappings WHERE sync_mode = ? AND local_path = ?',
+        ).get(this.getSyncMode(), localPath) as SyncMapping | undefined;
     }
 
     getMappingByNodeUid(nodeUid: string): SyncMapping | undefined {
-        return this.db.prepare('SELECT * FROM sync_mappings WHERE node_uid = ?').get(nodeUid) as SyncMapping | undefined;
+        return this.db.prepare(
+            'SELECT local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime FROM sync_mappings WHERE sync_mode = ? AND node_uid = ?',
+        ).get(this.getSyncMode(), nodeUid) as SyncMapping | undefined;
     }
 
     setMapping(mapping: SyncMapping): void {
         this.db.prepare(`
             INSERT OR REPLACE INTO sync_mappings (
-                local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
-            ) VALUES ($local_path, $node_uid, $is_dir, $size, $mtime, $sha1, $remote_revision_uid, $remote_mtime)
+                sync_mode, local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
+            ) VALUES ($sync_mode, $local_path, $node_uid, $is_dir, $size, $mtime, $sha1, $remote_revision_uid, $remote_mtime)
         `).run({
+            $sync_mode: this.getSyncMode(),
             $local_path: mapping.local_path,
             $node_uid: mapping.node_uid,
             $is_dir: mapping.is_dir,
@@ -160,25 +233,65 @@ export class SyncDatabase {
     }
 
     deleteMapping(localPath: string): void {
-        this.db.prepare('DELETE FROM sync_mappings WHERE local_path = ?').run(localPath);
+        this.db.prepare('DELETE FROM sync_mappings WHERE sync_mode = ? AND local_path = ?').run(this.getSyncMode(), localPath);
     }
 
     deleteMappingByNodeUid(nodeUid: string): void {
-        this.db.prepare('DELETE FROM sync_mappings WHERE node_uid = ?').run(nodeUid);
+        this.db.prepare('DELETE FROM sync_mappings WHERE sync_mode = ? AND node_uid = ?').run(this.getSyncMode(), nodeUid);
     }
 
     getAllMappings(): SyncMapping[] {
-        return this.db.prepare('SELECT * FROM sync_mappings').all() as SyncMapping[];
+        return this.db.prepare(
+            'SELECT local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime FROM sync_mappings WHERE sync_mode = ?',
+        ).all(this.getSyncMode()) as SyncMapping[];
     }
 
     getMappingCount(): number {
-        return (this.db.prepare('SELECT COUNT(*) as c FROM sync_mappings').get() as { c: number }).c;
+        return (this.db.prepare('SELECT COUNT(*) as c FROM sync_mappings WHERE sync_mode = ?').get(this.getSyncMode()) as { c: number }).c;
     }
 
     getMappingsByPrefix(pathPrefix: string): SyncMapping[] {
         return this.db.prepare(
-            'SELECT * FROM sync_mappings WHERE local_path LIKE ? ESCAPE \'\\\'',
-        ).all(pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%') as SyncMapping[];
+            'SELECT local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime FROM sync_mappings WHERE sync_mode = ? AND local_path LIKE ? ESCAPE \'\\\'',
+        ).all(this.getSyncMode(), pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%') as SyncMapping[];
+    }
+
+    getDirectChildren(parentPath: string): SyncMapping[] {
+        if (!parentPath) {
+            return this.db.prepare(`
+                SELECT local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
+                FROM sync_mappings
+                WHERE sync_mode = ? AND INSTR(local_path, '/') = 0
+                ORDER BY local_path
+            `).all(this.getSyncMode()) as SyncMapping[];
+        }
+        const escaped = parentPath.replace(/[%_\\]/g, '\\$&');
+        return this.db.prepare(`
+            SELECT local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime
+            FROM sync_mappings
+            WHERE sync_mode = ?
+              AND local_path LIKE ? ESCAPE '\\'
+              AND INSTR(SUBSTR(local_path, ?), '/') = 0
+            ORDER BY local_path
+        `).all(
+            this.getSyncMode(),
+            `${escaped}/%`,
+            parentPath.length + 2,
+        ) as SyncMapping[];
+    }
+
+    hasMappingsByPrefix(pathPrefix: string): boolean {
+        return Boolean(
+            this.db.prepare(`
+                SELECT 1 AS found
+                FROM sync_mappings
+                WHERE sync_mode = ? AND local_path LIKE ? ESCAPE '\\'
+                LIMIT 1
+            `).get(
+                this.getSyncMode(),
+                pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%',
+            ),
+        );
     }
 
     /**
@@ -190,46 +303,48 @@ export class SyncDatabase {
         const escaped = oldPrefix.replace(/[%_\\]/g, '\\$&');
         // Fetch children before rename so callers get the old paths
         const children = this.db.prepare(
-            "SELECT * FROM sync_mappings WHERE local_path LIKE ? ESCAPE '\\'",
-        ).all(escaped + '/%') as SyncMapping[];
+            "SELECT local_path, node_uid, is_dir, size, mtime, sha1, remote_revision_uid, remote_mtime FROM sync_mappings WHERE sync_mode = ? AND local_path LIKE ? ESCAPE '\\'",
+        ).all(this.getSyncMode(), escaped + '/%') as SyncMapping[];
         if (children.length === 0) return [];
         // Single UPDATE: replace the prefix in-place using SUBSTR
         this.db.prepare(
-            "UPDATE sync_mappings SET local_path = ? || SUBSTR(local_path, ?) WHERE local_path LIKE ? ESCAPE '\\'",
-        ).run(newPrefix, oldPrefix.length + 1, escaped + '/%');
+            "UPDATE sync_mappings SET local_path = ? || SUBSTR(local_path, ?) WHERE sync_mode = ? AND local_path LIKE ? ESCAPE '\\'",
+        ).run(newPrefix, oldPrefix.length + 1, this.getSyncMode(), escaped + '/%');
         return children;
     }
 
     deleteMappingsByPrefix(pathPrefix: string): void {
         this.db.prepare(
-            'DELETE FROM sync_mappings WHERE local_path LIKE ? ESCAPE \'\\\'',
-        ).run(pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%');
+            'DELETE FROM sync_mappings WHERE sync_mode = ? AND local_path LIKE ? ESCAPE \'\\\'',
+        ).run(this.getSyncMode(), pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%');
     }
 
     clearMappings(): void {
-        this.db.run('DELETE FROM sync_mappings');
+        this.db.prepare('DELETE FROM sync_mappings WHERE sync_mode = ?').run(this.getSyncMode());
         this.setConfig("full_sync_completed", "0");
     }
 
     // Pending delete persistence — survives crashes/restarts
     setPendingDelete(localPath: string, nodeUid: string, isDir: boolean): void {
         this.db.prepare(
-            'INSERT OR REPLACE INTO pending_deletes (local_path, node_uid, is_dir, queued_at) VALUES (?, ?, ?, ?)',
-        ).run(localPath, nodeUid, isDir ? 1 : 0, Date.now());
+            'INSERT OR REPLACE INTO pending_deletes (sync_mode, local_path, node_uid, is_dir, queued_at) VALUES (?, ?, ?, ?, ?)',
+        ).run(this.getSyncMode(), localPath, nodeUid, isDir ? 1 : 0, Date.now());
     }
 
     deletePendingDelete(localPath: string): void {
-        this.db.prepare('DELETE FROM pending_deletes WHERE local_path = ?').run(localPath);
+        this.db.prepare('DELETE FROM pending_deletes WHERE sync_mode = ? AND local_path = ?').run(this.getSyncMode(), localPath);
     }
 
     deletePendingDeletesByPrefix(pathPrefix: string): void {
         this.db.prepare(
-            "DELETE FROM pending_deletes WHERE local_path LIKE ? ESCAPE '\\'",
-        ).run(pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%');
+            "DELETE FROM pending_deletes WHERE sync_mode = ? AND local_path LIKE ? ESCAPE '\\'",
+        ).run(this.getSyncMode(), pathPrefix.replace(/[%_\\]/g, '\\$&') + '/%');
     }
 
     getPendingDeletes(): { local_path: string; node_uid: string; is_dir: number; queued_at: number }[] {
-        return this.db.prepare('SELECT * FROM pending_deletes ORDER BY queued_at ASC').all() as {
+        return this.db.prepare(
+            'SELECT local_path, node_uid, is_dir, queued_at FROM pending_deletes WHERE sync_mode = ? ORDER BY queued_at ASC',
+        ).all(this.getSyncMode()) as {
             local_path: string;
             node_uid: string;
             is_dir: number;
@@ -238,7 +353,84 @@ export class SyncDatabase {
     }
 
     clearPendingDeletes(): void {
-        this.db.run('DELETE FROM pending_deletes');
+        this.db.prepare('DELETE FROM pending_deletes WHERE sync_mode = ?').run(this.getSyncMode());
+    }
+
+    setPendingFodUpload(localPath: string, nodeUid: string, cachePath: string): void {
+        this.db.prepare(`
+            INSERT INTO fod_pending_uploads
+                (local_path, node_uid, cache_path, queued_at, attempts, last_error)
+            VALUES (?, ?, ?, ?, 0, '')
+            ON CONFLICT(local_path) DO UPDATE SET
+                node_uid = excluded.node_uid,
+                cache_path = excluded.cache_path,
+                queued_at = excluded.queued_at
+        `).run(localPath, nodeUid, cachePath, Date.now());
+    }
+
+    markPendingFodUploadFailed(localPath: string, error: string): void {
+        this.db.prepare(`
+            UPDATE fod_pending_uploads
+            SET attempts = attempts + 1, last_error = ?
+            WHERE local_path = ?
+        `).run(error, localPath);
+    }
+
+    deletePendingFodUpload(localPath: string): void {
+        this.db.prepare('DELETE FROM fod_pending_uploads WHERE local_path = ?').run(localPath);
+    }
+
+    getPendingFodUploads(): {
+        local_path: string;
+        node_uid: string;
+        cache_path: string;
+        queued_at: number;
+        attempts: number;
+        last_error: string;
+    }[] {
+        return this.db.prepare(
+            'SELECT * FROM fod_pending_uploads ORDER BY queued_at ASC',
+        ).all() as {
+            local_path: string;
+            node_uid: string;
+            cache_path: string;
+            queued_at: number;
+            attempts: number;
+            last_error: string;
+        }[];
+    }
+
+    hasPendingFodUpload(localPath: string): boolean {
+        return Boolean(
+            this.db.prepare('SELECT 1 AS found FROM fod_pending_uploads WHERE local_path = ?').get(localPath),
+        );
+    }
+
+    getPendingFodUploadCount(): number {
+        return (
+            this.db.prepare('SELECT COUNT(*) AS count FROM fod_pending_uploads').get() as { count: number }
+        ).count;
+    }
+
+    /**
+     * Finds upload paths whose most recent upload attempt failed. This supports
+     * upgrading from releases that logged failed FUSE writeback but did not
+     * persist a durable retry queue.
+     */
+    getUnresolvedFailedUploadPaths(): string[] {
+        const rows = this.db.prepare(`
+            SELECT log.file_path
+            FROM sync_logs AS log
+            INNER JOIN (
+                SELECT file_path, MAX(id) AS latest_id
+                FROM sync_logs
+                WHERE direction = 'upload'
+                GROUP BY file_path
+            ) AS latest ON latest.latest_id = log.id
+            WHERE log.status = 'failed'
+            ORDER BY log.id ASC
+        `).all() as { file_path: string }[];
+        return rows.map((row) => row.file_path);
     }
 
     // Logging Methods

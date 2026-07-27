@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
-import { startDashboard } from "../src/sync/dashboard";
+import { startAuthenticatedSync, startDashboard } from "../src/sync/dashboard";
 import { SyncDatabase } from "../src/sync/db";
 
 describe("Dashboard API", () => {
@@ -32,6 +32,7 @@ describe("Dashboard API", () => {
             isWifiSafeMode: mock().mockReturnValue(false),
             setWifiSafeMode: mock(),
             start: mock().mockResolvedValue(undefined),
+            startFodEventLoop: mock().mockResolvedValue(undefined),
             stop: mock().mockResolvedValue(undefined),
             pause: mock().mockResolvedValue(undefined),
             resume: mock().mockResolvedValue(undefined),
@@ -134,6 +135,17 @@ describe("Dashboard API", () => {
         expect(data.error).toBe("Already logged in");
     });
 
+    it("should start FUSE instead of full sync after authentication", async () => {
+        const fod = {
+            isFuseMode: true,
+            start: mock().mockResolvedValue(undefined),
+        };
+        await startAuthenticatedSync(mockEngine, fod as any);
+        expect(fod.start).toHaveBeenCalled();
+        expect(mockEngine.startFodEventLoop).toHaveBeenCalled();
+        expect(mockEngine.start).not.toHaveBeenCalled();
+    });
+
     it("GET /api/status should handle null engine and session gracefully when offline", async () => {
         const offlineServer = startDashboard(mockDb as any, null, null, 8090);
         try {
@@ -142,6 +154,12 @@ describe("Dashboard API", () => {
             const data: any = await res.json();
             expect(data.status).toBe("offline");
             expect(data.email).toBe("Not Logged In");
+
+            offlineServer.updateContext(mockEngine, mockSession);
+            const recoveredRes = await fetch("http://localhost:8090/api/status");
+            const recoveredData: any = await recoveredRes.json();
+            expect(recoveredData.status).toBe("synced");
+            expect(recoveredData.email).toBe("test@example.com");
         } finally {
             offlineServer.stop(true);
         }
@@ -202,6 +220,37 @@ describe("Dashboard API", () => {
         expect(data.wifiSafeMode).toBe(true);
         expect(mockEngine.setWifiSafeMode).toHaveBeenCalledWith(true);
     });
+
+    it("should reject cross-origin dashboard API requests", async () => {
+        const res = await fetch(`${BASE_URL}/api/pause`, {
+            method: "POST",
+            headers: { Origin: "https://attacker.example" },
+        });
+        expect(res.status).toBe(403);
+        expect(mockEngine.pause).not.toHaveBeenCalled();
+    });
+
+    it("should authorize same-origin API requests with the dashboard cookie", async () => {
+        const page = await fetch(`${BASE_URL}/`);
+        const cookie = page.headers.get("set-cookie");
+        expect(cookie).toContain("proton_dashboard=");
+        const res = await fetch(`${BASE_URL}/api/pause`, {
+            method: "POST",
+            headers: {
+                Origin: BASE_URL,
+                Cookie: cookie!.split(";")[0],
+            },
+        });
+        expect(res.status).toBe(200);
+        expect(mockEngine.pause).toHaveBeenCalled();
+    });
+
+    it("should reject browser paths that escape the configured root", async () => {
+        const res = await fetch(`${BASE_URL}/api/browser/open-item`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ relPath: "../../etc/passwd" }),
+        });
+        expect(res.status).toBe(400);
+    });
 });
-
-

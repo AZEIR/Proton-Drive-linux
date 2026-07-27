@@ -24,7 +24,7 @@ It runs a background daemon that keeps a local folder on your computer in sync w
 git clone --recursive https://github.com/AZEIR/Proton-Drive-linux.git
 cd Proton-Drive-linux
 ```
-*(If you already cloned without submodules, run `git submodule update --init --recursive`)*
+*(If you already cloned without submodules, run `git submodule update --init sdk`. Do not initialize the SDK's unrelated nested platform submodules.)*
 
 ### 2. Install [Bun](https://bun.sh) (required to build)
 
@@ -155,6 +155,11 @@ Stops the service, removes the systemd unit, and removes the tray icon. Your loc
 
 - Linux (x86_64)
 - [Bun](https://bun.sh) (for building)
+- Node.js 20.18 or newer (runtime)
+- Python 3 with GTK/AppIndicator bindings (system tray)
+- SQLite 3 command-line tools
+- FUSE 3 userspace tools (`fusermount3`, or `fusermount` on compatible distributions)
+- A C/C++ build toolchain if prebuilt native modules are unavailable
 
 ---
 

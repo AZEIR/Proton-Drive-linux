@@ -23,12 +23,28 @@ _check_bun() {
         echo "Install with: curl -fsSL https://bun.sh/install | bash"
         exit 1
     fi
+    if ! command -v node >/dev/null 2>&1; then
+        echo "ERROR: Node.js 20.18 or newer is required to run the daemon."
+        exit 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: Python 3 is required for the system tray."
+        exit 1
+    fi
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        echo "ERROR: sqlite3 is required by the launcher and maintenance commands."
+        exit 1
+    fi
+    if ! command -v fusermount >/dev/null 2>&1 && ! command -v fusermount3 >/dev/null 2>&1; then
+        echo "ERROR: FUSE userspace tools (fusermount or fusermount3) are required."
+        exit 1
+    fi
 }
 
 _do_build() {
     _check_bun
     echo "Installing Bun dependencies..."
-    (cd "${SCRIPT_DIR}" && bun install)
+    (cd "${SCRIPT_DIR}" && bun install --frozen-lockfile)
 
     echo "Building Proton Drive Sync Daemon binary..."
     mkdir -p "${SCRIPT_DIR}/release"
@@ -109,11 +125,17 @@ X-GNOME-Autostart-enabled=true
 EOF
 cp "${SCRIPT_DIR}/proton-drive-tray.desktop" "${AUTOSTART_DIR}/proton-drive-tray.desktop"
 
+# A previous drive.sh start runs outside the systemd service cgroup. Stop it
+# before enabling the managed service so both processes cannot contend for the
+# dashboard port or FUSE mount. The command is safe when nothing is running.
+"${SCRIPT_DIR}/drive.sh" stop
+
 systemctl --user daemon-reload
+systemctl --user enable --now "$SERVICE_NAME"
 
 echo ""
 echo "============================================="
 echo "  Setup complete!"
-echo "  Start daemon manually with: ./drive.sh start"
+echo "  Daemon service is enabled and running."
 echo "  Dashboard will be at:      http://localhost:8085"
 echo "============================================="

@@ -6,6 +6,7 @@ import threading
 import webbrowser
 import requests
 import fcntl
+import subprocess
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -213,16 +214,30 @@ class ProtonDriveTrayApp:
 
     def restart_service(self, widget):
         def worker():
-            res = os.system("systemctl --user restart proton-sync.service 2>/dev/null")
-            if res != 0:
+            res = subprocess.run(
+                ["systemctl", "--user", "restart", "proton-sync.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if res.returncode != 0:
                 script_dir = os.path.dirname(os.path.realpath(__file__))
-                os.system(f"bash '{script_dir}/drive.sh' restart &")
+                subprocess.Popen(
+                    ["bash", os.path.join(script_dir, "drive.sh"), "restart"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
         threading.Thread(target=worker, daemon=True).start()
 
     def quit_app(self, widget):
         self.stop_flag.set()
-        os.system("systemctl --user stop proton-sync.service 2>/dev/null || true")
-        os.system("pkill -f proton-sync 2>/dev/null || true")
+        subprocess.run(
+            ["systemctl", "--user", "stop", "proton-sync.service"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
         Gtk.main_quit()
 
 def main():

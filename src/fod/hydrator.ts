@@ -27,6 +27,7 @@ export class FodHydrator extends EventEmitter {
     private pinnedNodeUids: Set<string> = new Set();
     private activeHydrations: Map<string, ActiveTransferInfo> = new Map();
     private inFlightHydrations: Map<string, Promise<string>> = new Map();
+    private isPaused = false;
 
     constructor(
         private db: SyncDatabase,
@@ -66,8 +67,25 @@ export class FodHydrator extends EventEmitter {
         return this.cacheDir;
     }
 
+    setPaused(paused: boolean): void {
+        this.isPaused = paused;
+    }
+
     getCachePath(nodeUid: string): string {
         return path.join(this.cacheDir, nodeUid);
+    }
+
+    async rekeyCachedFile(oldNodeUid: string, newNodeUid: string): Promise<string> {
+        const oldPath = this.getCachePath(oldNodeUid);
+        const newPath = this.getCachePath(newNodeUid);
+        if (oldPath !== newPath && existsSync(oldPath)) {
+            await rename(oldPath, newPath);
+        }
+        if (this.pinnedNodeUids.delete(oldNodeUid)) {
+            this.pinnedNodeUids.add(newNodeUid);
+            this.savePinnedState();
+        }
+        return newPath;
     }
 
     isHydrated(nodeUid: string): boolean {
@@ -121,6 +139,9 @@ export class FodHydrator extends EventEmitter {
         if (existsSync(cachePath)) {
             return cachePath;
         }
+        if (this.isPaused) {
+            throw new Error('FUSE transfers are paused');
+        }
 
         // Deduplicate in-flight hydration requests for the same nodeUid
         if (this.inFlightHydrations.has(nodeUid)) {
@@ -164,8 +185,9 @@ export class FodHydrator extends EventEmitter {
             const size = node?.activeRevision?.ok ? (node.activeRevision.value.size || totalSize) : (node?.size || totalSize);
             activeItem.size = size;
 
-            const fsWriteStream = createWriteStream(tmpCachePath);
+            const fsWriteStream = createWriteStream(tmpCachePath, { highWaterMark: 1024 * 1024 });
             let transferred = 0;
+            let lastProgressEmit = 0;
 
             const writableStream = new WritableStream({
                 write: (chunk: any) => {
@@ -179,7 +201,11 @@ export class FodHydrator extends EventEmitter {
                         transferred += buf.length;
                         activeItem.transferred = transferred;
                         activeItem.percent = size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : 100;
-                        this.emit('progress', activeItem);
+                        const now = Date.now();
+                        if (now - lastProgressEmit >= 200 || transferred >= size) {
+                            this.emit('progress', activeItem);
+                            lastProgressEmit = now;
+                        }
                     }
 
                     return new Promise<void>((resolve, reject) => {
@@ -210,6 +236,7 @@ export class FodHydrator extends EventEmitter {
             }
 
             await rename(tmpCachePath, cachePath);
+            await this.enforceCacheLimit(nodeUid);
 
             activeItem.transferred = size;
             activeItem.percent = 100;
@@ -235,7 +262,11 @@ export class FodHydrator extends EventEmitter {
         try {
             const entries = readdirSync(this.cacheDir, { withFileTypes: true });
             for (const entry of entries) {
-                if (entry.isFile() && !entry.name.includes('.tmp-')) {
+                if (
+                    entry.isFile() &&
+                    !entry.name.includes('.tmp-') &&
+                    !entry.name.includes('.upload-')
+                ) {
                     const nodeUid = entry.name;
                     const fullPath = path.join(this.cacheDir, nodeUid);
                     try {
@@ -265,5 +296,28 @@ export class FodHydrator extends EventEmitter {
             totalBytes += f.size;
         }
         return { totalFiles: files.length, totalBytes };
+    }
+
+    private async enforceCacheLimit(protectedNodeUid: string): Promise<void> {
+        const configured = Number(this.db.getConfig('fod_cache_max_bytes', String(10 * 1024 * 1024 * 1024)));
+        if (!Number.isFinite(configured) || configured <= 0) return;
+        const files = this.getCachedFiles().sort((a, b) => a.lastAccessed - b.lastAccessed);
+        let total = files.reduce((sum, file) => sum + file.size, 0);
+        for (const file of files) {
+            if (total <= configured) break;
+            if (
+                file.nodeUid === protectedNodeUid ||
+                file.isPinned ||
+                this.db.hasPendingFodUpload(file.relativePath)
+            ) {
+                continue;
+            }
+            try {
+                await unlink(this.getCachePath(file.nodeUid));
+                total -= file.size;
+            } catch (error) {
+                this.logger.warn(`Failed to evict cache entry ${file.nodeUid}:`, error);
+            }
+        }
     }
 }

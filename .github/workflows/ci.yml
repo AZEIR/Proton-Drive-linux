@@ -14,18 +14,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
+
+      - name: Initialize application SDK only
+        run: git submodule update --init sdk
 
       - name: Setup Bun Environment
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Install Dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Run Tests
-        run: bun test tests/
+        run: bun run test
 
       - name: Check TypeScript Types
         run: bun run check-types
+
+      - name: Build Node daemon
+        run: bun run build
+
+      - name: Verify portable bundle
+        run: |
+          ! grep -F "$GITHUB_WORKSPACE" release/proton-sync.js
+          test -x release/proton-sync
+          test -s release/proton-sync.js

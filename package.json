@@ -3,25 +3,37 @@
   "version": "1.3.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.3.14",
+  "engines": {
+    "node": ">=20.18"
+  },
   "scripts": {
-    "build": "bun build src/cli/daemon.ts --target=node --outfile release/proton-sync.js --alias.bun:sqlite=./src/sync/sqlite.ts && python3 -c \"with open('release/proton-sync.js', 'r+') as f: c = f.read().replace('import { Database as Database2 } from \\\"bun:sqlite\\\";', 'const Database2 = class { constructor(f, o) { return new Database(f, o); } };').replace('import { Database } from \\\"bun:sqlite\\\";', 'const Database_bun = class { constructor(f, o) { return new Database(f, o); } };'); f.seek(0); f.write(c); f.truncate()\" && printf '#!/bin/bash\\nNODE_BIN=\"$(command -v node || echo /usr/bin/node)\"\\nexec \"$NODE_BIN\" \"$(dirname \"$0\")/proton-sync.js\" \"$@\"\\n' > release/proton-sync && chmod +x release/proton-sync",
-    "test": "bun test",
-    "check-types": "tsc --noEmit"
+    "build": "bun run check-types:app && bun scripts/build.mjs",
+    "test": "bun test tests/*.test.ts",
+    "check-types:app": "tsc --noEmit",
+    "check-types": "bun run check-types:app"
   },
   "dependencies": {
     "@protontech/crypto": "2.0.0",
-    "@protontech/drive-sdk": "file:./sdk/client/js",
+    "@noble/hashes": "^1.8.0",
+    "@sentry/bun": "^10.68.0",
     "better-sqlite3": "^13.0.1",
-    "chokidar": "^4.0.1",
+    "chokidar": "^4.0.3",
     "fuse-native": "^2.2.6",
     "ky": "^1.14.3",
-    "openpgp": "^6.3.1"
+    "openpgp": "^6.3.1-0",
+    "ttag": "^1.8.7",
+    "undici": "^7.29.0"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.0",
-    "typescript": "^5.7.0"
+    "@types/bun": "^1.3.14",
+    "typescript": "^5.9.3"
   },
   "patchedDependencies": {
     "@protontech/crypto@2.0.0": "./sdk/config/js/patches/@protontech%2Fcrypto@2.0.0.patch"
-  }
+  },
+  "trustedDependencies": [
+    "better-sqlite3",
+    "fuse-native"
+  ]
 }

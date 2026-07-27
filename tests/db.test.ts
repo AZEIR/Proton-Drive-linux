@@ -94,6 +94,28 @@ describe("SyncDatabase", () => {
             db.deleteMappingsByPrefix("renamed_parent");
             expect(db.getMappingCount()).toBe(1); // Only other/child3.txt remains
         });
+
+        it("should isolate full-sync and FUSE mappings", () => {
+            db.setSyncMode("full");
+            db.setMapping(mockMapping);
+            db.setSyncMode("fuse");
+            expect(db.getMapping(mockMapping.local_path)).toBeFalsy();
+            db.setMapping({ ...mockMapping, node_uid: "fuse-uid" });
+            expect(db.getMapping(mockMapping.local_path)?.node_uid).toBe("fuse-uid");
+            db.setSyncMode("full");
+            expect(db.getMapping(mockMapping.local_path)?.node_uid).toBe("uid-123");
+        });
+
+        it("should return direct children without scanning descendants", () => {
+            db.setMapping({ ...mockMapping, local_path: "parent", node_uid: "parent", is_dir: 1 });
+            db.setMapping({ ...mockMapping, local_path: "parent/child.txt", node_uid: "child" });
+            db.setMapping({ ...mockMapping, local_path: "parent/sub", node_uid: "sub", is_dir: 1 });
+            db.setMapping({ ...mockMapping, local_path: "parent/sub/deep.txt", node_uid: "deep" });
+            expect(db.getDirectChildren("parent").map((item) => item.local_path)).toEqual([
+                "parent/child.txt",
+                "parent/sub",
+            ]);
+        });
     });
 
     describe("Pending Deletes", () => {
@@ -120,6 +142,24 @@ describe("SyncDatabase", () => {
             db.setPendingDelete("parent/file2.txt", "uid-2", false);
             db.deletePendingDeletesByPrefix("parent");
             expect(db.getPendingDeletes().length).toBe(0);
+        });
+    });
+
+    describe("FUSE pending uploads", () => {
+        it("persists failed writeback work until completion", () => {
+            db.setPendingFodUpload("document.txt", "node-1", "/tmp/cache-node-1");
+            expect(db.getPendingFodUploadCount()).toBe(1);
+            db.markPendingFodUploadFailed("document.txt", "offline");
+            expect(db.getPendingFodUploads()[0].last_error).toBe("offline");
+            db.deletePendingFodUpload("document.txt");
+            expect(db.getPendingFodUploadCount()).toBe(0);
+        });
+
+        it("finds only uploads whose latest attempt is still failed", () => {
+            db.log("retry.txt", "upload", "failed", "offline");
+            db.log("recovered.txt", "upload", "failed", "offline");
+            db.log("recovered.txt", "upload", "completed", "uploaded");
+            expect(db.getUnresolvedFailedUploadPaths()).toEqual(["retry.txt"]);
         });
     });
 

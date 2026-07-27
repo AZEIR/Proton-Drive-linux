@@ -3,6 +3,7 @@ import { statSync, existsSync, createReadStream, createWriteStream, readFileSync
 import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { setupNetworkSocketLimits } from './utils/httpAgent';
 
 setupNetworkSocketLimits();
@@ -18,9 +19,10 @@ if (typeof (globalThis as any).Bun.file === 'undefined') {
                 try { return statSync(filePath as any).size; } catch { return 0; }
             },
             stream() {
-                return typeof filePath === 'number'
+                const stream = typeof filePath === 'number'
                     ? createReadStream('', { fd: filePath })
                     : createReadStream(filePath);
+                return Readable.toWeb(stream);
             },
             async exists() {
                 if (typeof filePath === 'number') return true;
@@ -48,11 +50,22 @@ if (typeof (globalThis as any).Bun.file === 'undefined') {
                     ? createWriteStream('', { fd: filePath })
                     : createWriteStream(filePath);
                 return {
-                    write(chunk: any) {
-                        stream.write(chunk);
+                    async write(chunk: any) {
+                        return new Promise<void>((resolve, reject) => {
+                            stream.write(chunk, (error) => {
+                                if (error) reject(error);
+                                else resolve();
+                            });
+                        });
                     },
                     async end() {
-                        return new Promise<void>((resolve) => stream.end(resolve));
+                        return new Promise<void>((resolve, reject) => {
+                            stream.once('error', reject);
+                            stream.end(() => {
+                                stream.off('error', reject);
+                                resolve();
+                            });
+                        });
                     }
                 };
             }
@@ -91,8 +104,16 @@ if (typeof (globalThis as any).Bun.file === 'undefined') {
             let body: any = null;
             if (nodeReq.method !== 'GET' && nodeReq.method !== 'HEAD') {
                 const chunks: Buffer[] = [];
+                let totalBytes = 0;
                 for await (const chunk of nodeReq) {
-                    chunks.push(Buffer.from(chunk));
+                    const buffer = Buffer.from(chunk);
+                    totalBytes += buffer.length;
+                    if (totalBytes > 1024 * 1024) {
+                        nodeRes.statusCode = 413;
+                        nodeRes.end('Request body too large');
+                        return;
+                    }
+                    chunks.push(buffer);
                 }
                 body = Buffer.concat(chunks);
             }
@@ -107,6 +128,13 @@ if (typeof (globalThis as any).Bun.file === 'undefined') {
             try {
                 const response = await options.fetch(request);
                 nodeRes.statusCode = response.status;
+                nodeRes.setHeader('X-Content-Type-Options', 'nosniff');
+                nodeRes.setHeader('X-Frame-Options', 'DENY');
+                nodeRes.setHeader('Referrer-Policy', 'no-referrer');
+                nodeRes.setHeader(
+                    'Content-Security-Policy',
+                    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
+                );
                 response.headers.forEach((v, k) => {
                     nodeRes.setHeader(k, v);
                 });
