@@ -227,52 +227,161 @@ export function getHtmlContent(isFodMode: boolean = false): string {
 
                 <!-- Tab Pane: Settings -->
                 <div id="tab-settings" class="tab-pane">
-                    <div class="card">
+                    <div class="settings-grid">
+                        <!-- Section: Sync & Storage -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">folder_managed</span>
+                                <div>
+                                    <h2>Sync & Storage</h2>
+                                    <p class="settings-header-desc">Manage local directory paths and file synchronization engine modes.</p>
+                                </div>
+                            </div>
+                            
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <span class="setting-title">Sync Folder Path</span>
-                                    <span class="setting-desc">Files inside this directory will sync with your Proton Cloud root.</span>
+                                    <span class="setting-desc">Files inside this local directory will sync with your Proton Cloud root.</span>
                                 </div>
                                 <div class="setting-input-group">
-                                    <input type="text" id="syncPath" value="">
+                                    <input type="text" id="syncPath" value="" placeholder="/home/user/ProtonDrive">
                                     <button class="btn btn-primary" onclick="savePath()">Save Path</button>
                                 </div>
                             </div>
                             
-                            <div class="setting-row">
-                                <div class="setting-info">
+                            <div class="setting-row vertical-setting">
+                                <div class="setting-info" style="margin-bottom:12px;">
                                     <span class="setting-title">Synchronization Mode</span>
-                                    <span class="setting-desc">Switch between Standard Full Sync (local file copies) and FUSE File-On-Demand mode.</span>
+                                    <span class="setting-desc">Choose how Proton Drive handles local files and cloud storage.</span>
                                 </div>
-                                <div style="display:flex;gap:10px;align-items:center;">
-                                    <button class="btn btn-mode" id="btnModeFull" onclick="switchSyncMode('full')">
-                                        <span class="material-symbols-outlined" style="font-size:18px;">folder</span>
-                                        Full Sync
-                                    </button>
-                                    <button class="btn btn-mode" id="btnModeFuse" onclick="switchSyncMode('fuse')">
-                                        <span class="material-symbols-outlined" style="font-size:18px;">cloud</span>
-                                        FUSE Mode
-                                    </button>
+                                <div class="mode-cards-container">
+                                    <div class="mode-card" id="cardModeFull" onclick="switchSyncMode('full')">
+                                        <div class="mode-card-header">
+                                            <span class="material-symbols-outlined mode-card-icon">folder_copy</span>
+                                            <span class="mode-card-badge" id="badgeModeFull">Active</span>
+                                        </div>
+                                        <h4 class="mode-card-title">Standard Full Sync</h4>
+                                        <p class="mode-card-desc">Downloads full copies of all files to your local drive for offline access.</p>
+                                        <div class="mode-card-footer">
+                                            <span class="material-symbols-outlined check-icon">check_circle</span>
+                                            <span>Offline Access Enabled</span>
+                                        </div>
+                                    </div>
+                                    <div class="mode-card" id="cardModeFuse" onclick="switchSyncMode('fuse')">
+                                        <div class="mode-card-header">
+                                            <span class="material-symbols-outlined mode-card-icon">cloud_sync</span>
+                                            <span class="mode-card-badge" id="badgeModeFuse">Active</span>
+                                        </div>
+                                        <h4 class="mode-card-title">FUSE File-On-Demand</h4>
+                                        <p class="mode-card-desc">Mounts your Drive virtual filesystem without using local disk space until accessed.</p>
+                                        <div class="mode-card-footer">
+                                            <span class="material-symbols-outlined check-icon">check_circle</span>
+                                            <span>Saves Disk Space</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <span class="setting-title">Session Connection</span>
-                                    <span class="setting-desc">Disconnect this daemon from your Proton account. All local files will remain intact.</span>
+                        </div>
+
+                        <!-- Section: Network & Speed Performance -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">speed</span>
+                                <div>
+                                    <h2>Network & Performance</h2>
+                                    <p class="settings-header-desc">Control transfer limits, parallel thread limits, and Wi-Fi stability options.</p>
                                 </div>
-                                <button class="btn btn-danger" onclick="logout()">Logout Account</button>
                             </div>
 
                             <div class="setting-row">
                                 <div class="setting-info">
-                                    <span class="setting-title">Daemon Control</span>
-                                    <span class="setting-desc">Stop or restart the background sync process. Stopping will disconnect this dashboard until the daemon is restarted manually.</span>
+                                    <span class="setting-title">Bandwidth Speed Limit</span>
+                                    <span class="setting-desc">Set maximum upload/download transfer rate (0 = Unlimited).</span>
+                                    <div class="speed-presets">
+                                        <button class="speed-preset-btn" onclick="setSpeedPreset(0)">Unlimited</button>
+                                        <button class="speed-preset-btn" onclick="setSpeedPreset(1024)">1 MB/s</button>
+                                        <button class="speed-preset-btn" onclick="setSpeedPreset(5120)">5 MB/s</button>
+                                        <button class="speed-preset-btn" onclick="setSpeedPreset(10240)">10 MB/s</button>
+                                    </div>
+                                </div>
+                                <div class="setting-input-group">
+                                    <div class="input-with-unit">
+                                        <input type="number" id="maxSpeedInput" min="0" placeholder="0">
+                                        <span class="unit-label">KB/s</span>
+                                    </div>
+                                    <button class="btn btn-primary" onclick="saveMaxSpeed()">Save Speed</button>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Parallel File Transfers</span>
+                                    <span class="setting-desc">Simultaneous worker threads (1–10). Lower values reduce router load.</span>
+                                </div>
+                                <div class="setting-input-group">
+                                    <div class="range-with-value">
+                                        <input type="range" id="concurrencyRange" min="1" max="10" value="2" oninput="updateConcurrencyInput(this.value)">
+                                        <input type="number" id="concurrencyInput" min="1" max="10" value="2" oninput="updateConcurrencyRange(this.value)">
+                                    </div>
+                                    <button class="btn btn-primary" onclick="saveConcurrency()">Save Limit</button>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Wi-Fi Safe Mode</span>
+                                    <span class="setting-desc">Restricts worker concurrency to 1 and adds packet pacing to prevent home Wi-Fi disconnects.</span>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="wifiSafeToggle" onchange="toggleWifiSafeMode(this.checked)">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Section: Account & Session -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">manage_accounts</span>
+                                <div>
+                                    <h2>Account & Session</h2>
+                                    <p class="settings-header-desc">Manage connected Proton account session state.</p>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="account-profile-wrapper">
+                                    <div class="user-avatar-md" id="settingsAvatar">?</div>
+                                    <div class="account-profile-details">
+                                        <span id="settingsUserEmail" class="account-email">Not Logged In</span>
+                                        <span id="settingsUserStatus" class="account-status">Connected</span>
+                                    </div>
+                                </div>
+                                <div class="setting-input-group">
+                                    <button class="btn btn-danger" onclick="logout()">Logout Account</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Section: System & Daemon Control -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">terminal</span>
+                                <div>
+                                    <h2>Daemon Service Control</h2>
+                                    <p class="settings-header-desc">Control background synchronization engine process operations.</p>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Background Daemon Process</span>
+                                    <span class="setting-desc">Restart or stop the local sync service. Stopping will pause synchronization until restarted.</span>
                                 </div>
                                 <div style="display:flex;gap:8px;flex-shrink:0;">
                                     <button class="btn" onclick="restartDaemon()">
                                         <span class="material-symbols-outlined" style="font-size:16px;">refresh</span>
-                                        Restart
+                                        Restart Service
                                     </button>
                                     <button class="btn btn-danger" onclick="stopDaemon()">
                                         <span class="material-symbols-outlined" style="font-size:16px;">stop_circle</span>
@@ -280,6 +389,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                     </button>
                                 </div>
                             </div>
+                        </div>
                     </div>
                 </div>
 
@@ -331,6 +441,9 @@ export function getHtmlContent(isFodMode: boolean = false): string {
             </div>
         </main>
     </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
 
     <!-- Dedicated login screen for unauthenticated users -->
     <div id="loginView" class="login-view">

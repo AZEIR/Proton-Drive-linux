@@ -15,7 +15,7 @@
       "bun:sqlite": ["src/sync/sqlite.ts"]
     }
   },
-  "include": ["src/**/*", "tests/**/*", "sdk/**/*"],
-  "exclude": ["node_modules"]
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules", "sdk/**/*.test.ts"]
 }
 

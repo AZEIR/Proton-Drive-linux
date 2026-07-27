@@ -1,5 +1,5 @@
 import { exec, execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
 import { openBrowserUrl } from '../sdk/adapter';
@@ -413,8 +413,10 @@ export function startDashboard(
                 }
 
                 if (req.method === 'POST' && url.pathname === '/api/open-folder') {
-                    if (existsSync(fod.mountPoint)) {
-                        execFile('xdg-open', [fod.mountPoint]);
+                    const mountPoint = fod.mountPoint;
+                    if (mountPoint) {
+                        try { mkdirSync(mountPoint, { recursive: true }); } catch {}
+                        execFile('xdg-open', [mountPoint]);
                         return Response.json({ ok: true });
                     }
                     return Response.json({ ok: false, error: 'Mount point does not exist' }, { status: 404 });
@@ -486,7 +488,8 @@ export function startDashboard(
 
                 if (url.pathname === '/api/open-folder') {
                     const localPath = engine?.getLocalSyncRoot() ?? '';
-                    if (localPath && existsSync(localPath)) {
+                    if (localPath) {
+                        try { mkdirSync(localPath, { recursive: true }); } catch {}
                         execFile('xdg-open', [localPath]);
                         return Response.json({ ok: true });
                     }

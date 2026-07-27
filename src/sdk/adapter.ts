@@ -23,9 +23,11 @@ export async function initSdk(configOptions: InitConfig): Promise<SdkClientInsta
     const client = await init(configOptions);
 
     const getQuota = async (): Promise<AccountQuota> => {
-        const response = await client.apiClient.authenticatedRequest
-            .get(`${client.apiClient.baseUrlWithProtocol}/core/v4/users`)
-            .json<{ User?: { MaxSpace?: number; UsedSpace?: number } }>();
+        const apiClient = (client as any).apiClient;
+        if (!apiClient) return { maxSpace: 0, usedSpace: 0 };
+        const response = (await apiClient.authenticatedRequest
+            .get(`${apiClient.baseUrlWithProtocol}/core/v4/users`)
+            .json()) as { User?: { MaxSpace?: number; UsedSpace?: number } };
         return {
             maxSpace: response.User?.MaxSpace ?? 0,
             usedSpace: response.User?.UsedSpace ?? 0,

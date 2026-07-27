@@ -28,19 +28,19 @@ if (typeof (globalThis as any).Bun.file === 'undefined') {
             },
             async bytes() {
                 const buf = typeof filePath === 'number'
-                    ? await readFile('', { fd: filePath })
+                    ? await readFile('', { fd: filePath } as any)
                     : await readFile(filePath);
                 return new Uint8Array(buf);
             },
             async arrayBuffer() {
                 const buf = typeof filePath === 'number'
-                    ? await readFile('', { fd: filePath })
+                    ? await readFile('', { fd: filePath } as any)
                     : await readFile(filePath);
                 return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
             },
             async text() {
                 return typeof filePath === 'number'
-                    ? await readFile('', { fd: filePath, encoding: 'utf-8' })
+                    ? await readFile('', { fd: filePath, encoding: 'utf-8' } as any)
                     : await readFile(filePath, 'utf-8');
             },
             writer() {
@@ -60,7 +60,7 @@ if (typeof (globalThis as any).Bun.file === 'undefined') {
     };
     (globalThis as any).Bun.write = async function(filePath: string | number, data: any) {
         const targetPath = typeof filePath === 'number' ? ('') as any : filePath;
-        const options = typeof filePath === 'number' ? { fd: filePath } : undefined;
+        const options: any = typeof filePath === 'number' ? { fd: filePath } : undefined;
         if (typeof data === 'string' || Buffer.isBuffer(data) || data instanceof Uint8Array) {
             await writeFile(targetPath, data, options);
         } else if (data && typeof data.arrayBuffer === 'function') {

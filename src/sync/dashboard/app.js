@@ -26,6 +26,65 @@
         let cachedCacheFiles = [];
         let lastCacheJson = '';
 
+        // Toast Notification System
+        function showToast(message, type = 'info', duration = 4000) {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+
+            let iconName = 'info';
+            if (type === 'success') iconName = 'check_circle';
+            if (type === 'danger') iconName = 'error';
+
+            toast.innerHTML = `
+                <span class="material-symbols-outlined toast-icon">${iconName}</span>
+                <span class="toast-message">${escapeHtml(message)}</span>
+            `;
+
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.add('toast-out');
+                setTimeout(() => {
+                    if (toast.parentNode) toast.parentNode.removeChild(toast);
+                }, 250);
+            }, duration);
+        }
+
+        function setSpeedPreset(kbps) {
+            const input = document.getElementById('maxSpeedInput');
+            if (input) {
+                input.value = kbps;
+                updateSpeedPresetButtons(kbps);
+                saveMaxSpeed();
+            }
+        }
+
+        function updateSpeedPresetButtons(val) {
+            const btns = document.querySelectorAll('.speed-preset-btn');
+            btns.forEach(btn => {
+                const onclickAttr = btn.getAttribute('onclick') || '';
+                const match = onclickAttr.match(/setSpeedPreset\((\d+)\)/);
+                if (match && parseInt(match[1], 10) === val) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+
+        function updateConcurrencyInput(val) {
+            const input = document.getElementById('concurrencyInput');
+            if (input) input.value = val;
+        }
+
+        function updateConcurrencyRange(val) {
+            const range = document.getElementById('concurrencyRange');
+            if (range) range.value = val;
+        }
+
         function init() {
             // Load theme from localStorage
             loadTheme();
@@ -585,23 +644,37 @@
             const currentMode = data.mode || (FOD_MODE ? 'fod' : 'full');
             const isFuseMode = currentMode === 'fod' || currentMode === 'fuse';
 
-            // Highlight active mode button in Settings
-            const btnFull = document.getElementById('btnModeFull');
-            const btnFuse = document.getElementById('btnModeFuse');
+            // Highlight active mode card in Settings
+            const cardFull = document.getElementById('cardModeFull');
+            const cardFuse = document.getElementById('cardModeFuse');
 
-            if (btnFull && btnFuse) {
+            if (cardFull && cardFuse) {
                 if (isFuseMode) {
-                    btnFuse.className = 'btn btn-mode mode-active';
-                    btnFuse.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">cloud</span> FUSE Mode <span class="material-symbols-outlined" style="font-size:16px;margin-left:4px;">check</span>`;
-                    
-                    btnFull.className = 'btn btn-mode mode-inactive';
-                    btnFull.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">folder</span> Full Sync`;
+                    cardFuse.classList.add('active');
+                    cardFull.classList.remove('active');
                 } else {
-                    btnFull.className = 'btn btn-mode mode-active';
-                    btnFull.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">folder</span> Full Sync <span class="material-symbols-outlined" style="font-size:16px;margin-left:4px;">check</span>`;
-                    
-                    btnFuse.className = 'btn btn-mode mode-inactive';
-                    btnFuse.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">cloud</span> FUSE Mode`;
+                    cardFull.classList.add('active');
+                    cardFuse.classList.remove('active');
+                }
+            }
+
+            const wifiSafeToggle = document.getElementById('wifiSafeToggle');
+            if (wifiSafeToggle && data.wifiSafeMode !== undefined && document.activeElement !== wifiSafeToggle) {
+                wifiSafeToggle.checked = Boolean(data.wifiSafeMode);
+            }
+            const maxSpeedInput = document.getElementById('maxSpeedInput');
+            if (maxSpeedInput && data.maxSpeedKbps !== undefined && document.activeElement !== maxSpeedInput) {
+                maxSpeedInput.value = data.maxSpeedKbps ?? 0;
+                updateSpeedPresetButtons(data.maxSpeedKbps ?? 0);
+            }
+            const concurrencyInput = document.getElementById('concurrencyInput');
+            const concurrencyRange = document.getElementById('concurrencyRange');
+            if (data.concurrencyLimit !== undefined) {
+                if (concurrencyInput && document.activeElement !== concurrencyInput) {
+                    concurrencyInput.value = data.concurrencyLimit ?? 2;
+                }
+                if (concurrencyRange && document.activeElement !== concurrencyRange) {
+                    concurrencyRange.value = data.concurrencyLimit ?? 2;
                 }
             }
 
@@ -691,16 +764,29 @@
 
             // User Profile Email and Status
             if (data.email !== undefined) {
-                document.getElementById('userEmail').innerText = data.email;
+                const userEmailEl = document.getElementById('userEmail');
+                const settingsUserEmailEl = document.getElementById('settingsUserEmail');
+                if (userEmailEl) userEmailEl.innerText = data.email;
+                if (settingsUserEmailEl) settingsUserEmailEl.innerText = data.email;
+
                 const userStatus = document.getElementById('userStatus');
+                const settingsUserStatus = document.getElementById('settingsUserStatus');
+                const avatarLetter = document.getElementById('avatarLetter');
+                const settingsAvatar = document.getElementById('settingsAvatar');
+
                 if (data.email && data.email !== 'Not Logged In') {
-                    document.getElementById('avatarLetter').innerText = data.email[0].toUpperCase();
-                    userStatus.innerText = 'Connected';
-                    userStatus.style.color = 'var(--success)';
+                    const letter = data.email[0].toUpperCase();
+                    if (avatarLetter) avatarLetter.innerText = letter;
+                    if (settingsAvatar) settingsAvatar.innerText = letter;
+
+                    if (userStatus) { userStatus.innerText = 'Connected'; userStatus.style.color = 'var(--success)'; }
+                    if (settingsUserStatus) { settingsUserStatus.innerText = 'Connected'; settingsUserStatus.style.color = 'var(--success)'; }
                 } else {
-                    document.getElementById('avatarLetter').innerText = '?';
-                    userStatus.innerText = 'Disconnected';
-                    userStatus.style.color = 'var(--danger)';
+                    if (avatarLetter) avatarLetter.innerText = '?';
+                    if (settingsAvatar) settingsAvatar.innerText = '?';
+
+                    if (userStatus) { userStatus.innerText = 'Disconnected'; userStatus.style.color = 'var(--danger)'; }
+                    if (settingsUserStatus) { settingsUserStatus.innerText = 'Disconnected'; settingsUserStatus.style.color = 'var(--danger)'; }
                 }
             }
 
@@ -850,6 +936,10 @@
 
         async function savePath() {
             const pathVal = document.getElementById('syncPath').value;
+            if (!pathVal || !pathVal.trim()) {
+                showToast('Please enter a valid sync folder path', 'danger');
+                return;
+            }
             try {
                 const res = await fetch('/api/set-path', {
                     method: 'POST',
@@ -857,33 +947,39 @@
                     body: JSON.stringify({ path: pathVal })
                 });
                 if (res.ok) {
-                    alert('Sync folder updated successfully!');
+                    showToast('Sync folder path updated successfully!', 'success');
                     fetchStatus();
                 } else {
                     const data = await res.json();
-                    alert('Error: ' + data.error);
+                    showToast('Error: ' + data.error, 'danger');
                 }
             } catch (err) {
-                alert('Request failed: ' + err);
+                showToast('Request failed: ' + err.message, 'danger');
             }
         }
 
         async function logout() {
             if (confirm('Are you sure you want to log out from Proton Drive?')) {
                 await fetch('/api/logout', { method: 'POST' });
-                alert('Logged out successfully.');
-                location.reload();
+                showToast('Logged out successfully.', 'info');
+                setTimeout(() => location.reload(), 1000);
             }
         }
 
         async function stopDaemon() {
             if (!confirm('Stop the sync daemon? This dashboard will disconnect. Restart it manually with ./drive.sh start')) return;
-            try { await fetch('/api/daemon/stop', { method: 'POST' }); } catch {}
+            try { 
+                await fetch('/api/daemon/stop', { method: 'POST' });
+                showToast('Daemon service stopping...', 'info');
+            } catch {}
         }
 
         async function restartDaemon() {
             if (!confirm('Restart the sync daemon? This dashboard will briefly disconnect then reconnect.')) return;
-            try { await fetch('/api/daemon/restart', { method: 'POST' }); } catch {}
+            try { 
+                await fetch('/api/daemon/restart', { method: 'POST' });
+                showToast('Restarting daemon service...', 'info');
+            } catch {}
             setTimeout(() => location.reload(), 3000);
         }
 
@@ -905,9 +1001,9 @@
                     btns.forEach(btn => {
                         btn.innerText = 'Waiting for Authentication...';
                     });
-                    alert('Proton Drive login page has been opened in your browser. Please sign in there, and this dashboard will automatically update once done.');
+                    showToast('Proton Drive login page opened in browser. Please sign in there.', 'info', 6000);
                 } else {
-                    alert('Failed to start login: ' + (result.error || 'Unknown error'));
+                    showToast('Failed to start login: ' + (result.error || 'Unknown error'), 'danger');
                     btns.forEach(btn => {
                         btn.innerText = 'Login to Proton Drive';
                         btn.disabled = false;
@@ -915,7 +1011,7 @@
                     isLoggingIn = false;
                 }
             } catch (err) {
-                alert('Network error trying to start login: ' + err.message);
+                showToast('Network error trying to start login: ' + err.message, 'danger');
                 btns.forEach(btn => {
                     btn.innerText = 'Login to Proton Drive';
                     btn.disabled = false;
@@ -956,12 +1052,105 @@
                 });
                 const data = await res.json();
                 if (data.ok) {
-                    alert(data.message);
+                    showToast(data.message || `Switched sync mode to ${targetMode.toUpperCase()}`, 'success');
                     setTimeout(() => { location.reload(); }, 1500);
                 } else {
-                    alert('Error switching mode: ' + (data.error || 'Unknown error'));
+                    showToast('Error switching mode: ' + (data.error || 'Unknown error'), 'danger');
                 }
             } catch (err) {
-                alert('Network error switching mode: ' + err.message);
+                showToast('Network error switching mode: ' + err.message, 'danger');
             }
         };
+
+        window.toggleWifiSafeMode = async function(enabled) {
+            try {
+                const res = await fetch('/api/set-wifi-safe-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    showToast(`Wi-Fi Safe Mode ${enabled ? 'Enabled' : 'Disabled'}`, 'success');
+                } else {
+                    showToast('Error: ' + (data.error || 'Failed to update Wi-Fi Safe Mode'), 'danger');
+                }
+            } catch (err) {
+                showToast('Network error: ' + err.message, 'danger');
+            }
+        };
+
+        window.saveMaxSpeed = async function() {
+            const input = document.getElementById('maxSpeedInput');
+            const val = parseInt(input ? input.value : '0', 10);
+            if (isNaN(val) || val < 0) return showToast('Invalid speed limit value', 'danger');
+            try {
+                const res = await fetch('/api/set-max-speed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ kbps: val })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    updateSpeedPresetButtons(val);
+                    showToast(`Speed limit set to ${val === 0 ? 'Unlimited' : val + ' KB/s'}`, 'success');
+                } else {
+                    showToast('Error: ' + (data.error || 'Failed to update speed limit'), 'danger');
+                }
+            } catch (err) {
+                showToast('Network error: ' + err.message, 'danger');
+            }
+        };
+
+        window.saveConcurrency = async function() {
+            const input = document.getElementById('concurrencyInput');
+            const val = parseInt(input ? input.value : '2', 10);
+            if (isNaN(val) || val < 1 || val > 10) return showToast('Concurrency limit must be between 1 and 10', 'danger');
+            try {
+                const res = await fetch('/api/set-concurrency', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ concurrency: val })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    updateConcurrencyRange(val);
+                    showToast(`Parallel transfers limit set to ${val}`, 'success');
+                } else {
+                    showToast('Error: ' + (data.error || 'Failed to update concurrency limit'), 'danger');
+                }
+            } catch (err) {
+                showToast('Network error: ' + err.message, 'danger');
+            }
+        };
+
+        // Explicitly attach all HTML onclick action handlers to window
+        window.showToast = showToast;
+        window.setSpeedPreset = setSpeedPreset;
+        window.updateConcurrencyInput = updateConcurrencyInput;
+        window.updateConcurrencyRange = updateConcurrencyRange;
+        window.togglePause = togglePause;
+        window.forceSync = forceSync;
+        window.openFolder = openFolder;
+        window.savePath = savePath;
+        window.logout = logout;
+        window.stopDaemon = stopDaemon;
+        window.restartDaemon = restartDaemon;
+        window.confirmBulkDeletions = confirmBulkDeletions;
+        window.restoreBulkDeletions = restoreBulkDeletions;
+        window.evictAll = evictAll;
+        window.login = login;
+        window.evictFile = evictFile;
+        window.pinFile = pinFile;
+        window.toggleTheme = toggleTheme;
+        window.toggleSidebar = toggleSidebar;
+        window.switchTab = switchTab;
+        window.filterLogs = filterLogs;
+        window.clearLogFilter = clearLogFilter;
+        window.filterCachedFiles = filterCachedFiles;
+        window.clearCacheFilter = clearCacheFilter;
+        window.filterBrowserItems = filterBrowserItems;
+        window.navigateToBreadcrumb = navigateToBreadcrumb;
+        window.hydrateBrowserNode = hydrateBrowserNode;
+        window.pinBrowserNode = pinBrowserNode;
+        window.evictBrowserNode = evictBrowserNode;

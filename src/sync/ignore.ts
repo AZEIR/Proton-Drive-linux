@@ -87,6 +87,18 @@ export class IgnoreMatcher {
     }
 
     /**
+     * Alias for shouldIgnore, calculating relative path from sync root if absolute.
+     */
+    isIgnored(pathStr: string, isDir = false): boolean {
+        let relPath = pathStr;
+        if (path.isAbsolute(pathStr)) {
+            relPath = path.relative(this.syncRoot, pathStr);
+        }
+        if (!relPath || relPath.startsWith('..')) return false;
+        return this.shouldIgnore(relPath, isDir);
+    }
+
+    /**
      * Test a path directly against compiled ignore patterns.
      * Uses last-match-wins semantics: a negated pattern overrides any earlier match.
      */

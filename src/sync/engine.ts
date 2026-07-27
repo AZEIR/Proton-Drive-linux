@@ -13,6 +13,7 @@ import { mkdir, readdir, rename, rm, stat, lstat, unlink } from "node:fs/promise
 import { homedir } from "node:os";
 import path from "node:path";
 import { getSha1, type EventsProvider } from "../sdk/adapter";
+import { updateNetworkSocketLimits } from "../utils/httpAgent";
 import { SyncDatabase, SyncMapping } from "./db";
 import { IgnoreMatcher, PROTONIGNORE_FILENAME } from "./ignore";
 
@@ -26,7 +27,7 @@ export class SyncEngine extends EventEmitter {
   private isPaused: boolean = false;
   private isScanning: boolean = false;
   private isStarted: boolean = false;
-  private ignoredLocalChanges: Set<string> = new Set();
+  private ignoredLocalChanges: Map<string, number> = new Map();
   private watcher: any = null;
   private remoteSubscription: any = null;
   private activeTransfers: Map<
@@ -162,6 +163,7 @@ export class SyncEngine extends EventEmitter {
     if (this.wifiSafeMode) {
       this.concurrencyLimit = 1;
     }
+    updateNetworkSocketLimits(this.wifiSafeMode ? 2 : Math.min(this.concurrencyLimit * 2, 6));
   }
 
   getLocalSyncRoot(): string {
@@ -176,6 +178,7 @@ export class SyncEngine extends EventEmitter {
     if (limit > 0 && limit <= 10) {
       this.concurrencyLimit = limit;
       this.db.setConfig("sync_concurrency", limit.toString());
+      updateNetworkSocketLimits(this.wifiSafeMode ? 2 : Math.min(limit * 2, 6));
       this.logger.info(`Network concurrency limit set to ${this.concurrencyLimit}`);
       this.emit("statusChanged");
     }
@@ -205,6 +208,7 @@ export class SyncEngine extends EventEmitter {
       this.concurrencyLimit = 1;
       this.db.setConfig("sync_concurrency", "1");
     }
+    updateNetworkSocketLimits(enabled ? 2 : Math.min(this.concurrencyLimit * 2, 6));
     this.logger.info(`Wi-Fi Safe Mode set to ${enabled ? "enabled" : "disabled"}`);
     this.emit("statusChanged");
   }
@@ -634,9 +638,9 @@ export class SyncEngine extends EventEmitter {
         const isDir = node.type === NodeType.Folder;
         const rev = node.activeRevision?.ok ? node.activeRevision.value : null;
         const size = rev
-          ? (rev.claimedSize ?? rev.size ?? rev.storageSize ?? 0)
+          ? (rev.claimedSize ?? (rev as any).size ?? (rev as any).storageSize ?? 0)
           : ((node as any).totalStorageSize ?? (node as any).size ?? (node as any).claimedSize ?? 0);
-        const remoteRevUid = rev ? (rev.uid ?? rev.id ?? "") : "";
+        const remoteRevUid = rev ? (rev.uid ?? (rev as any).id ?? "") : "";
         const sha1 = rev?.claimedDigests?.sha1 || "";
         this.db.setMapping({
           local_path: relPath,
@@ -1903,9 +1907,13 @@ export class SyncEngine extends EventEmitter {
     }
 
     // Skip changes triggered by downloading files
-    if (this.ignoredLocalChanges.has(absolutePath)) {
-      this.logger.debug(`Ignoring self-triggered change at ${relativePath}`);
-      return;
+    const ignoredExp = this.ignoredLocalChanges.get(absolutePath);
+    if (ignoredExp !== undefined) {
+      if (Date.now() <= ignoredExp) {
+        this.logger.debug(`Ignoring self-triggered change at ${relativePath}`);
+        return;
+      }
+      this.ignoredLocalChanges.delete(absolutePath);
     }
 
     this.logger.info(
@@ -2682,7 +2690,7 @@ export class SyncEngine extends EventEmitter {
                 metadata,
               );
               uploadController = await uploader.uploadFromStream(
-                currentStream,
+                currentStream as any,
                 [],
                 progressCallback,
               );
@@ -2722,7 +2730,7 @@ export class SyncEngine extends EventEmitter {
                 }
               }
               uploadController = await uploader.uploadFromStream(
-                currentStream,
+                currentStream as any,
                 [],
                 progressCallback,
               );
@@ -2820,9 +2828,9 @@ export class SyncEngine extends EventEmitter {
       const isDir = node.type === NodeType.Folder;
       const rev = node.activeRevision?.ok ? node.activeRevision.value : null;
       const size = rev
-        ? (rev.claimedSize ?? rev.size ?? rev.storageSize ?? 0)
+        ? (rev.claimedSize ?? (rev as any).size ?? (rev as any).storageSize ?? 0)
         : ((node as any).totalStorageSize ?? (node as any).size ?? (node as any).claimedSize ?? 0);
-      const remoteRevUid = rev ? (rev.uid ?? rev.id ?? "") : "";
+      const remoteRevUid = rev ? (rev.uid ?? (rev as any).id ?? "") : "";
       const sha1 = rev?.claimedDigests?.sha1 || "";
       this.db.setMapping({
         local_path: relativePath,

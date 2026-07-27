@@ -7,6 +7,7 @@ import { SyncDatabase } from '../sync/db';
 import { FodHydrator, ActiveTransferInfo } from './hydrator';
 import { FuseDriver } from './fuse-driver';
 import { FodHooks } from '../sync/dashboard';
+import { updateNetworkSocketLimits } from '../utils/httpAgent';
 
 export class ProtonFuseEngine extends EventEmitter implements FodHooks {
     public isFuseMode: boolean = true;
@@ -26,7 +27,12 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
         const home = process.env.HOME || '/tmp';
         this.mountPoint = mountPoint || db.getFuseMountPoint() || path.join(home, 'P-Drive-FUSE');
         this.hydrator = new FodHydrator(db, sdk, logger);
-        
+
+        const wifiSafeMode = db.getConfig('sync_wifi_safe_mode', '0') === '1';
+        const dbConcurrency = parseInt(db.getConfig('sync_concurrency', '2'), 10);
+        const concurrency = wifiSafeMode ? 1 : (!isNaN(dbConcurrency) && dbConcurrency > 0 ? dbConcurrency : 2);
+        updateNetworkSocketLimits(wifiSafeMode ? 2 : Math.min(concurrency * 2, 6));
+
         // Forward hydration progress events for UI real-time SSE stream
         this.hydrator.on('progress', (info) => this.emit('transfersChanged', info));
         this.hydrator.on('start', (info) => this.emit('transfersChanged', info));

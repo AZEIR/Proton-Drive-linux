@@ -39,11 +39,12 @@ export class LocalWatcher extends EventEmitter {
         if (this.watcher) return;
 
         this.watcher = chokidar.watch(this.localSyncRoot, {
-            ignored: (targetPath: string) => {
+            ignored: (targetPath: string, stats?: any) => {
                 const basename = path.basename(targetPath);
                 if (basename === PROTONIGNORE_FILENAME) return false;
                 if (this.isPathTemporarilyIgnored(targetPath)) return true;
-                return this.ignoreMatcher.isIgnored(targetPath);
+                const isDir = stats ? stats.isDirectory() : false;
+                return this.ignoreMatcher.isIgnored(targetPath, isDir);
             },
             persistent: true,
             ignoreInitial: true,

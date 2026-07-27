@@ -36,6 +36,7 @@ export async function runSync(port: number = 8085) {
     try {
         session = await initSdk(initOptions);
     } catch (initErr: any) {
+        console.error('Initialization error details:', initErr);
         console.warn('Network offline or initialization error on startup:', initErr?.message || initErr);
         db.log('system', 'system', 'failed', `Startup offline: ${initErr?.message || initErr}. Monitoring connection...`);
     }
@@ -92,7 +93,7 @@ export async function runSync(port: number = 8085) {
     if (!session) {
         reconnectInterval = setInterval(async () => {
             try {
-                const newSession = await init(initOptions);
+                const newSession = await initSdk(initOptions);
                 if (reconnectInterval) clearInterval(reconnectInterval);
                 session = newSession;
                 const logger = session.logger;

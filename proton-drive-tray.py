@@ -189,10 +189,24 @@ class ProtonDriveTrayApp:
     def resume_sync(self, widget):
         self.async_post("/api/resume")
 
+    def fetch_and_update_status(self):
+        try:
+            r = requests.get(STATUS_URL, timeout=2)
+            if r.status_code == 200:
+                data = r.json()
+                status = data.get("status", "unknown")
+                email = data.get("email", "")
+                mode = data.get("mode", "full")
+                GLib.idle_add(self.update_ui, status, email, mode)
+        except Exception:
+            pass
+
     def async_post(self, endpoint):
         def worker():
             try:
                 requests.post(f"http://localhost:{PORT}{endpoint}", json={}, timeout=2)
+                time.sleep(0.1)
+                self.fetch_and_update_status()
             except Exception as e:
                 print(f"Error calling {endpoint}: {e}", file=sys.stderr)
         threading.Thread(target=worker, daemon=True).start()
