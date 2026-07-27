@@ -84,6 +84,14 @@
             });
         }
 
+        function updateNetworkProfileButtons(profile) {
+            document.querySelectorAll('.network-profile-btn').forEach(btn => {
+                const isActive = btn.dataset.profile === profile;
+                btn.classList.toggle('active', isActive);
+                btn.setAttribute('aria-pressed', String(isActive));
+            });
+        }
+
         function applyConcurrencyValue(val) {
             const input = document.getElementById('concurrencyInput');
             const range = document.getElementById('concurrencyRange');
@@ -100,7 +108,7 @@
             concurrencyDraft = String(val);
             const parsed = Number(val);
             const range = document.getElementById('concurrencyRange');
-            if (range && Number.isInteger(parsed) && parsed >= 1 && parsed <= 10) {
+            if (range && Number.isInteger(parsed) && parsed >= 1 && parsed <= 5) {
                 range.value = String(parsed);
             }
         }
@@ -661,6 +669,7 @@
             const concurrencyRange = document.getElementById('concurrencyRange');
             const concurrencySaveBtn = document.getElementById('concurrencySaveBtn');
             const wifiSafeMode = Boolean(data.wifiSafeMode);
+            updateNetworkProfileButtons(data.networkProfile || (wifiSafeMode ? 'safe' : 'custom'));
             if (concurrencyInput) concurrencyInput.disabled = wifiSafeMode;
             if (concurrencyRange) concurrencyRange.disabled = wifiSafeMode;
             if (concurrencySaveBtn) concurrencySaveBtn.disabled = wifiSafeMode;
@@ -1038,6 +1047,32 @@
             }
         };
 
+        window.setNetworkProfile = async function(profile) {
+            const profileButtons = Array.from(document.querySelectorAll('.network-profile-btn'));
+            profileButtons.forEach(btn => { btn.disabled = true; });
+            try {
+                const res = await fetch('/api/set-network-profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profile })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || `Request failed (${res.status})`);
+                }
+                concurrencyDraft = undefined;
+                updateNetworkProfileButtons(data.networkProfile || profile);
+                await fetchStatus();
+                const labels = { safe: 'Wi-Fi Safe', balanced: 'Balanced', performance: 'Performance' };
+                showToast(`${labels[profile] || profile} network profile enabled`, 'success');
+            } catch (err) {
+                showToast('Could not change network profile: ' + err.message, 'danger');
+                await fetchStatus();
+            } finally {
+                profileButtons.forEach(btn => { btn.disabled = false; });
+            }
+        };
+
         window.saveMaxSpeed = async function() {
             const input = document.getElementById('maxSpeedInput');
             const val = parseInt(input ? input.value : '0', 10);
@@ -1067,7 +1102,7 @@
             const saveBtn = document.getElementById('concurrencySaveBtn');
             const rawValue = concurrencyDraft !== undefined ? concurrencyDraft : (input ? input.value : '2');
             const val = Number(rawValue);
-            if (isNaN(val) || val < 1 || val > 10) return showToast('Concurrency limit must be between 1 and 10', 'danger');
+            if (isNaN(val) || val < 1 || val > 5) return showToast('Concurrency limit must be between 1 and 5', 'danger');
             if (!Number.isInteger(val)) return showToast('Concurrency limit must be a whole number', 'danger');
             if (saveBtn) saveBtn.disabled = true;
             try {
@@ -1081,6 +1116,7 @@
                     const savedValue = data.concurrency ?? val;
                     concurrencyDraft = undefined;
                     applyConcurrencyValue(savedValue);
+                    updateNetworkProfileButtons(data.networkProfile || 'custom');
                     showToast(`Parallel transfers limit set to ${savedValue}`, 'success');
                 } else {
                     showToast('Error: ' + (data.error || 'Failed to update concurrency limit'), 'danger');

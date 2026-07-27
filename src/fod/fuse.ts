@@ -7,7 +7,11 @@ import { SyncDatabase } from '../sync/db';
 import { FodHydrator, ActiveTransferInfo } from './hydrator';
 import { FuseDriver } from './fuse-driver';
 import { FodHooks } from '../sync/dashboard';
-import { updateNetworkSocketLimits } from '../utils/httpAgent';
+import {
+    getRecommendedSocketLimit,
+    MAX_PARALLEL_FILE_TRANSFERS,
+    updateNetworkSocketLimits,
+} from '../utils/httpAgent';
 
 export class ProtonFuseEngine extends EventEmitter implements FodHooks {
     public isFuseMode: boolean = true;
@@ -41,8 +45,12 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
 
         const wifiSafeMode = db.getConfig('sync_wifi_safe_mode', '0') === '1';
         const dbConcurrency = parseInt(db.getConfig('sync_concurrency', '2'), 10);
-        const concurrency = wifiSafeMode ? 1 : (!isNaN(dbConcurrency) && dbConcurrency > 0 ? dbConcurrency : 2);
-        updateNetworkSocketLimits(wifiSafeMode ? 2 : Math.min(concurrency * 2, 6));
+        const concurrency = wifiSafeMode
+            ? 1
+            : (!isNaN(dbConcurrency) && dbConcurrency > 0
+                ? Math.min(dbConcurrency, MAX_PARALLEL_FILE_TRANSFERS)
+                : 2);
+        updateNetworkSocketLimits(getRecommendedSocketLimit(concurrency, wifiSafeMode));
 
         // Forward hydration progress events for UI real-time SSE stream
         this.hydrator.on('progress', (info) => this.emit('transfersChanged', info));
@@ -210,7 +218,10 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
             const configuredWorkers = Number(this.db.getConfig('sync_concurrency', '2'));
             const workerCount = Math.max(
                 1,
-                Math.min(10, Number.isFinite(configuredWorkers) ? configuredWorkers : 2),
+                Math.min(
+                    MAX_PARALLEL_FILE_TRANSFERS,
+                    Number.isFinite(configuredWorkers) ? configuredWorkers : 2,
+                ),
             );
             const workers = Array.from({ length: workerCount }, async () => {
                 while (!signal.aborted) {

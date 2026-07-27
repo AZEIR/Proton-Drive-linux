@@ -12,6 +12,10 @@ describe("Dashboard API", () => {
     const BASE_URL = `http://localhost:${PORT}`;
 
     beforeEach(() => {
+        let concurrencyLimit = 2;
+        let maxSpeedKbps = 0;
+        let wifiSafeMode = false;
+        let networkProfile = "custom";
         mockDb = {
             log: mock(),
             getRecentLogs: mock().mockReturnValue([{ id: 1, message: "test log" }]),
@@ -25,12 +29,26 @@ describe("Dashboard API", () => {
             getActiveTransfers: mock().mockReturnValue([]),
             getLocalSyncRoot: mock().mockReturnValue("/tmp/test-sync"),
             getBulkDeletionCount: mock().mockReturnValue(0),
-            getConcurrencyLimit: mock().mockReturnValue(2),
-            setConcurrencyLimit: mock(),
-            getMaxSpeedKbps: mock().mockReturnValue(0),
-            setMaxSpeedKbps: mock(),
-            isWifiSafeMode: mock().mockReturnValue(false),
-            setWifiSafeMode: mock(),
+            getConcurrencyLimit: mock(() => concurrencyLimit),
+            setConcurrencyLimit: mock((value: number) => {
+                concurrencyLimit = value;
+                wifiSafeMode = false;
+                networkProfile = "custom";
+            }),
+            getMaxSpeedKbps: mock(() => maxSpeedKbps),
+            setMaxSpeedKbps: mock((value: number) => { maxSpeedKbps = value; }),
+            isWifiSafeMode: mock(() => wifiSafeMode),
+            setWifiSafeMode: mock((enabled: boolean) => {
+                wifiSafeMode = enabled;
+                concurrencyLimit = enabled ? 1 : 3;
+                networkProfile = enabled ? "safe" : "balanced";
+            }),
+            getNetworkProfile: mock(() => networkProfile),
+            setNetworkProfile: mock((profile: "safe" | "balanced" | "performance") => {
+                networkProfile = profile;
+                wifiSafeMode = profile === "safe";
+                concurrencyLimit = profile === "safe" ? 1 : profile === "balanced" ? 3 : 5;
+            }),
             start: mock().mockResolvedValue(undefined),
             startFodEventLoop: mock().mockResolvedValue(undefined),
             stop: mock().mockResolvedValue(undefined),
@@ -93,6 +111,8 @@ describe("Dashboard API", () => {
         expect(html).not.toContain("if (!FOD_MODE)");
         expect(html).toContain("fetch('/api/set-speed-limit'");
         expect(html).not.toContain("fetch('/api/set-max-speed'");
+        expect(html).toContain("setNetworkProfile('performance')");
+        expect(html).toContain('id="concurrencyRange" min="1" max="5"');
     });
 
     it("GET /api/status should handle logged out state", async () => {
@@ -152,6 +172,7 @@ describe("Dashboard API", () => {
         expect(status.concurrencyLimit).toBe(2);
         expect(status.maxSpeedKbps).toBe(0);
         expect(status.wifiSafeMode).toBe(false);
+        expect(status.networkProfile).toBe("custom");
 
         const pauseRes = await fetch(`${BASE_URL}/api/pause`, { method: "POST" });
         const resumeRes = await fetch(`${BASE_URL}/api/resume`, { method: "POST" });
@@ -188,6 +209,7 @@ describe("Dashboard API", () => {
         expect(payload).toContain('"concurrencyLimit":2');
         expect(payload).toContain('"maxSpeedKbps":0');
         expect(payload).toContain('"wifiSafeMode":false');
+        expect(payload).toContain('"networkProfile":"custom"');
     });
 
     it("POST /api/sync should call engine.forceSync", async () => {
@@ -292,6 +314,32 @@ describe("Dashboard API", () => {
         expect(data.ok).toBe(true);
         expect(data.concurrency).toBe(3);
         expect(mockEngine.setConcurrencyLimit).toHaveBeenCalledWith(3);
+        expect(data.networkProfile).toBe("custom");
+    });
+
+    it("POST /api/set-concurrency should reject values above the real SDK queue capacity", async () => {
+        const res = await fetch(`${BASE_URL}/api/set-concurrency`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ concurrency: 6 }),
+        });
+        expect(res.status).toBe(400);
+        expect(mockEngine.setConcurrencyLimit).not.toHaveBeenCalled();
+    });
+
+    it("POST /api/set-network-profile should apply the performance profile", async () => {
+        const res = await fetch(`${BASE_URL}/api/set-network-profile`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ profile: "performance" }),
+        });
+        expect(res.status).toBe(200);
+        const data: any = await res.json();
+        expect(data.ok).toBe(true);
+        expect(data.networkProfile).toBe("performance");
+        expect(data.concurrencyLimit).toBe(5);
+        expect(data.wifiSafeMode).toBe(false);
+        expect(mockEngine.setNetworkProfile).toHaveBeenCalledWith("performance");
     });
 
     it("POST /api/set-speed-limit should update max speed limit", async () => {

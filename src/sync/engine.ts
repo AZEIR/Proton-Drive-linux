@@ -18,7 +18,14 @@ import {
   openFileReadableStream,
   openFileWritableStream,
 } from "../utils/fileStreams";
-import { updateNetworkSocketLimits } from "../utils/httpAgent";
+import {
+  getRecommendedSocketLimit,
+  inferNetworkProfile,
+  MAX_PARALLEL_FILE_TRANSFERS,
+  NETWORK_PROFILE_SETTINGS,
+  type NetworkProfile,
+  updateNetworkSocketLimits,
+} from "../utils/httpAgent";
 import { SyncDatabase, SyncMapping } from "./db";
 import { IgnoreMatcher, PROTONIGNORE_FILENAME } from "./ignore";
 
@@ -54,6 +61,7 @@ export class SyncEngine extends EventEmitter {
   private concurrencyLimit: number = 2;
   private maxSpeedKbps: number = 0;
   private wifiSafeMode: boolean = false;
+  private networkProfile: NetworkProfile = "custom";
   private transferRateTrackers: Map<string, { startTime: number; bytesStart: number }> = new Map();
   private activeReconciles: Set<string> = new Set();
   private offlineMonitorPromise: Promise<void> | null = null;
@@ -160,8 +168,10 @@ export class SyncEngine extends EventEmitter {
     const envConcurrency = parseInt(process.env.PROTON_CONCURRENCY || "", 10);
     const dbConcurrency = parseInt(this.db.getConfig("sync_concurrency", "2"), 10);
     this.concurrencyLimit = !isNaN(envConcurrency) && envConcurrency > 0
-      ? envConcurrency
-      : (!isNaN(dbConcurrency) && dbConcurrency > 0 ? dbConcurrency : 2);
+      ? Math.min(envConcurrency, MAX_PARALLEL_FILE_TRANSFERS)
+      : (!isNaN(dbConcurrency) && dbConcurrency > 0
+        ? Math.min(dbConcurrency, MAX_PARALLEL_FILE_TRANSFERS)
+        : 2);
     this.logger.info(`Network concurrency limit set to ${this.concurrencyLimit}`);
 
     // Initialize bandwidth speed limit & Wi-Fi safe mode settings
@@ -175,7 +185,14 @@ export class SyncEngine extends EventEmitter {
     if (this.wifiSafeMode) {
       this.concurrencyLimit = 1;
     }
-    updateNetworkSocketLimits(this.wifiSafeMode ? 2 : Math.min(this.concurrencyLimit * 2, 6));
+    const storedProfile = this.db.getConfig("sync_network_profile", "");
+    const inferredProfile = inferNetworkProfile(this.concurrencyLimit, this.wifiSafeMode);
+    this.networkProfile =
+      !this.wifiSafeMode && storedProfile === "custom" ? "custom" : inferredProfile;
+    this.db.setConfig("sync_concurrency", this.concurrencyLimit.toString());
+    this.db.setConfig("sync_wifi_safe_mode", this.wifiSafeMode ? "1" : "0");
+    this.db.setConfig("sync_network_profile", this.networkProfile);
+    updateNetworkSocketLimits(getRecommendedSocketLimit(this.concurrencyLimit, this.wifiSafeMode));
   }
 
   getLocalSyncRoot(): string {
@@ -186,11 +203,19 @@ export class SyncEngine extends EventEmitter {
     return this.concurrencyLimit;
   }
 
+  getNetworkProfile(): NetworkProfile {
+    return this.networkProfile;
+  }
+
   setConcurrencyLimit(limit: number): void {
-    if (limit > 0 && limit <= 10) {
+    if (Number.isInteger(limit) && limit > 0 && limit <= MAX_PARALLEL_FILE_TRANSFERS) {
       this.concurrencyLimit = limit;
+      this.wifiSafeMode = false;
+      this.networkProfile = "custom";
       this.db.setConfig("sync_concurrency", limit.toString());
-      updateNetworkSocketLimits(this.wifiSafeMode ? 2 : Math.min(limit * 2, 6));
+      this.db.setConfig("sync_wifi_safe_mode", "0");
+      this.db.setConfig("sync_network_profile", this.networkProfile);
+      updateNetworkSocketLimits(getRecommendedSocketLimit(limit, false));
       this.logger.info(`Network concurrency limit set to ${this.concurrencyLimit}`);
       this.emit("statusChanged");
     }
@@ -214,15 +239,52 @@ export class SyncEngine extends EventEmitter {
   }
 
   setWifiSafeMode(enabled: boolean): void {
-    this.wifiSafeMode = enabled;
-    this.db.setConfig("sync_wifi_safe_mode", enabled ? "1" : "0");
     if (enabled) {
-      this.concurrencyLimit = 1;
-      this.db.setConfig("sync_concurrency", "1");
+      if (!this.wifiSafeMode && this.concurrencyLimit > 1) {
+        this.db.setConfig("sync_concurrency_before_safe", this.concurrencyLimit.toString());
+      }
+      this.applyNetworkProfile("safe");
+      return;
     }
-    updateNetworkSocketLimits(enabled ? 2 : Math.min(this.concurrencyLimit * 2, 6));
-    this.logger.info(`Wi-Fi Safe Mode set to ${enabled ? "enabled" : "disabled"}`);
+    if (!this.wifiSafeMode) return;
+
+    const previous = parseInt(this.db.getConfig("sync_concurrency_before_safe", "3"), 10);
+    const restoredConcurrency = Number.isInteger(previous) && previous >= 1 && previous <= MAX_PARALLEL_FILE_TRANSFERS
+      ? previous
+      : NETWORK_PROFILE_SETTINGS.balanced.concurrency;
+    this.wifiSafeMode = false;
+    this.concurrencyLimit = restoredConcurrency;
+    this.networkProfile = inferNetworkProfile(restoredConcurrency, false);
+    this.persistNetworkSettings();
+    this.logger.info("Wi-Fi Safe Mode disabled");
     this.emit("statusChanged");
+  }
+
+  setNetworkProfile(profile: Exclude<NetworkProfile, "custom">): void {
+    if (profile !== "safe" && profile !== "balanced" && profile !== "performance") return;
+    if (profile === "safe" && !this.wifiSafeMode && this.concurrencyLimit > 1) {
+      this.db.setConfig("sync_concurrency_before_safe", this.concurrencyLimit.toString());
+    }
+    this.applyNetworkProfile(profile);
+  }
+
+  private applyNetworkProfile(profile: Exclude<NetworkProfile, "custom">): void {
+    const settings = NETWORK_PROFILE_SETTINGS[profile];
+    this.concurrencyLimit = settings.concurrency;
+    this.wifiSafeMode = settings.wifiSafeMode;
+    this.networkProfile = profile;
+    this.persistNetworkSettings();
+    this.logger.info(
+      `Network profile set to ${profile} (concurrency=${settings.concurrency}, sockets=${settings.maxSockets})`,
+    );
+    this.emit("statusChanged");
+  }
+
+  private persistNetworkSettings(): void {
+    this.db.setConfig("sync_concurrency", this.concurrencyLimit.toString());
+    this.db.setConfig("sync_wifi_safe_mode", this.wifiSafeMode ? "1" : "0");
+    this.db.setConfig("sync_network_profile", this.networkProfile);
+    updateNetworkSocketLimits(getRecommendedSocketLimit(this.concurrencyLimit, this.wifiSafeMode));
   }
 
   private async rateLimitTransfer(relativePath: string, currentTransferredBytes: number): Promise<void> {

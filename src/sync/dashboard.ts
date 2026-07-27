@@ -7,6 +7,12 @@ import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
 import { openBrowserUrl } from '../sdk/adapter';
 import { getHtmlContent } from './dashboard/template';
+import {
+    inferNetworkProfile,
+    MAX_PARALLEL_FILE_TRANSFERS,
+    NETWORK_PROFILE_SETTINGS,
+    type NetworkProfile,
+} from '../utils/httpAgent';
 
 export interface FodHooks {
     isFuseMode:         boolean;
@@ -70,11 +76,21 @@ export function startDashboard(
     }
     const readConfig = (key: string, fallback: string): string =>
         typeof (db as any).getConfig === 'function' ? db.getConfig(key, fallback) : fallback;
-    const getPerformanceSettings = () => ({
-        concurrencyLimit: engine?.getConcurrencyLimit() ?? parseInt(readConfig('sync_concurrency', '2'), 10),
-        maxSpeedKbps: engine?.getMaxSpeedKbps() ?? parseInt(readConfig('sync_max_speed_kbps', '0'), 10),
-        wifiSafeMode: engine?.isWifiSafeMode() ?? readConfig('sync_wifi_safe_mode', '0') === '1',
-    });
+    const writeConfig = (key: string, value: string): void => {
+        if (typeof (db as any).setConfig === 'function') db.setConfig(key, value);
+    };
+    const getPerformanceSettings = () => {
+        const concurrencyLimit = engine?.getConcurrencyLimit() ?? parseInt(readConfig('sync_concurrency', '2'), 10);
+        const maxSpeedKbps = engine?.getMaxSpeedKbps() ?? parseInt(readConfig('sync_max_speed_kbps', '0'), 10);
+        const wifiSafeMode = engine?.isWifiSafeMode() ?? readConfig('sync_wifi_safe_mode', '0') === '1';
+        const storedProfile = readConfig('sync_network_profile', '');
+        const networkProfile =
+            engine?.getNetworkProfile() ??
+            (storedProfile === 'custom'
+                ? 'custom'
+                : inferNetworkProfile(concurrencyLimit, wifiSafeMode));
+        return { concurrencyLimit, maxSpeedKbps, wifiSafeMode, networkProfile };
+    };
     const allowedOrigins = new Set([
         `http://127.0.0.1:${port}`,
         `http://localhost:${port}`,
@@ -172,17 +188,44 @@ export function startDashboard(
             if (req.method === 'POST' && url.pathname === '/api/set-concurrency') {
                 try {
                     const body = await req.json() as { concurrency?: number | string };
-                    const limit = typeof body.concurrency === 'number' ? body.concurrency : parseInt(String(body.concurrency || ''), 10);
-                    if (!isNaN(limit) && limit >= 1 && limit <= 10) {
+                    const limit = Number(body.concurrency);
+                    if (Number.isInteger(limit) && limit >= 1 && limit <= MAX_PARALLEL_FILE_TRANSFERS) {
                         if (engine) {
                             engine.setConcurrencyLimit(limit);
                         } else {
-                            db.setConfig('sync_concurrency', limit.toString());
+                            writeConfig('sync_concurrency', limit.toString());
+                            writeConfig('sync_wifi_safe_mode', '0');
+                            writeConfig('sync_network_profile', 'custom');
                         }
                         db.log('system', 'system', 'completed', `Network concurrency updated to ${limit}.`);
-                        return Response.json({ ok: true, concurrency: limit });
+                        return Response.json({ ok: true, concurrency: limit, ...getPerformanceSettings() });
                     }
-                    return Response.json({ ok: false, error: 'Invalid concurrency limit (must be between 1 and 10)' }, { status: 400 });
+                    return Response.json({
+                        ok: false,
+                        error: `Invalid concurrency limit (must be a whole number between 1 and ${MAX_PARALLEL_FILE_TRANSFERS})`,
+                    }, { status: 400 });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-network-profile') {
+                try {
+                    const body = await req.json() as { profile?: string };
+                    const profile = body.profile as Exclude<NetworkProfile, 'custom'>;
+                    if (profile !== 'safe' && profile !== 'balanced' && profile !== 'performance') {
+                        return Response.json({ ok: false, error: 'Invalid network profile' }, { status: 400 });
+                    }
+                    const settings = NETWORK_PROFILE_SETTINGS[profile];
+                    if (engine) {
+                        engine.setNetworkProfile(profile);
+                    } else {
+                        writeConfig('sync_concurrency', settings.concurrency.toString());
+                        writeConfig('sync_wifi_safe_mode', settings.wifiSafeMode ? '1' : '0');
+                        writeConfig('sync_network_profile', profile);
+                    }
+                    db.log('system', 'system', 'completed', `Network profile updated to ${profile}.`);
+                    return Response.json({ ok: true, profile, ...getPerformanceSettings() });
                 } catch (err: any) {
                     return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
                 }
@@ -214,10 +257,15 @@ export function startDashboard(
                     if (engine) {
                         engine.setWifiSafeMode(enabled);
                     } else {
-                        db.setConfig('sync_wifi_safe_mode', enabled ? '1' : '0');
+                        const settings = enabled
+                            ? NETWORK_PROFILE_SETTINGS.safe
+                            : NETWORK_PROFILE_SETTINGS.balanced;
+                        writeConfig('sync_wifi_safe_mode', settings.wifiSafeMode ? '1' : '0');
+                        writeConfig('sync_concurrency', settings.concurrency.toString());
+                        writeConfig('sync_network_profile', enabled ? 'safe' : 'balanced');
                     }
                     db.log('system', 'system', 'completed', `Wi-Fi Safe Mode ${enabled ? 'enabled' : 'disabled'}.`);
-                    return Response.json({ ok: true, wifiSafeMode: enabled });
+                    return Response.json({ ok: true, ...getPerformanceSettings() });
                 } catch (err: any) {
                     return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
                 }
@@ -658,9 +706,7 @@ export function startDashboard(
                                         isPaused: status === 'paused',
                                         isAuthenticating,
                                         localSyncRoot,
-                                        concurrencyLimit: engine.getConcurrencyLimit(),
-                                        maxSpeedKbps: engine.getMaxSpeedKbps(),
-                                        wifiSafeMode: engine.isWifiSafeMode(),
+                                        ...getPerformanceSettings(),
                                         email: cachedEmail
                                     });
                                 } else {

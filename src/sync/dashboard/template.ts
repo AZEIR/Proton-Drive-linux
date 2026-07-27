@@ -246,6 +246,18 @@ export function getHtmlContent(isFodMode: boolean = false): string {
 
                             <div class="setting-row">
                                 <div class="setting-info">
+                                    <span class="setting-title">Network Profile</span>
+                                    <span class="setting-desc">Choose a tested connection profile. Changes affect newly scheduled transfers.</span>
+                                </div>
+                                <div class="network-profile-options" role="group" aria-label="Network performance profile">
+                                    <button type="button" class="network-profile-btn" data-profile="safe" aria-pressed="false" onclick="setNetworkProfile('safe')" title="1 file and up to 2 sockets">Wi-Fi Safe</button>
+                                    <button type="button" class="network-profile-btn" data-profile="balanced" aria-pressed="false" onclick="setNetworkProfile('balanced')" title="3 files and up to 8 sockets">Balanced</button>
+                                    <button type="button" class="network-profile-btn" data-profile="performance" aria-pressed="false" onclick="setNetworkProfile('performance')" title="5 files and up to 16 sockets">Performance</button>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
                                     <span class="setting-title">Bandwidth Speed Limit</span>
                                     <span class="setting-desc">Set maximum upload/download transfer rate (0 = Unlimited).</span>
                                     <div class="speed-presets">
@@ -267,12 +279,12 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <span class="setting-title">Parallel File Transfers</span>
-                                    <span class="setting-desc">Simultaneous worker threads (1–10). Lower values reduce router load.</span>
+                                    <span class="setting-desc">Simultaneous files (1–5). Manual changes use a Custom profile.</span>
                                 </div>
                                 <div class="setting-input-group">
                                     <div class="range-with-value">
-                                        <input type="range" id="concurrencyRange" min="1" max="10" step="1" value="2" aria-label="Parallel file transfer limit" oninput="updateConcurrencyInput(this.value)">
-                                        <input type="number" id="concurrencyInput" min="1" max="10" step="1" value="2" aria-label="Parallel file transfer limit" oninput="updateConcurrencyRange(this.value)">
+                                        <input type="range" id="concurrencyRange" min="1" max="5" step="1" value="2" aria-label="Parallel file transfer limit" oninput="updateConcurrencyInput(this.value)">
+                                        <input type="number" id="concurrencyInput" min="1" max="5" step="1" value="2" aria-label="Parallel file transfer limit" oninput="updateConcurrencyRange(this.value)">
                                     </div>
                                     <button type="button" id="concurrencySaveBtn" class="btn btn-primary" onclick="saveConcurrency()">Save Limit</button>
                                 </div>

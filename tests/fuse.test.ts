@@ -124,6 +124,51 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
         expect(existsSync(path1)).toBe(true);
     });
 
+    it("FodHydrator should honor the application concurrency limit", async () => {
+        db.setConfig("sync_concurrency", "1");
+        for (const [nodeUid, localPath] of [["node-a", "a.bin"], ["node-b", "b.bin"]]) {
+            db.setMapping({
+                local_path: localPath,
+                node_uid: nodeUid,
+                is_dir: 0,
+                size: 0,
+                mtime: Date.now(),
+                sha1: "",
+                remote_revision_uid: "",
+                remote_mtime: Date.now(),
+            });
+        }
+
+        let releaseFirst!: () => void;
+        let downloaderCount = 0;
+        mockSdk.getNode = mock((nodeUid: string) => Promise.resolve({
+            uid: nodeUid,
+            activeRevision: { ok: true, value: { size: 0 } },
+        }));
+        mockSdk.getFileDownloader = mock().mockImplementation(async () => {
+            downloaderCount++;
+            const current = downloaderCount;
+            return {
+                downloadToStream: () => ({
+                    completion: () => current === 1
+                        ? new Promise<void>((resolve) => { releaseFirst = resolve; })
+                        : Promise.resolve(),
+                }),
+            };
+        });
+
+        const hydrator = new FodHydrator(db, mockSdk, mockLogger);
+        const first = hydrator.hydrateNode("node-a", "a.bin");
+        const second = hydrator.hydrateNode("node-b", "b.bin");
+        await Bun.sleep(10);
+        expect(downloaderCount).toBe(1);
+
+        releaseFirst();
+        await first;
+        await second;
+        expect(downloaderCount).toBe(2);
+    });
+
     it("ProtonFuseEngine should implement FodHooks and return active transfers", () => {
         const engine = new ProtonFuseEngine(db, mockSdk, mockAuth, mockLogger, `${testDir}/mount`);
         expect(engine.isFuseMode).toBe(true);

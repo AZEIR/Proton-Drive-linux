@@ -855,14 +855,21 @@
         }
 
         /* Speed Limit Presets */
-        .speed-presets {
+        .speed-presets,
+        .network-profile-options {
             display: flex;
             gap: 6px;
             margin-top: 8px;
             flex-wrap: wrap;
         }
 
-        .speed-preset-btn {
+        .network-profile-options {
+            justify-content: flex-end;
+            margin: 0 0 0 auto;
+        }
+
+        .speed-preset-btn,
+        .network-profile-btn {
             font-size: 0.75rem;
             font-weight: 600;
             padding: 3px 10px;
@@ -874,13 +881,15 @@
             transition: all 0.2s ease;
         }
 
-        .speed-preset-btn:hover {
+        .speed-preset-btn:hover,
+        .network-profile-btn:hover {
             background: rgba(108, 71, 255, 0.15);
             color: var(--text-main);
             border-color: var(--primary);
         }
 
-        .speed-preset-btn.active {
+        .speed-preset-btn.active,
+        .network-profile-btn.active {
             background: var(--primary);
             color: #ffffff;
             border-color: var(--primary);

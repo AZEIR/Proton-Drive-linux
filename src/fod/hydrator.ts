@@ -3,6 +3,7 @@ import { mkdir, stat, unlink, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SyncDatabase } from '../sync/db';
+import { MAX_PARALLEL_FILE_TRANSFERS } from '../utils/httpAgent';
 
 export interface CachedFileItem {
     nodeUid: string;
@@ -27,6 +28,8 @@ export class FodHydrator extends EventEmitter {
     private pinnedNodeUids: Set<string> = new Set();
     private activeHydrations: Map<string, ActiveTransferInfo> = new Map();
     private inFlightHydrations: Map<string, Promise<string>> = new Map();
+    private activeHydrationSlots = 0;
+    private hydrationSlotWaiters: Array<() => void> = [];
     private isPaused = false;
 
     constructor(
@@ -148,7 +151,7 @@ export class FodHydrator extends EventEmitter {
             return this.inFlightHydrations.get(nodeUid)!;
         }
 
-        const hydrationPromise = this.performHydration(nodeUid, relativePath, cachePath);
+        const hydrationPromise = this.performHydrationWithSlot(nodeUid, relativePath, cachePath);
         this.inFlightHydrations.set(nodeUid, hydrationPromise);
 
         try {
@@ -157,6 +160,32 @@ export class FodHydrator extends EventEmitter {
         } finally {
             this.inFlightHydrations.delete(nodeUid);
         }
+    }
+
+    private async performHydrationWithSlot(nodeUid: string, relativePath: string, cachePath: string): Promise<string> {
+        await this.acquireHydrationSlot();
+        try {
+            if (this.isPaused) throw new Error('FUSE transfers are paused');
+            return await this.performHydration(nodeUid, relativePath, cachePath);
+        } finally {
+            this.activeHydrationSlots--;
+            for (const wake of this.hydrationSlotWaiters.splice(0)) wake();
+        }
+    }
+
+    private async acquireHydrationSlot(): Promise<void> {
+        while (this.activeHydrationSlots >= this.getHydrationConcurrency()) {
+            await new Promise<void>((resolve) => this.hydrationSlotWaiters.push(resolve));
+        }
+        this.activeHydrationSlots++;
+    }
+
+    private getHydrationConcurrency(): number {
+        if (this.db.getConfig('sync_wifi_safe_mode', '0') === '1') return 1;
+        const configured = Number(this.db.getConfig('sync_concurrency', '2'));
+        return Number.isInteger(configured)
+            ? Math.max(1, Math.min(MAX_PARALLEL_FILE_TRANSFERS, configured))
+            : 2;
     }
 
     private async performHydration(nodeUid: string, relativePath: string, cachePath: string): Promise<string> {

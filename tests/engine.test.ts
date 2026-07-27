@@ -762,10 +762,35 @@ describe("SyncEngine", () => {
         it("should get and set network concurrency limit correctly", () => {
             const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
             expect(engine.getConcurrencyLimit()).toBe(2);
+            expect(engine.getNetworkProfile()).toBe("custom");
 
             engine.setConcurrencyLimit(4);
             expect(engine.getConcurrencyLimit()).toBe(4);
             expect(db.getConfig("sync_concurrency", "2")).toBe("4");
+            expect(engine.getNetworkProfile()).toBe("custom");
+
+            engine.setConcurrencyLimit(6);
+            expect(engine.getConcurrencyLimit()).toBe(4);
+        });
+
+        it("should apply and persist network profiles", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+
+            engine.setNetworkProfile("performance");
+            expect(engine.getNetworkProfile()).toBe("performance");
+            expect(engine.getConcurrencyLimit()).toBe(5);
+            expect(engine.isWifiSafeMode()).toBe(false);
+
+            engine.setNetworkProfile("safe");
+            expect(engine.getNetworkProfile()).toBe("safe");
+            expect(engine.getConcurrencyLimit()).toBe(1);
+            expect(engine.isWifiSafeMode()).toBe(true);
+
+            engine.setWifiSafeMode(false);
+            expect(engine.getNetworkProfile()).toBe("performance");
+            expect(engine.getConcurrencyLimit()).toBe(5);
+            expect(engine.isWifiSafeMode()).toBe(false);
+            expect(db.getConfig("sync_network_profile", "")).toBe("performance");
         });
 
         it("should get and set bandwidth speed limit correctly", () => {
@@ -802,7 +827,6 @@ describe("SyncEngine", () => {
         });
     });
 });
-
 
 
 
