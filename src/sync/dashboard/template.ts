@@ -15,7 +15,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
 <body>
     <div class="app-layout">
         <!-- Left Sidebar -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebarNavigation">
             <a href="https://github.com/AZEIR/Proton-Drive-linux" target="_blank" rel="noopener" class="sidebar-header" style="text-decoration:none;">
                 <!-- Official Proton Drive Folder Icon SVG -->
                 <svg class="proton-logo" viewBox="0 20 106 95" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -27,23 +27,19 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                 <span class="brand-name">Proton Drive<span class="sub-brand" id="modeLabel">Sync</span></span>
             </a>
 
-            <nav class="sidebar-menu">
-                <div class="menu-item active" data-tab="dashboard" onclick="showTab('dashboard')">
+            <nav class="sidebar-menu" aria-label="Dashboard navigation">
+                <button type="button" class="menu-item active" data-tab="dashboard" aria-current="page" onclick="showTab('dashboard')">
                     <span class="material-symbols-outlined menu-icon">dashboard</span>
                     Dashboard
-                </div>
-                <div class="menu-item" data-tab="browser" onclick="showTab('browser')">
+                </button>
+                <button type="button" class="menu-item" data-tab="browser" onclick="showTab('browser')">
                     <span class="material-symbols-outlined menu-icon">folder_open</span>
                     File Browser
-                </div>
-                <div class="menu-item" data-tab="settings" onclick="showTab('settings')">
+                </button>
+                <button type="button" class="menu-item" data-tab="settings" onclick="showTab('settings')">
                     <span class="material-symbols-outlined menu-icon">settings</span>
                     Settings
-                </div>
-                <div class="menu-item" id="cacheMenuItem" data-tab="cache" onclick="showTab('cache')" style="display:none;">
-                    <span class="material-symbols-outlined menu-icon">database</span>
-                    Local Cache
-                </div>
+                </button>
             </nav>
 
             <div class="sidebar-footer">
@@ -84,13 +80,13 @@ export function getHtmlContent(isFodMode: boolean = false): string {
             <!-- Topbar showing title & global status badge -->
             <header class="topbar">
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <button class="menu-toggle" id="sidebarToggle" onclick="toggleSidebar()">
+                    <button type="button" class="menu-toggle" id="sidebarToggle" aria-label="Open navigation" aria-controls="sidebarNavigation" aria-expanded="false" onclick="toggleSidebar()">
                         <span class="material-symbols-outlined">menu</span>
                     </button>
                     <h1 class="section-title" id="pageTitle">Sync Dashboard</h1>
                 </div>
                 <div class="topbar-actions">
-                    <div id="statusBadge" class="status-badge status-synced">
+                    <div id="statusBadge" class="status-badge status-synced" role="status" aria-live="polite">
                         <span class="dot"></span>
                         <span id="statusText">Synced</span>
                     </div>
@@ -150,7 +146,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                 <div class="filter-search-container">
                                     <div class="search-box">
                                         <span class="material-symbols-outlined search-icon">search</span>
-                                        <input type="text" id="logSearchInput" placeholder="Search logs..." oninput="filterLogs()">
+                                        <input type="text" id="logSearchInput" aria-label="Search activity logs" placeholder="Search logs..." oninput="filterLogs()">
                                     </div>
                                     <div class="filter-pills" id="logFilterPills">
                                         <button class="filter-pill active" onclick="setLogFilter('all')">All</button>
@@ -176,51 +172,6 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                     </tbody>
                                 </table>
                             </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tab Pane: Cache -->
-                <div id="tab-cache" class="tab-pane">
-                    <div class="card" style="margin-bottom:1rem;">
-                        <div class="card-header-flex">
-                            <div>
-                                <h2 style="margin-bottom:4px; border:none; padding:0;">Local Cache</h2>
-                                <p style="font-size:0.85rem;color:var(--text-muted);margin:0;">Files downloaded to your device. Click Evict to free space; click Pin to pre-download.</p>
-                            </div>
-                            <div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-                                <div id="cacheSizeDisplay" style="font-size:0.85rem;color:var(--text-muted);">Loading…</div>
-                                <button class="btn btn-danger" style="font-size:0.8rem;padding:0.4rem 0.8rem;" onclick="evictAll()">Free All Space</button>
-                            </div>
-                        </div>
-
-                        <!-- Cache Filters -->
-                        <div class="filter-search-container" style="margin-bottom: 1.2rem;">
-                            <div class="search-box">
-                                <span class="material-symbols-outlined search-icon">search</span>
-                                <input type="text" id="cacheSearchInput" placeholder="Search cache..." oninput="filterCache()">
-                            </div>
-                            <div class="filter-pills" id="cacheFilterPills">
-                                <button class="filter-pill active" onclick="setCacheFilter('all')">All</button>
-                                <button class="filter-pill" onclick="setCacheFilter('local')">Local Only</button>
-                                <button class="filter-pill" onclick="setCacheFilter('stub')">Stubs Only</button>
-                            </div>
-                        </div>
-
-                        <div class="logs-table-wrapper">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>File</th>
-                                        <th>Size</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="cacheBody">
-                                    <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;">Loading…</td></tr>
-                                </tbody>
-                            </table>
                         </div>
                     </div>
                 </div>
@@ -399,15 +350,15 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                         <!-- Browser Header & Breadcrumbs -->
                         <div class="browser-header">
                             <div class="browser-breadcrumbs" id="browserBreadcrumbs">
-                                <span class="breadcrumb-item active" onclick="navigateToBrowserPath('')">My Files</span>
+                                <span class="breadcrumb-item active" aria-current="page">My Files</span>
                             </div>
                             <div class="browser-toolbar">
                                 <div class="search-box">
                                     <span class="material-symbols-outlined search-icon">search</span>
-                                    <input type="text" id="browserSearchInput" placeholder="Filter current folder..." oninput="filterBrowserItems()">
+                                    <input type="text" id="browserSearchInput" aria-label="Filter files in current folder" placeholder="Filter current folder..." oninput="filterBrowserItems()">
                                 </div>
-                                <button class="btn btn-sm" onclick="refreshBrowser()" title="Refresh file list">
-                                    <span class="material-symbols-outlined">refresh</span>
+                                <button type="button" class="btn btn-sm browser-refresh-btn" onclick="refreshBrowser()" title="Refresh file list" aria-label="Refresh file list">
+                                    <span class="material-symbols-outlined" aria-hidden="true">refresh</span>
                                 </button>
                             </div>
                         </div>
@@ -415,6 +366,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                         <!-- Browser File List Table -->
                         <div class="browser-table-wrapper">
                             <table class="browser-table">
+                                <caption class="sr-only">Files and folders in the current Proton Drive directory</caption>
                                 <thead>
                                     <tr>
                                         <th style="width: 42%;">Name</th>
@@ -424,7 +376,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                     </tr>
                                 </thead>
                                 <tbody id="browserTableBody">
-                                    <tr>
+                                    <tr class="browser-empty-row">
                                         <td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">Loading files...</td>
                                     </tr>
                                 </tbody>
@@ -443,7 +395,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
     </div>
 
     <!-- Toast Notification Container -->
-    <div id="toast-container" class="toast-container"></div>
+    <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
     <!-- Dedicated login screen for unauthenticated users -->
     <div id="loginView" class="login-view">

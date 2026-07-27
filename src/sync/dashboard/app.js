@@ -34,11 +34,6 @@
         let visibleLogsCount = 100;
         let currentFilteredLength = 0;
 
-        let cacheSearchQuery = '';
-        let cacheFilterStatus = 'all';
-        let cachedCacheFiles = [];
-        let lastCacheJson = '';
-
         // Toast Notification System
         function showToast(message, type = 'info', duration = 4000) {
             const container = document.getElementById('toast-container');
@@ -108,11 +103,13 @@
             overlay.onclick = toggleSidebar;
             document.body.appendChild(overlay);
 
-            if (FOD_MODE) {
+            if (IS_FOD) {
                 document.getElementById('modeLabel').innerText = 'FOD';
-                document.getElementById('cacheMenuItem').style.display = 'flex';
-                fetchCachedFiles();
-                setInterval(fetchCachedFiles, 15000);
+            }
+
+            const requestedTab = window.location.hash.slice(1);
+            if (['browser', 'settings'].includes(requestedTab)) {
+                showTab(requestedTab);
             }
 
             // Infinite scroll for logs
@@ -174,26 +171,40 @@
         function toggleSidebar() {
             const sidebar = document.querySelector('.sidebar');
             const overlay = document.querySelector('.sidebar-overlay');
+            const toggle = document.getElementById('sidebarToggle');
             sidebar.classList.toggle('open');
             overlay.classList.toggle('active');
+            const isOpen = sidebar.classList.contains('open');
+            if (toggle) {
+                toggle.setAttribute('aria-expanded', String(isOpen));
+                toggle.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
+            }
         }
 
         function showTab(tabId) {
             document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.menu-item').forEach(el => {
+                el.classList.remove('active');
+                el.removeAttribute('aria-current');
+            });
             const pane = document.getElementById('tab-' + tabId);
-            if (pane) pane.classList.add('active');
+            if (!pane) return;
+            pane.classList.add('active');
 
             const item = document.querySelector(`.menu-item[data-tab="${tabId}"]`);
-            if (item) item.classList.add('active');
+            if (item) {
+                item.classList.add('active');
+                item.setAttribute('aria-current', 'page');
+            }
 
             currentTab = tabId;
+            const nextHash = tabId === 'dashboard' ? window.location.pathname : `#${tabId}`;
+            window.history.replaceState(null, '', nextHash);
             const titles = {
                 'dashboard': 'Sync Dashboard',
                 'browser':   'Proton Drive File Browser',
                 'history':   'Activity History',
                 'settings':  'Configuration Settings',
-                'cache':     'Local Cache',
             };
             document.getElementById('pageTitle').innerText = titles[tabId] || tabId;
 
@@ -207,6 +218,11 @@
             if (sidebar.classList.contains('open')) {
                 sidebar.classList.remove('open');
                 overlay.classList.remove('active');
+                const toggle = document.getElementById('sidebarToggle');
+                if (toggle) {
+                    toggle.setAttribute('aria-expanded', 'false');
+                    toggle.setAttribute('aria-label', 'Open navigation');
+                }
             }
         }
 
@@ -219,10 +235,16 @@
             currentBrowserPath = relPath || '';
             const tbody = document.getElementById('browserTableBody');
             if (tbody) {
-                tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">Loading files...</td></tr>`;
+                tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">Loading files...</td></tr>`;
             }
             fetch('/api/browser/list?path=' + encodeURIComponent(currentBrowserPath))
-                .then(r => r.json())
+                .then(async (response) => {
+                    const data = await response.json();
+                    if (!response.ok || data.error) {
+                        throw new Error(data.error || `Request failed with status ${response.status}`);
+                    }
+                    return data;
+                })
                 .then(data => {
                     currentBrowserData = data;
                     renderBreadcrumbs(data.breadcrumbs || []);
@@ -231,7 +253,7 @@
                 .catch(err => {
                     console.error('Failed to fetch browser list:', err);
                     if (tbody) {
-                        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-danger" style="padding: 24px;">Failed to load files: ${escapeHtml(err.message)}</td></tr>`;
+                        tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center text-danger" style="padding: 24px;">Failed to load files: ${escapeHtml(err.message)}</td></tr>`;
                     }
                 });
         }
@@ -240,7 +262,7 @@
             const container = document.getElementById('browserBreadcrumbs');
             if (!container) return;
             if (!breadcrumbs || breadcrumbs.length === 0) {
-                container.innerHTML = `<span class="breadcrumb-item active" onclick="navigateToBrowserPath('')">My Files</span>`;
+                container.innerHTML = `<span class="breadcrumb-item active" aria-current="page">My Files</span>`;
                 return;
             }
             let html = '';
@@ -250,9 +272,9 @@
                     html += `<span class="breadcrumb-separator material-symbols-outlined">chevron_right</span>`;
                 }
                 if (isLast) {
-                    html += `<span class="breadcrumb-item active">${escapeHtml(b.name)}</span>`;
+                    html += `<span class="breadcrumb-item active" aria-current="page">${escapeHtml(b.name)}</span>`;
                 } else {
-                    html += `<span class="breadcrumb-item" onclick="navigateToBrowserPath(decodeActionValue('${encodeActionValue(b.path)}'))">${escapeHtml(b.name)}</span>`;
+                    html += `<button type="button" class="breadcrumb-item" onclick="navigateToBrowserPath(decodeActionValue('${encodeActionValue(b.path)}'))">${escapeHtml(b.name)}</button>`;
                 }
             });
             container.innerHTML = html;
@@ -279,19 +301,19 @@
             if (isDir) return `<span class="material-symbols-outlined file-icon folder">folder</span>`;
             const ext = name.split('.').pop().toLowerCase();
             if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
-                return `<span class="material-symbols-outlined file-icon text-primary">image</span>`;
+                return `<span class="material-symbols-outlined file-icon">image</span>`;
             } else if (['pdf', 'doc', 'docx', 'txt', 'md', 'rtf'].includes(ext)) {
-                return `<span class="material-symbols-outlined file-icon text-primary">description</span>`;
+                return `<span class="material-symbols-outlined file-icon">description</span>`;
             } else if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext)) {
-                return `<span class="material-symbols-outlined file-icon text-primary">video_file</span>`;
+                return `<span class="material-symbols-outlined file-icon">video_file</span>`;
             } else if (['mp3', 'wav', 'flac', 'ogg', 'aac'].includes(ext)) {
-                return `<span class="material-symbols-outlined file-icon text-primary">audio_file</span>`;
+                return `<span class="material-symbols-outlined file-icon">audio_file</span>`;
             } else if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) {
-                return `<span class="material-symbols-outlined file-icon text-primary">folder_zip</span>`;
+                return `<span class="material-symbols-outlined file-icon">folder_zip</span>`;
             } else if (['js', 'ts', 'py', 'json', 'html', 'css', 'cpp', 'sh', 'rs'].includes(ext)) {
-                return `<span class="material-symbols-outlined file-icon text-primary">code</span>`;
+                return `<span class="material-symbols-outlined file-icon">code</span>`;
             }
-            return `<span class="material-symbols-outlined file-icon text-primary">draft</span>`;
+            return `<span class="material-symbols-outlined file-icon">draft</span>`;
         }
 
         function renderBrowserItems() {
@@ -307,12 +329,13 @@
             let totalBytes = 0;
             let cachedBytes = 0;
 
-            (currentBrowserData.items || []).forEach(item => {
+            items.forEach(item => {
                 if (!item.isDir) {
-                    totalBytes += item.size;
+                    const size = Number.isFinite(Number(item.size)) ? Number(item.size) : 0;
+                    totalBytes += size;
                     if (item.isCached) {
                         cachedCount++;
-                        cachedBytes += item.size;
+                        cachedBytes += size;
                     }
                 }
             });
@@ -323,7 +346,7 @@
             if (summaryEl) summaryEl.innerText = `${formatBytes(cachedBytes)} cached of ${formatBytes(totalBytes)}`;
 
             if (items.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">No items found in this directory.</td></tr>`;
+                tbody.innerHTML = `<tr class="browser-empty-row"><td colspan="4" class="text-center" style="padding: 24px; opacity: 0.7;">No items found in this directory.</td></tr>`;
                 return;
             }
 
@@ -333,11 +356,13 @@
                 const encodedPath = encodeActionValue(item.relPath);
                 const encodedUid = encodeActionValue(item.nodeUid || '');
                 const nameDisplay = item.isDir 
-                    ? `<div class="browser-item-name is-dir" onclick="navigateToBrowserPath(decodeActionValue('${encodedPath}'))">${icon}<span>${escapeHtml(item.name)}</span></div>`
+                    ? `<button type="button" class="browser-item-name is-dir" onclick="navigateToBrowserPath(decodeActionValue('${encodedPath}'))">${icon}<span>${escapeHtml(item.name)}</span></button>`
                     : `<div class="browser-item-name">${icon}<span>${escapeHtml(item.name)}</span></div>`;
 
                 let statusBadge = '';
-                if (item.isPinned) {
+                if (item.isDir) {
+                    statusBadge = `<span class="browser-status-na" aria-label="Not applicable">—</span>`;
+                } else if (item.isPinned) {
                     statusBadge = `<span class="badge-status badge-pinned"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pinned</span>`;
                 } else if (item.isCached) {
                     statusBadge = `<span class="badge-status badge-cached"><span class="material-symbols-outlined" style="font-size:14px;">cloud_done</span> Locally Cached</span>`;
@@ -350,24 +375,24 @@
                 let actions = `<div class="browser-actions">`;
                 if (!item.isDir && item.nodeUid) {
                     if (!item.isCached) {
-                        actions += `<button class="btn btn-sm btn-primary" onclick="hydrateBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">download</span> Hydrate</button>`;
+                        actions += `<button type="button" class="btn btn-sm btn-primary" onclick="hydrateBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">download</span> Download</button>`;
                     } else if (IS_FOD) {
-                        actions += `<button class="btn btn-sm" onclick="evictBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">delete_sweep</span> Free Space</button>`;
+                        actions += `<button type="button" class="btn btn-sm" onclick="evictBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">delete_sweep</span> Free Space</button>`;
                     }
                     if (item.isPinned) {
-                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined text-warning" style="font-size:14px;">push_pin</span> Unpin</button>`;
+                        actions += `<button type="button" class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined text-warning" style="font-size:14px;">push_pin</span> Unpin</button>`;
                     } else {
-                        actions += `<button class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pin</button>`;
+                        actions += `<button type="button" class="btn btn-sm" onclick="pinBrowserItem(decodeActionValue('${encodedUid}'))"><span class="material-symbols-outlined" style="font-size:14px;">push_pin</span> Pin</button>`;
                     }
                 }
-                actions += `<button class="btn btn-sm" onclick="openBrowserItem(decodeActionValue('${encodedPath}'))"><span class="material-symbols-outlined" style="font-size:14px;">open_in_new</span> Open</button>`;
+                actions += `<button type="button" class="btn btn-sm" onclick="openBrowserItem(decodeActionValue('${encodedPath}'))"><span class="material-symbols-outlined" style="font-size:14px;">open_in_new</span> Open</button>`;
                 actions += `</div>`;
 
-                html += `<tr>
-                    <td>${nameDisplay}</td>
-                    <td>${statusBadge}</td>
-                    <td>${sizeDisplay}</td>
-                    <td style="text-align: right;">${actions}</td>
+                html += `<tr class="${item.isDir ? 'browser-directory-row' : ''}">
+                    <td class="browser-name-cell">${nameDisplay}</td>
+                    <td class="browser-status-cell">${statusBadge}</td>
+                    <td class="browser-size-cell">${sizeDisplay}</td>
+                    <td class="browser-actions-cell" style="text-align: right;">${actions}</td>
                 </tr>`;
             });
 
@@ -381,9 +406,10 @@
                     if (res.ok) {
                         refreshBrowser();
                     } else {
-                        alert('Hydration failed: ' + (res.error || 'Unknown error'));
+                        showToast('Download failed: ' + (res.error || 'Unknown error'), 'danger');
                     }
-                });
+                })
+                .catch(err => showToast('Download failed: ' + err.message, 'danger'));
         }
 
         function evictBrowserItem(nodeUid) {
@@ -397,9 +423,10 @@
                     if (res.ok) {
                         refreshBrowser();
                     } else {
-                        alert('Evict failed: ' + (res.error || 'Unknown error'));
+                        showToast('Could not free local space: ' + (res.error || 'Unknown error'), 'danger');
                     }
-                });
+                })
+                .catch(err => showToast('Could not free local space: ' + err.message, 'danger'));
         }
 
         function pinBrowserItem(nodeUid) {
@@ -413,9 +440,10 @@
                     if (res.ok) {
                         refreshBrowser();
                     } else {
-                        alert('Pin toggle failed: ' + (res.error || 'Unknown error'));
+                        showToast('Pin update failed: ' + (res.error || 'Unknown error'), 'danger');
                     }
-                });
+                })
+                .catch(err => showToast('Pin update failed: ' + err.message, 'danger'));
         }
 
         function openBrowserItem(relPath) {
@@ -427,9 +455,10 @@
                 .then(r => r.json())
                 .then(res => {
                     if (!res.ok) {
-                        alert('Failed to open: ' + (res.error || 'Unknown error'));
+                        showToast('Failed to open: ' + (res.error || 'Unknown error'), 'danger');
                     }
-                });
+                })
+                .catch(err => showToast('Failed to open: ' + err.message, 'danger'));
         }
 
         window.navigateToBrowserPath = navigateToBrowserPath;
@@ -441,11 +470,12 @@
         window.openBrowserItem = openBrowserItem;
 
         function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
+            const value = Number(bytes);
+            if (!Number.isFinite(value) || value <= 0) return '0 B';
             const k = 1024;
             const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+            const i = Math.min(sizes.length - 1, Math.floor(Math.log(value) / Math.log(k)));
+            return parseFloat((value / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
 
         // Logs filter & rendering
@@ -570,73 +600,6 @@
             visibleLogsCount += 100;
             renderLogs();
         };
-
-        // Cache filter & rendering
-        function setCacheFilter(status) {
-            cacheFilterStatus = status;
-            document.querySelectorAll('#cacheFilterPills .filter-pill').forEach(btn => {
-                const text = btn.innerText.trim().toLowerCase();
-                if (text === status.toLowerCase() || (status === 'local' && text.includes('local')) || (status === 'stub' && text.includes('stub'))) {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.remove('active');
-                }
-            });
-            renderCache();
-        }
-
-        function filterCache() {
-            cacheSearchQuery = document.getElementById('cacheSearchInput').value.trim().toLowerCase();
-            renderCache();
-        }
-
-        function renderCache() {
-            const body = document.getElementById('cacheBody');
-            if (!cachedCacheFiles || cachedCacheFiles.length === 0) {
-                body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">cloud_queue</span><span class="empty-title">No files cached locally</span><span class="empty-desc">Access files in your mount folder to see them in local cache.</span></div></td></tr>';
-                return;
-            }
-
-            const filtered = cachedCacheFiles.filter(f => {
-                const name = f.local_path || f.name || '';
-                const matchesSearch = !cacheSearchQuery || name.toLowerCase().includes(cacheSearchQuery);
-
-                let matchesStatus = true;
-                if (cacheFilterStatus === 'local') {
-                    matchesStatus = f.is_local;
-                } else if (cacheFilterStatus === 'stub') {
-                    matchesStatus = !f.is_local;
-                }
-
-                return matchesSearch && matchesStatus;
-            });
-
-            if (filtered.length === 0) {
-                body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;"><div class="empty-state"><span class="material-symbols-outlined empty-icon">search_off</span><span class="empty-title">No matches found</span><span class="empty-desc">Try adjusting your search query or filters.</span></div></td></tr>';
-                return;
-            }
-
-            body.innerHTML = filtered.map(f => {
-                const rawName = f.local_path || f.name || '';
-                const name    = escapeHtml(rawName);
-                const size    = formatBytes(f.size || 0);
-                const isLocal = f.is_local;
-                const uid     = f.node_uid ? encodeActionValue(f.node_uid) : '';
-                const status  = isLocal
-                    ? `<span class="log-status status-completed"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">check_circle</span>Local</span>`
-                    : `<span class="log-status" style="color:var(--text-muted);background:rgba(255,255,255,0.05);"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px;">cloud_queue</span>Stub</span>`;
-                const actions = uid ? `
-                    ${isLocal ? `<button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="evictFile(decodeActionValue('${uid}'))">Evict</button>` : ''}
-                    ${!isLocal ? `<button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.78rem;" onclick="pinFile(decodeActionValue('${uid}'))">Pin</button>` : ''}
-                ` : '';
-                return `<tr>
-                    <td><strong class="file-path-text" title="${name}">${name}</strong></td>
-                    <td style="color:var(--text-muted);">${size}</td>
-                    <td>${status}</td>
-                    <td style="display:flex;gap:6px;">${actions}</td>
-                </tr>`;
-            }).join('');
-        }
 
         function renderStatus(data) {
             // Check auth state to show login page or main dashboard
@@ -862,58 +825,6 @@
                 renderLogs();
             } catch (err) {
                 console.error('Failed to fetch logs:', err);
-            }
-        }
-
-        async function fetchCachedFiles() {
-            if (!FOD_MODE) return;
-            try {
-                const res  = await fetch('/api/cached-files');
-                const rawText = await res.text();
-                if (rawText === lastCacheJson) {
-                    return;
-                }
-                lastCacheJson = rawText;
-                const data = JSON.parse(rawText);
-                const statsEl = document.getElementById('cacheSizeDisplay');
-
-                if (data.stats) {
-                    statsEl.innerText = `${data.stats.totalFiles} files cached — ${formatBytes(data.stats.totalBytes)} used on disk`;
-                }
-
-                cachedCacheFiles = data.files || [];
-                renderCache();
-            } catch (err) {
-                console.error('Failed to fetch cached files:', err);
-            }
-        }
-
-        async function evictFile(nodeUid) {
-            await fetch('/api/evict', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nodeUid }),
-            });
-            fetchCachedFiles();
-        }
-
-        async function pinFile(nodeUid) {
-            await fetch('/api/pin', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nodeUid }),
-            });
-            fetchCachedFiles();
-        }
-
-        async function evictAll() {
-            if (!confirm('This will remove all locally cached files. Files will be re-downloaded on next access. Continue?')) return;
-            const res  = await fetch('/api/cached-files');
-            const data = await res.json();
-            if (data.files) {
-                for (const f of data.files) {
-                    if (f.node_uid && f.is_local) await evictFile(f.node_uid);
-                }
             }
         }
 
@@ -1153,19 +1064,16 @@
         window.restartDaemon = restartDaemon;
         window.confirmBulkDeletions = confirmBulkDeletions;
         window.restoreBulkDeletions = restoreBulkDeletions;
-        window.evictAll = evictAll;
         window.login = login;
-        window.evictFile = evictFile;
-        window.pinFile = pinFile;
         window.toggleTheme = toggleTheme;
         window.toggleSidebar = toggleSidebar;
-        window.switchTab = switchTab;
+        window.showTab = showTab;
         window.filterLogs = filterLogs;
-        window.clearLogFilter = clearLogFilter;
-        window.filterCachedFiles = filterCachedFiles;
-        window.clearCacheFilter = clearCacheFilter;
+        window.setLogFilter = setLogFilter;
         window.filterBrowserItems = filterBrowserItems;
-        window.navigateToBreadcrumb = navigateToBreadcrumb;
-        window.hydrateBrowserNode = hydrateBrowserNode;
-        window.pinBrowserNode = pinBrowserNode;
-        window.evictBrowserNode = evictBrowserNode;
+        window.navigateToBrowserPath = navigateToBrowserPath;
+        window.refreshBrowser = refreshBrowser;
+        window.hydrateBrowserItem = hydrateBrowserItem;
+        window.pinBrowserItem = pinBrowserItem;
+        window.evictBrowserItem = evictBrowserItem;
+        window.openBrowserItem = openBrowserItem;

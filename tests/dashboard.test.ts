@@ -79,6 +79,18 @@ describe("Dashboard API", () => {
         expect(data.localSyncRoot).toBe("/tmp/test-sync");
     });
 
+    it("GET / should render the accessible browser UI without the disabled cache tab", async () => {
+        const res = await fetch(`${BASE_URL}/`);
+        expect(res.status).toBe(200);
+        const html = await res.text();
+        expect(html).toContain('aria-label="Dashboard navigation"');
+        expect(html).toContain('id="tab-browser"');
+        expect(html).not.toContain("Local Cache");
+        expect(html).not.toContain("cacheMenuItem");
+        expect(html).not.toContain("var(--border)");
+        expect(html).not.toContain("var(--bg-hover)");
+    });
+
     it("GET /api/status should handle logged out state", async () => {
         mockSession.auth.isLoggedIn.mockReturnValue(false);
         const res = await fetch(`${BASE_URL}/api/status`);
