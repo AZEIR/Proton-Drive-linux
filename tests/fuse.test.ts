@@ -134,6 +134,25 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
         expect(engine.getActiveTransfers()).toBeArray();
     });
 
+    it("ProtonFuseEngine should persist and publish pause/resume transitions", async () => {
+        const engine = new ProtonFuseEngine(db, mockSdk, mockAuth, mockLogger, `${testDir}/mount`);
+        const onStatusChanged = mock();
+        const scanRemoteTree = mock().mockResolvedValue(undefined);
+        engine.on("statusChanged", onStatusChanged);
+        engine.scanRemoteTree = scanRemoteTree;
+
+        await engine.pause();
+        expect(engine.getStatus()).toBe("paused");
+        expect(engine.getIsPaused()).toBe(true);
+        expect(db.getConfig("is_sync_paused", "0")).toBe("1");
+
+        await engine.resume();
+        expect(engine.getIsPaused()).toBe(false);
+        expect(db.getConfig("is_sync_paused", "1")).toBe("0");
+        expect(onStatusChanged).toHaveBeenCalledTimes(2);
+        expect(scanRemoteTree).toHaveBeenCalledWith(false);
+    });
+
     it("FuseDriver should stream existing files through the revision uploader", async () => {
         db.setSyncMode("fuse");
         const hydrator = new FodHydrator(db, mockSdk, mockLogger);

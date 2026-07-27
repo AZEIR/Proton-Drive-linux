@@ -627,12 +627,13 @@ export function startDashboard(
                                 if (fod?.isFuseMode) {
                                     const transfers = fod.getActiveTransfers ? fod.getActiveTransfers() : fod.getUploads().map((u: any) => ({ ...u, type: 'upload' }));
                                     const isTransferring = transfers.length > 0;
+                                    const status = fod.getStatus?.() ?? (isTransferring ? 'syncing' : 'synced');
                                     payload = JSON.stringify({
-                                        status:          session?.auth?.isLoggedIn() ? (isTransferring ? 'syncing' : 'synced') : 'auth_required',
+                                        status:          session?.auth?.isLoggedIn() ? status : 'auth_required',
                                         mode:            'fod',
                                         mountPoint:      fod.mountPoint,
                                         activeTransfers: transfers,
-                                        isPaused:        false,
+                                        isPaused:        fod.getIsPaused?.() ?? status === 'paused',
                                         bulkDeletionCount: 0,
                                         email:           cachedEmail,
                                         isAuthenticating,
@@ -675,13 +676,16 @@ export function startDashboard(
                             const subscribedEngine = engine;
                             const interval = setInterval(send, 15000);
                             const onTransfersChanged = () => send();
+                            const onStatusChanged = () => send();
                             (subscribedFod as any).on?.('transfersChanged', onTransfersChanged);
+                            (subscribedFod as any).on?.('statusChanged', onStatusChanged);
                             if (subscribedEngine) {
                                 subscribedEngine.on('statusChanged', send);
                             }
                             cleanup = () => {
                                 clearInterval(interval);
                                 (subscribedFod as any).off?.('transfersChanged', onTransfersChanged);
+                                (subscribedFod as any).off?.('statusChanged', onStatusChanged);
                                 if (subscribedEngine) {
                                     subscribedEngine.off('statusChanged', send);
                                 }

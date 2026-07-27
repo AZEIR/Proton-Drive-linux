@@ -311,6 +311,7 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
         this.hydrator.setPaused(true);
         this.fuseDriver?.setPaused(true);
         this.db.log('system', 'system', 'completed', 'FUSE transfers paused');
+        this.emit('statusChanged');
     }
 
     async resume(): Promise<void> {
@@ -319,6 +320,7 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
         this.hydrator.setPaused(false);
         this.fuseDriver?.setPaused(false);
         this.db.log('system', 'system', 'completed', 'FUSE transfers resumed');
+        this.emit('statusChanged');
         void this.scanRemoteTree(false);
     }
 

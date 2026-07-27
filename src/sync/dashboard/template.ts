@@ -129,9 +129,9 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                             </div>
                             <div class="card-hero-actions">
                                 <div id="syncActions">
-                                    <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
-                                    <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
-                                    <button class="btn" onclick="openFolder()">Open Folder</button>
+                                    <button type="button" id="btnPause" class="btn btn-primary" aria-pressed="false" aria-label="Pause synchronization" onclick="togglePause()">Pause Sync</button>
+                                    <button type="button" id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
+                                    <button type="button" class="btn" onclick="openFolder()">Open Folder</button>
                                 </div>
                                 <div id="authActions" style="display: none;">
                                     <button id="btnLogin" class="btn btn-primary btn-login-action" onclick="login()">Login to Proton Drive</button>

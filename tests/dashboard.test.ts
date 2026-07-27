@@ -89,6 +89,8 @@ describe("Dashboard API", () => {
         expect(html).not.toContain("cacheMenuItem");
         expect(html).not.toContain("var(--border)");
         expect(html).not.toContain("var(--bg-hover)");
+        expect(html).toContain("isPaused = Boolean(data.isPaused || data.status === 'paused')");
+        expect(html).not.toContain("if (!FOD_MODE)");
     });
 
     it("GET /api/status should handle logged out state", async () => {
@@ -125,6 +127,59 @@ describe("Dashboard API", () => {
         const res = await fetch(`${BASE_URL}/api/resume`, { method: "POST" });
         expect(res.status).toBe(200);
         expect(mockEngine.resume).toHaveBeenCalled();
+    });
+
+    it("should report and route pause/resume state through the FUSE engine", async () => {
+        mockFod = {
+            isFuseMode: true,
+            mountPoint: "/tmp/test-fuse-mount",
+            getUploads: mock().mockReturnValue([]),
+            getActiveTransfers: mock().mockReturnValue([]),
+            getStatus: mock().mockReturnValue("paused"),
+            getIsPaused: mock().mockReturnValue(true),
+            pause: mock().mockResolvedValue(undefined),
+            resume: mock().mockResolvedValue(undefined),
+        };
+        server.updateContext(mockEngine, mockSession, mockFod);
+
+        const statusRes = await fetch(`${BASE_URL}/api/status`);
+        const status: any = await statusRes.json();
+        expect(status.status).toBe("paused");
+        expect(status.mode).toBe("fod");
+        expect(status.isPaused).toBe(true);
+
+        const pauseRes = await fetch(`${BASE_URL}/api/pause`, { method: "POST" });
+        const resumeRes = await fetch(`${BASE_URL}/api/resume`, { method: "POST" });
+        expect(pauseRes.status).toBe(200);
+        expect(resumeRes.status).toBe(200);
+        expect(mockFod.pause).toHaveBeenCalled();
+        expect(mockFod.resume).toHaveBeenCalled();
+        expect(mockEngine.pause).not.toHaveBeenCalled();
+        expect(mockEngine.resume).not.toHaveBeenCalled();
+    });
+
+    it("should stream the current paused state in FUSE mode", async () => {
+        mockFod = {
+            isFuseMode: true,
+            mountPoint: "/tmp/test-fuse-mount",
+            getUploads: mock().mockReturnValue([]),
+            getActiveTransfers: mock().mockReturnValue([]),
+            getStatus: mock().mockReturnValue("paused"),
+            getIsPaused: mock().mockReturnValue(true),
+            on: mock(),
+            off: mock(),
+        };
+        server.updateContext(mockEngine, mockSession, mockFod);
+
+        const response = await fetch(`${BASE_URL}/api/events`);
+        const reader = response.body!.getReader();
+        const firstEvent = await reader.read();
+        const payload = new TextDecoder().decode(firstEvent.value);
+        await reader.cancel();
+
+        expect(response.headers.get("content-type")).toContain("text/event-stream");
+        expect(payload).toContain('"status":"paused"');
+        expect(payload).toContain('"isPaused":true');
     });
 
     it("POST /api/sync should call engine.forceSync", async () => {

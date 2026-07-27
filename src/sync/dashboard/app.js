@@ -772,21 +772,22 @@
             cachedActiveTransfers = data.activeTransfers || [];
             renderLogs();
 
-            // Update pause button state
-            if (!FOD_MODE) {
-                isPaused = data.isPaused;
-                const btn = document.getElementById('btnPause');
-                if (btn) {
-                    btn.className = isPaused ? 'btn btn-primary' : 'btn';
-                    btn.innerText  = isPaused ? 'Resume Sync' : 'Pause Sync';
-                }
-                const syncBtn = document.getElementById('syncNowBtn');
-                if (syncBtn) {
-                    if (isPaused) {
-                        syncBtn.setAttribute('disabled', 'true');
-                    } else {
-                        syncBtn.removeAttribute('disabled');
-                    }
+            // Both Full Sync and FUSE expose the same pause/resume controls.
+            isPaused = Boolean(data.isPaused || data.status === 'paused');
+            const btn = document.getElementById('btnPause');
+            if (btn) {
+                btn.className = isPaused ? 'btn btn-primary' : 'btn';
+                btn.innerText = isPaused ? 'Resume Sync' : 'Pause Sync';
+                btn.setAttribute('aria-pressed', String(isPaused));
+                btn.setAttribute('aria-label', isPaused ? 'Resume synchronization' : 'Pause synchronization');
+                btn.disabled = false;
+            }
+            const syncBtn = document.getElementById('syncNowBtn');
+            if (syncBtn) {
+                if (isPaused) {
+                    syncBtn.setAttribute('disabled', 'true');
+                } else {
+                    syncBtn.removeAttribute('disabled');
                 }
             }
         }
@@ -830,8 +831,23 @@
 
         async function togglePause() {
             const endpoint = isPaused ? '/api/resume' : '/api/pause';
-            await fetch(endpoint, { method: 'POST' });
-            fetchStatus();
+            const btn = document.getElementById('btnPause');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = isPaused ? 'Resuming...' : 'Pausing...';
+            }
+            try {
+                const response = await fetch(endpoint, { method: 'POST' });
+                const result = await response.json();
+                if (!response.ok || !result.ok) {
+                    throw new Error(result.error || `Request failed (${response.status})`);
+                }
+            } catch (err) {
+                console.error('Failed to change pause state:', err);
+                showToast(`Could not ${isPaused ? 'resume' : 'pause'} sync: ${err.message}`, 'danger');
+            } finally {
+                await fetchStatus();
+            }
         }
 
         async function confirmBulkDeletions() {
