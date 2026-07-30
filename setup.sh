@@ -41,10 +41,27 @@ _check_bun() {
         echo "ERROR: Rust/Cargo and the FUSE 3 development package are required."
         exit 1
     fi
-    if ! command -v secret-tool >/dev/null 2>&1 && [ "${PROTON_DRIVE_CREDENTIALS_STORE:-}" != "unsafe_file" ]; then
-        echo "ERROR: secret-tool/libsecret is required for secure credential storage."
-        echo "For headless systems only, explicitly set PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file."
-        exit 1
+    if [ "${PROTON_DRIVE_CREDENTIALS_STORE:-}" != "unsafe_file" ]; then
+        IS_KDE_SESSION=0
+        case "${XDG_CURRENT_DESKTOP:-}:${DESKTOP_SESSION:-}:${KDE_FULL_SESSION:-}" in
+            *KDE*|*kde*|*Plasma*|*plasma*) IS_KDE_SESSION=1 ;;
+        esac
+        if [ "$IS_KDE_SESSION" -eq 1 ]; then
+            if ! command -v kwallet-query >/dev/null 2>&1; then
+                echo "ERROR: kwallet-query is required for secure credential storage on KDE Plasma."
+                exit 1
+            fi
+            if ! command -v qdbus6 >/dev/null 2>&1 &&
+               ! command -v qdbus-qt6 >/dev/null 2>&1 &&
+               ! command -v qdbus >/dev/null 2>&1; then
+                echo "ERROR: a Qt qdbus client is required to initialize secure KWallet storage."
+                exit 1
+            fi
+        elif ! command -v secret-tool >/dev/null 2>&1; then
+            echo "ERROR: secret-tool/libsecret is required for secure credential storage."
+            echo "For headless systems only, explicitly set PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file."
+            exit 1
+        fi
     fi
     if ! command -v python3 >/dev/null 2>&1; then
         echo "ERROR: Python 3 is required for the system tray."
