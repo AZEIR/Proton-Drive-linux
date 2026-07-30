@@ -297,6 +297,10 @@ describe("FUSE File-On-Demand & Dual-Mode System", () => {
         );
         expect(uploaded).toBe("updated content");
         expect(getFileRevisionUploader).toHaveBeenCalled();
+        expect(getFileRevisionUploader).toHaveBeenCalledWith(
+            "node-existing",
+            expect.objectContaining({ mediaType: "text/plain" }),
+        );
         expect(sdk.getFileUploader).not.toHaveBeenCalled();
         expect(db.getMapping("document.txt")?.remote_revision_uid).toBe("revision-new");
     });

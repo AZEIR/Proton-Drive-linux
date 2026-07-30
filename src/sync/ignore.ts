@@ -14,6 +14,7 @@ const DEFAULT_PATTERNS: string[] = [
     '.DS_Store',
     'Thumbs.db',
     'desktop.ini',
+    '.proton-drive-staging/', // Private same-filesystem atomic download staging
     '*.tmp-*',      // Proton sync temp files
     '~*',           // Office/LibreOffice lock files
     '*.swp',        // Vim swap files

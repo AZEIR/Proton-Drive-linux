@@ -17,7 +17,7 @@ import {
   openSync,
   utimesSync,
 } from "node:fs";
-import { copyFile, mkdir, readdir, rename, rm, stat, lstat, unlink } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, rm, rmdir, stat, lstat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -40,6 +40,7 @@ import {
   type NetworkSnapshot,
   type TransferDirection,
 } from "../utils/networkGovernor";
+import { getMediaType } from "../utils/mediaType";
 import { SyncDatabase, SyncMapping } from "./db";
 import { IgnoreMatcher, PROTONIGNORE_FILENAME } from "./ignore";
 import type { SyncStatus } from "../public/types";
@@ -49,6 +50,14 @@ class RemoteEventDeferredError extends Error {
     super(message);
     this.name = "RemoteEventDeferredError";
   }
+}
+
+const FULL_SYNC_STAGING_DIRECTORY = ".proton-drive-staging";
+
+interface QueuedLocalChange {
+  absolutePath: string;
+  type: "add" | "change" | "unlink";
+  isDir: boolean;
 }
 
 export class SyncEngine extends EventEmitter {
@@ -63,6 +72,9 @@ export class SyncEngine extends EventEmitter {
   private isStarted: boolean = false;
   private ignoredLocalChanges: Map<string, number> = new Map();
   private watcher: any = null;
+  private watcherEventQueue: QueuedLocalChange[] = [];
+  private watcherFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private watcherFlushPromise: Promise<void> = Promise.resolve();
   private remoteSubscription: any = null;
   private remoteEventScopeId: string = "";
   private remoteEventDrainPromise: Promise<void> | null = null;
@@ -519,6 +531,10 @@ export class SyncEngine extends EventEmitter {
     } else {
       this.wasRootDeleted = false;
     }
+    // Remove only daemon-owned staging artifacts left by an interrupted older
+    // process before the watcher starts observing this tree.
+    await this.cleanupTempFiles(this.localSyncRoot);
+    await this.cleanupFullSyncStagingFiles();
 
     this.logger.info(`Starting Sync Engine at ${this.localSyncRoot}`);
     this.db.log(
@@ -660,6 +676,12 @@ export class SyncEngine extends EventEmitter {
       await this.watcher.close();
       this.watcher = null;
     }
+    if (this.watcherFlushTimer) {
+      clearTimeout(this.watcherFlushTimer);
+      this.watcherFlushTimer = null;
+    }
+    this.watcherEventQueue = [];
+    await this.watcherFlushPromise.catch(() => {});
 
     if (this.remoteSubscription) {
       try {
@@ -982,8 +1004,9 @@ export class SyncEngine extends EventEmitter {
         mappedCount > 5 &&
         pendingDeletes.length > 0;
       const isBulkDelete =
-        pendingDeletes.length >= 10 &&
-        pendingDeletes.length > mappedCount * 0.3;
+        pendingDeletes.length >= 1000 ||
+        (pendingDeletes.length >= 100 &&
+          pendingDeletes.length >= mappedCount * 0.1);
 
       if (!this.isBulkDeletionConfirmed && (isDiskEmptyWipe || isBulkDelete)) {
         this.logger.warn(
@@ -1630,8 +1653,9 @@ export class SyncEngine extends EventEmitter {
       mappedCount > 5 &&
       plannedRemoteDeletes.length > 0;
     const isBulkDelete =
-      plannedRemoteDeletes.length >= 10 &&
-      plannedRemoteDeletes.length > mappedCount * 0.3;
+      plannedRemoteDeletes.length >= 1000 ||
+      (plannedRemoteDeletes.length >= 100 &&
+        plannedRemoteDeletes.length >= mappedCount * 0.1);
 
     if (!this.isBulkDeletionConfirmed && (isDiskEmptyWipe || isBulkDelete)) {
       this.logger.warn(
@@ -1719,9 +1743,12 @@ export class SyncEngine extends EventEmitter {
       }
     }
 
-    const MASS_DELETION_LIMIT = 10;
-    if (projectedDeletions > MASS_DELETION_LIMIT) {
-      const msg = `MASS DELETION SAFETY GUARD TRIGGERED! Reconciliation detected ${projectedDeletions} local file deletions (threshold is ${MASS_DELETION_LIMIT}). Auto-pausing sync engine to prevent accidental cloud data loss.`;
+    const isMassDeletion =
+      projectedDeletions >= 1000 ||
+      (projectedDeletions >= 100 &&
+        projectedDeletions >= mappingsCache.size * 0.1);
+    if (isMassDeletion) {
+      const msg = `MASS DELETION SAFETY GUARD TRIGGERED! Reconciliation detected ${projectedDeletions} local file deletions. Auto-pausing sync engine to prevent accidental cloud data loss.`;
       this.logger.error(msg);
       this.db.log("system", "system", "failed", msg);
       this.isPaused = true;
@@ -2006,19 +2033,19 @@ export class SyncEngine extends EventEmitter {
 
     this.watcher
       .on("add", (filePath: string) =>
-        this.handleLocalChange(filePath, "add", false),
+        this.queueLocalChange(filePath, "add", false),
       )
       .on("change", (filePath: string) =>
-        this.handleLocalChange(filePath, "change", false),
+        this.queueLocalChange(filePath, "change", false),
       )
       .on("unlink", (filePath: string) =>
-        this.handleLocalChange(filePath, "unlink", false),
+        this.queueLocalChange(filePath, "unlink", false),
       )
       .on("addDir", (dirPath: string) =>
-        this.handleLocalChange(dirPath, "add", true),
+        this.queueLocalChange(dirPath, "add", true),
       )
       .on("unlinkDir", (dirPath: string) =>
-        this.handleLocalChange(dirPath, "unlink", true),
+        this.queueLocalChange(dirPath, "unlink", true),
       )
       .on("error", (error: any) => {
         const msg = (error?.message || "").toLowerCase();
@@ -2044,6 +2071,88 @@ export class SyncEngine extends EventEmitter {
           this.logger.error("[watcher] Error:", error);
         }
       });
+  }
+
+  /**
+   * Filesystem moves are emitted as independent unlink/add events, and Chokidar
+   * does not guarantee their order. Buffer one short window, register every
+   * unlink first, then process additions concurrently. This lets a bulk cut or
+   * rename reserve its old mappings before any upload/delete fallback runs.
+   */
+  private queueLocalChange(
+    absolutePath: string,
+    type: "add" | "change" | "unlink",
+    isDir: boolean,
+  ): void {
+    this.watcherEventQueue.push({ absolutePath, type, isDir });
+    if (this.watcherFlushTimer) clearTimeout(this.watcherFlushTimer);
+    this.watcherFlushTimer = setTimeout(() => {
+      this.watcherFlushTimer = null;
+      const batch = this.watcherEventQueue.splice(0);
+      this.watcherFlushPromise = this.watcherFlushPromise
+        .then(() => this.flushLocalChanges(batch))
+        .catch((error) => {
+          this.logger.error("Failed to process local filesystem event batch:", error);
+        });
+    }, 250);
+    this.watcherFlushTimer.unref();
+  }
+
+  private async flushLocalChanges(batch: QueuedLocalChange[]): Promise<void> {
+    if (batch.length === 0 || !this.isStarted) return;
+
+    // Chokidar can report add+change or repeated unlink events for one path in
+    // the same window. Preserve at most one unlink and the latest addition so
+    // an atomic save still behaves as unlink+add without duplicate uploads.
+    const unlinkByPath = new Map<string, QueuedLocalChange>();
+    const additionByPath = new Map<string, QueuedLocalChange>();
+    for (const event of batch) {
+      const target = event.type === "unlink" ? unlinkByPath : additionByPath;
+      target.set(event.absolutePath, event);
+    }
+
+    const unlinks = [...unlinkByPath.values()]
+      .sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.absolutePath.split(path.sep).length - b.absolutePath.split(path.sep).length;
+      });
+    const additions = [...additionByPath.values()];
+
+    for (const event of unlinks) {
+      await this.handleLocalChange(event.absolutePath, event.type, event.isDir);
+    }
+
+    // Parent directories must be mapped/moved before their descendants.
+    const directoryAdditions = additions
+      .filter((event) => event.isDir)
+      .sort(
+        (a, b) =>
+          a.absolutePath.split(path.sep).length -
+          b.absolutePath.split(path.sep).length,
+      );
+    let directoryIndex = 0;
+    while (directoryIndex < directoryAdditions.length) {
+      const depth = directoryAdditions[directoryIndex].absolutePath.split(path.sep).length;
+      const sameDepth: QueuedLocalChange[] = [];
+      while (
+        directoryIndex < directoryAdditions.length &&
+        directoryAdditions[directoryIndex].absolutePath.split(path.sep).length === depth
+      ) {
+        sameDepth.push(directoryAdditions[directoryIndex++]);
+      }
+      await Promise.all(
+        sameDepth.map((event) =>
+          this.handleLocalChange(event.absolutePath, event.type, true),
+        ),
+      );
+    }
+
+    const fileAdditions = additions.filter((event) => !event.isDir);
+    await Promise.all(
+      fileAdditions.map((event) =>
+        this.handleLocalChange(event.absolutePath, event.type, false),
+      ),
+    );
   }
 
   private async handleLocalChange(
@@ -2204,32 +2313,48 @@ export class SyncEngine extends EventEmitter {
 
           // Remove from pending deletes
           this.pendingLocalDeletes.delete(matchedOldPath);
+          this.db.deletePendingDelete(matchedOldPath);
+
+          // A directory move also produces unlink events for its descendants.
+          // Cancel those before making any network call so their debounce
+          // timers can never trash children while the parent move is in flight.
+          if (isDir) {
+            const oldPrefix = `${matchedOldPath}/`;
+            for (const childPath of [...this.pendingLocalDeletes.keys()]) {
+              if (!childPath.startsWith(oldPrefix)) continue;
+              this.pendingLocalDeletes.delete(childPath);
+              this.db.deletePendingDelete(childPath);
+            }
+            this.db.deletePendingDeletesByPrefix(matchedOldPath);
+          }
 
           try {
             // A. Handle remote move/rename
-            const oldParent = path.dirname(matchedOldPath);
-            const newParent = path.dirname(relativePath);
-            if (oldParent !== newParent) {
-              const newParentUid =
-                newParent === "."
-                  ? this.remoteRootUid
-                  : await this.ensureRemoteParentFolder(newParent);
-              await this.runWithRetry(async () => {
-                for await (const result of this.sdk.moveNodes(
-                  [matchedNodeUid!],
-                  newParentUid,
-                )) {
-                  if (!result.ok) throw result.error;
-                }
-              });
-            }
+            await this.networkGovernor.schedule("metadata", 0, async () => {
+              const oldParent = path.dirname(matchedOldPath);
+              const newParent = path.dirname(relativePath);
+              if (oldParent !== newParent) {
+                const newParentUid =
+                  newParent === "."
+                    ? this.remoteRootUid
+                    : await this.ensureRemoteParentFolder(newParent);
+                await this.runWithRetry(async () => {
+                  for await (const result of this.sdk.moveNodes(
+                    [matchedNodeUid!],
+                    newParentUid,
+                  )) {
+                    if (!result.ok) throw result.error;
+                  }
+                });
+              }
 
-            const oldName = path.basename(matchedOldPath);
-            if (oldName !== newName) {
-              await this.runWithRetry(async () => {
-                await this.sdk.renameNode(matchedNodeUid!, newName);
-              });
-            }
+              const oldName = path.basename(matchedOldPath);
+              if (oldName !== newName) {
+                await this.runWithRetry(async () => {
+                  await this.sdk.renameNode(matchedNodeUid!, newName);
+                });
+              }
+            });
 
             // B. Update DB mapping
             const oldMapped = this.db.getMapping(matchedOldPath);
@@ -2321,7 +2446,7 @@ export class SyncEngine extends EventEmitter {
             Date.now() + 2500 + 15_000,
           );
 
-          setTimeout(async () => {
+          const deletionTimer = setTimeout(async () => {
             const pending = this.pendingLocalDeletes.get(relativePath);
             if (pending) {
               // Hold if paused, bulk-deletion warning active, or currently offline.
@@ -2375,8 +2500,9 @@ export class SyncEngine extends EventEmitter {
               // that normal developer workflows (git checkout, rm node_modules)
               // don't trigger false positives. Mirrors the startup reconciliation logic.
               const isBulkDelete =
-                this.recentDeletions.length >= 10 &&
-                this.recentDeletions.length > mappedCount * 0.3;
+                this.recentDeletions.length >= 1000 ||
+                (this.recentDeletions.length >= 100 &&
+                  this.recentDeletions.length >= mappedCount * 0.1);
 
               if (isEmptyWipe || isBulkDelete) {
                 this.logger.warn(
@@ -2422,6 +2548,7 @@ export class SyncEngine extends EventEmitter {
               }
             }
           }, 2500);
+          deletionTimer.unref();
         }
       }
       this.emit("statusChanged");
@@ -2902,8 +3029,7 @@ export class SyncEngine extends EventEmitter {
             fileStat = await stat(localPath);
             size = fileStat.size;
             mtime = fileStat.mtimeMs;
-            const snapshotPath = `${localPath}.proton-upload-${randomUUID()}.tmp`;
-            this.ignorePathTemporarily(snapshotPath, 120_000);
+            const snapshotPath = this.createFullSyncStagingPath("upload");
             await copyFile(localPath, snapshotPath, constants.COPYFILE_FICLONE);
             const postSnapshotStat = await stat(localPath);
             if (
@@ -2924,7 +3050,7 @@ export class SyncEngine extends EventEmitter {
                 Math.min(size, 8 * 1024 * 1024),
                 async () => {
                   const metadata = {
-                    mediaType: "application/octet-stream",
+                    mediaType: getMediaType(relativePath),
                     expectedSize: size,
                     expectedSha1: sha1,
                     modificationTime: new Date(mtime),
@@ -3016,6 +3142,7 @@ export class SyncEngine extends EventEmitter {
               );
             } finally {
               await unlink(snapshotPath).catch(() => {});
+              await this.removeFullSyncStagingDirectoryIfEmpty();
             }
           },
         );
@@ -3259,7 +3386,7 @@ export class SyncEngine extends EventEmitter {
           mkdirSync(parentLocalPath, { recursive: true });
         }
 
-        const tmpPath = `${localPath}.tmp-${Date.now()}`;
+        const tmpPath = this.createFullSyncStagingPath("download");
 
         this.ignorePathTemporarily(tmpPath, 60_000);
 
@@ -3367,6 +3494,7 @@ export class SyncEngine extends EventEmitter {
         } catch (downloadErr) {
           (activeAbortController as AbortController | null)?.abort();
           await unlink(tmpPath).catch(() => {});
+          await this.removeFullSyncStagingDirectoryIfEmpty();
           throw downloadErr;
         } finally {
           this.ignoredLocalChanges.delete(tmpPath);
@@ -3379,8 +3507,15 @@ export class SyncEngine extends EventEmitter {
           () => {},
         );
         fsyncFile(tmpPath);
-        await rename(tmpPath, localPath);
-        fsyncDirectory(path.dirname(localPath));
+        try {
+          await rename(tmpPath, localPath);
+          fsyncDirectory(path.dirname(localPath));
+        } catch (publishError) {
+          await unlink(tmpPath).catch(() => {});
+          throw publishError;
+        } finally {
+          await this.removeFullSyncStagingDirectoryIfEmpty();
+        }
 
         // Set modification time locally to match remote
         const remoteMtime = revision.claimedModificationTime
@@ -4023,6 +4158,20 @@ export class SyncEngine extends EventEmitter {
     }, durationMs);
   }
 
+  private getFullSyncStagingDirectory(): string {
+    return path.join(this.localSyncRoot, FULL_SYNC_STAGING_DIRECTORY);
+  }
+
+  private createFullSyncStagingPath(kind: "upload" | "download"): string {
+    const stagingDirectory = this.getFullSyncStagingDirectory();
+    mkdirSync(stagingDirectory, { recursive: true, mode: 0o700 });
+    return path.join(stagingDirectory, `${kind}-${randomUUID()}`);
+  }
+
+  private async removeFullSyncStagingDirectoryIfEmpty(): Promise<void> {
+    await rmdir(this.getFullSyncStagingDirectory()).catch(() => {});
+  }
+
   /** Safely removes orphaned .tmp-<timestamp> files left by previous crashes or interrupted downloads */
   private async cleanupTempFiles(dir: string): Promise<void> {
     if (!existsSync(dir)) return;
@@ -4036,8 +4185,12 @@ export class SyncEngine extends EventEmitter {
             await this.cleanupTempFiles(fullPath);
           } else {
             // Target only daemon download temporary files ending in .tmp-<13+ digits>
-            const match = entry.name.match(/\.tmp-(\d{13,})$/);
-            if (match) {
+            const downloadMatch = entry.name.match(/\.tmp-(\d{13,})$/);
+            const legacyUploadSnapshot =
+              /\.proton-upload-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/i.test(
+                entry.name,
+              );
+            if (downloadMatch || legacyUploadSnapshot) {
               const relPath = path.relative(this.localSyncRoot, fullPath);
 
               // 1. Skip if file is currently being actively downloaded
@@ -4045,10 +4198,12 @@ export class SyncEngine extends EventEmitter {
 
               // 2. Check timestamp: skip if created within last 2 minutes (< 120_000ms)
               try {
-                const fnTs = parseInt(match[1], 10);
-                if (!isNaN(fnTs)) {
-                  const ageMs = now - fnTs;
-                  if (ageMs < 120_000) return;
+                if (downloadMatch) {
+                  const fnTs = parseInt(downloadMatch[1], 10);
+                  if (!isNaN(fnTs) && now - fnTs < 120_000) return;
+                } else {
+                  const temporaryStat = await stat(fullPath);
+                  if (now - temporaryStat.mtimeMs < 120_000) return;
                 }
               } catch {}
 
@@ -4064,10 +4219,32 @@ export class SyncEngine extends EventEmitter {
     }
   }
 
+  private async cleanupFullSyncStagingFiles(): Promise<void> {
+    if (this.activeTransfers.size > 0) return;
+    const stagingDirectory = this.getFullSyncStagingDirectory();
+    if (!existsSync(stagingDirectory)) return;
+    try {
+      const entries = await readdir(stagingDirectory, { withFileTypes: true });
+      const cutoff = Date.now() - 120_000;
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const stagingPath = path.join(stagingDirectory, entry.name);
+        const stagingStat = await stat(stagingPath).catch(() => null);
+        if (stagingStat && stagingStat.mtimeMs <= cutoff) {
+          await unlink(stagingPath).catch(() => {});
+        }
+      }
+      await this.removeFullSyncStagingDirectoryIfEmpty();
+    } catch (error) {
+      this.logger.warn("Failed to clean full-sync staging directory:", error);
+    }
+  }
+
   /** Performs safe post-sync cleanup and maintenance after full and fast sync passes */
   private async postSyncCleanup(): Promise<void> {
     // 1. Safe cleanup of orphaned daemon download temp files
     await this.cleanupTempFiles(this.localSyncRoot);
+    await this.cleanupFullSyncStagingFiles();
 
     // 2. Database maintenance: prune activity logs older than 30 days
     try {

@@ -26,6 +26,7 @@ import { getSha1 } from '../sdk/adapter';
 import { openFileReadableStream } from '../utils/fileStreams';
 import type { JournalOperation } from '../sync/journal';
 import { getNetworkGovernor } from '../utils/networkGovernor';
+import { getMediaType } from '../utils/mediaType';
 
 interface OpenHandle {
     relPath: string;
@@ -206,7 +207,32 @@ export class FuseDriver extends EventEmitter {
             },
 
             chmod(filePath: string, mode: number, cb: (code: number) => void) {
-                cb(Fuse.ENOSYS);
+                // Drive does not store POSIX mode bits. Accept the compatibility
+                // call so file managers can finish a paste, while getattr keeps
+                // exposing the safe fixed 0755/0644 modes.
+                const relPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+                cb(
+                    filePath === '/' ||
+                    self.db.getMapping(relPath) ||
+                    self.db.hasMappingsByPrefix(relPath)
+                        ? 0
+                        : Fuse.ENOENT,
+                );
+            },
+
+            chown(filePath: string, uid: number, gid: number, cb: (code: number) => void) {
+                const relPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+                const currentUid = process.getuid ? process.getuid() : 1000;
+                const currentGid = process.getgid ? process.getgid() : 1000;
+                if (uid !== -1 && uid !== currentUid) return cb(Fuse.EPERM);
+                if (gid !== -1 && gid !== currentGid) return cb(Fuse.EPERM);
+                cb(
+                    filePath === '/' ||
+                    self.db.getMapping(relPath) ||
+                    self.db.hasMappingsByPrefix(relPath)
+                        ? 0
+                        : Fuse.ENOENT,
+                );
             },
 
             open(filePath: string, flags: number, cb: (code: number, fd?: number) => void) {
@@ -560,7 +586,15 @@ export class FuseDriver extends EventEmitter {
 
         return new Promise<void>((resolve, reject) => {
             try {
-                this.fuse = new Fuse(this.mountPoint, ops, { displayFolder: 'Proton Drive', force: true });
+                this.fuse = new Fuse(this.mountPoint, ops, {
+                    displayFolder: 'Proton Drive',
+                    force: true,
+                    defaultPermissions: true,
+                    uid: process.getuid ? process.getuid() : undefined,
+                    gid: process.getgid ? process.getgid() : undefined,
+                    umask: '022',
+                    autoCache: true,
+                });
                 this.fuse.mount((err: any) => {
                     if (err) {
                         this.logger.error('Failed to mount FUSE filesystem:', err);
@@ -982,7 +1016,7 @@ export class FuseDriver extends EventEmitter {
             const sha1 = await getSha1(snapshotPath);
             uploadInfo.size = size;
             const metadata = {
-                mediaType: 'application/octet-stream',
+                mediaType: getMediaType(relPath),
                 expectedSize: size,
                 expectedSha1: sha1,
                 modificationTime: new Date(mtime),

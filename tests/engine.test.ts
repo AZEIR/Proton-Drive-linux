@@ -407,9 +407,15 @@ describe("SyncEngine", () => {
             
             // Should have uploaded the file
             expect(mockSdk.getFileUploader).toHaveBeenCalled();
+            expect(mockSdk.getFileUploader).toHaveBeenCalledWith(
+                "root-uid",
+                "local.txt",
+                expect.objectContaining({ mediaType: "text/plain" }),
+            );
             const mapping = db.getMapping("local.txt");
             expect(mapping).toBeDefined();
             expect(mapping?.node_uid).toBe("new-node-uid");
+            expect(existsSync(path.join(syncRoot, ".proton-drive-staging"))).toBe(false);
         });
 
         it("should download remote files that are not local", async () => {
@@ -697,6 +703,79 @@ describe("SyncEngine", () => {
 
             // 4. getFileUploader should NOT have been called for file.txt (no re-uploading)
             expect(mockSdk.getFileUploader).not.toHaveBeenCalled();
+        });
+
+        it("should pair a 10-file bulk move without leaving durable deletes or duplicate originals", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: console.error, debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            mkdirSync(path.join(syncRoot, "destination"), { recursive: true });
+            db.setMapping({
+                local_path: "destination",
+                node_uid: "destination-uid",
+                is_dir: 1,
+                size: 0,
+                mtime: Date.now(),
+                sha1: "",
+                remote_revision_uid: "",
+                remote_mtime: Date.now(),
+            });
+
+            let moveCount = 0;
+            mockSdk.moveNodes = async function* (uids: string[], parentUid: string) {
+                moveCount++;
+                expect(parentUid).toBe("destination-uid");
+                yield { uid: uids[0], ok: true };
+            };
+
+            const events: {
+                absolutePath: string;
+                type: "add" | "change" | "unlink";
+                isDir: boolean;
+            }[] = [];
+            for (let index = 0; index < 10; index++) {
+                const name = `file-${index}.txt`;
+                const oldRelativePath = `source/${name}`;
+                const newRelativePath = `destination/${name}`;
+                const content = `bulk move ${index}`;
+                writeFileSync(path.join(syncRoot, newRelativePath), content);
+                db.setMapping({
+                    local_path: oldRelativePath,
+                    node_uid: `node-${index}`,
+                    is_dir: 0,
+                    size: Buffer.byteLength(content),
+                    mtime: Date.now(),
+                    sha1: "",
+                    remote_revision_uid: `revision-${index}`,
+                    remote_mtime: Date.now(),
+                });
+                events.push({
+                    absolutePath: path.join(syncRoot, oldRelativePath),
+                    type: "unlink",
+                    isDir: false,
+                });
+                events.push({
+                    absolutePath: path.join(syncRoot, newRelativePath),
+                    type: "add",
+                    isDir: false,
+                });
+            }
+
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+            await (engine as any).flushLocalChanges(events);
+
+            expect(moveCount).toBe(10);
+            expect(db.getPendingDeletes()).toHaveLength(0);
+            for (let index = 0; index < 10; index++) {
+                expect(db.getMapping(`source/file-${index}.txt`)).toBeFalsy();
+                expect(db.getMapping(`destination/file-${index}.txt`)?.node_uid).toBe(`node-${index}`);
+            }
         });
 
         it("should upload local file if modified locally after remote deletion", async () => {
