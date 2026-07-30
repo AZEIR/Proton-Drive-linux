@@ -9,9 +9,9 @@ production-ready.
 - Node 22 production runtime; Bun is limited to build and development tasks.
 - SDK submodule based on the current official `main`, with a small Linux
   compatibility patch for Node credentials/runtime behavior and quota display.
-- Secret Service credentials by default. The headless plaintext store requires
-  explicit opt-in and uses `0700` directories, `0600` files, atomic rename, and
-  file/directory sync.
+- KWallet credentials on KDE Plasma and Secret Service credentials on other
+  desktops. The headless plaintext store requires explicit opt-in and uses
+  `0700` directories, `0600` files, atomic rename, and file/directory sync.
 - Authenticated browser APIs with a short-lived HttpOnly session, same-origin
   enforcement, CSRF protection, strict CSP, and no inline script/style.
 - A `0600` Unix control socket for tray mutations.

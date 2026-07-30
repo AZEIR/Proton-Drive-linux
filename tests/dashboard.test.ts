@@ -23,6 +23,14 @@ describe("Dashboard API", () => {
         return fetch(`${BASE_URL}${path}`, { ...init, headers });
     };
 
+    const bootstrapDashboard = async (dashboardServer: any) => {
+        const bootstrap = await fetch(dashboardServer.getAuthenticatedUrl(), {
+            redirect: "manual",
+        });
+        expect(bootstrap.status).toBe(303);
+        return bootstrap.headers.get("set-cookie")!.split(";")[0];
+    };
+
     beforeEach(async () => {
         let concurrencyLimit = 2;
         let maxSpeedKbps = 0;
@@ -102,8 +110,7 @@ describe("Dashboard API", () => {
         };
 
         server = startDashboard(mockDb as any, mockEngine as any, mockSession as any, PORT);
-        const root = await fetch(`${BASE_URL}/`);
-        sessionCookie = root.headers.get("set-cookie")!.split(";")[0];
+        sessionCookie = await bootstrapDashboard(server);
         const sessionResponse = await fetch(`${BASE_URL}/api/v1/session`, {
             headers: { Origin: BASE_URL, Cookie: sessionCookie },
         });
@@ -126,7 +133,9 @@ describe("Dashboard API", () => {
     });
 
     it("GET / should render the accessible browser UI without the disabled cache tab", async () => {
-        const res = await fetch(`${BASE_URL}/`);
+        const res = await fetch(`${BASE_URL}/`, {
+            headers: { Cookie: sessionCookie },
+        });
         expect(res.status).toBe(200);
         const csp = res.headers.get("content-security-policy") || "";
         expect(csp).toContain("script-src 'self'");
@@ -340,8 +349,7 @@ describe("Dashboard API", () => {
     it("GET /api/status should handle null engine and session gracefully when offline", async () => {
         const offlineServer = startDashboard(mockDb as any, null, null, 8090);
         try {
-            const root = await fetch("http://localhost:8090/");
-            const offlineCookie = root.headers.get("set-cookie")!.split(";")[0];
+            const offlineCookie = await bootstrapDashboard(offlineServer);
             const res = await fetch("http://localhost:8090/api/status", {
                 headers: { Cookie: offlineCookie },
             });
@@ -480,6 +488,12 @@ describe("Dashboard API", () => {
     it("should reject unauthenticated local API reads", async () => {
         const res = await fetch(`${BASE_URL}/api/status`);
         expect(res.status).toBe(403);
+    });
+
+    it("should not issue a browser session to an unauthenticated local process", async () => {
+        const res = await fetch(`${BASE_URL}/`, { redirect: "manual" });
+        expect(res.status).toBe(401);
+        expect(res.headers.get("set-cookie")).toBeNull();
     });
 
     it("should reject non-browser mutations without an Origin header", async () => {

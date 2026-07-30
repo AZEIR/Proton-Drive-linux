@@ -190,7 +190,14 @@ class ProtonDriveTrayApp:
 
     # Context Menu Callbacks
     def open_dashboard(self, widget):
-        webbrowser.open(f"http://localhost:{PORT}")
+        try:
+            response = control_command("dashboard-url")
+            dashboard_url = response.get("url") if response.get("ok") else None
+            if not dashboard_url:
+                raise RuntimeError("dashboard URL unavailable")
+            webbrowser.open(dashboard_url)
+        except Exception as error:
+            print(f"Error opening authenticated dashboard: {error}", file=sys.stderr)
 
     def open_folder(self, widget):
         self.async_command("open-folder")

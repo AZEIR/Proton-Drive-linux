@@ -113,7 +113,9 @@ All management goes through `./drive.sh`:
 
 ## Dashboard
 
-Open `http://localhost:8085` in any browser (or run `./drive.sh ui`).
+Run `./drive.sh ui` or use the tray icon. The daemon issues a short-lived,
+local dashboard session through its protected Unix control socket; direct
+unauthenticated browser access is intentionally rejected.
 
 From the dashboard you can:
 - View active uploads/downloads and transfer progress

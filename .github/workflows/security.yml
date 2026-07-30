@@ -20,6 +20,10 @@ jobs:
         with:
           submodules: false
       - run: git submodule update --init sdk
+      - name: Scan repository history for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: github/codeql-action/init@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
         with:
           languages: javascript-typescript

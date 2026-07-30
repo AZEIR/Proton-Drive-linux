@@ -241,11 +241,11 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                             <span class="material-symbols-outlined mode-card-icon">cloud_sync</span>
                                             <span class="mode-card-badge" id="badgeModeFuse">Active</span>
                                         </div>
-                                        <h4 class="mode-card-title">FUSE File-On-Demand</h4>
-                                        <p class="mode-card-desc">Mounts your Drive virtual filesystem without using local disk space until accessed.</p>
+                                        <h4 class="mode-card-title">FUSE File-On-Demand — Experimental</h4>
+                                        <p class="mode-card-desc">Mounts a virtual filesystem and downloads files on demand. The production FUSE 3 sidecar and crash-recovery gates are not complete; use Full Sync for important data.</p>
                                         <div class="mode-card-footer">
-                                            <span class="material-symbols-outlined check-icon">check_circle</span>
-                                            <span>Saves Disk Space</span>
+                                            <span class="material-symbols-outlined check-icon">warning</span>
+                                            <span>Testing and evaluation only</span>
                                         </div>
                                     </button>
                                 </div>

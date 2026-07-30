@@ -60,6 +60,30 @@ fi
 DAEMON_JS="$(cd "$(dirname "$DAEMON_BIN")" && pwd)/proton-sync.js"
 TRAY_SCRIPT="${SCRIPT_DIR}/proton-drive-tray.py"
 
+get_authenticated_dashboard_url() {
+    local control_socket_path="${XDG_RUNTIME_DIR:-/tmp/drive-for-linux-$(id -u)}/drive-for-linux/control.sock"
+    python3 - "$control_socket_path" <<'PY'
+import json
+import socket
+import sys
+
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(2)
+    client.connect(sys.argv[1])
+    client.sendall(b'{"command":"dashboard-url"}\n')
+    response = b""
+    while b"\n" not in response:
+        chunk = client.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+payload = json.loads(response.decode("utf-8"))
+if not payload.get("ok") or not payload.get("url"):
+    raise SystemExit(1)
+print(payload["url"])
+PY
+}
+
 show_help() {
     echo "============================================="
     echo "    Proton Drive Linux Client (no systemd)   "
@@ -304,7 +328,7 @@ case "$cmd" in
         fi
         echo " System Tray:     ${TRAY_INFO}"
 
-        echo " Web Dashboard:   http://localhost:8085"
+        echo " Web Dashboard:   run ./drive.sh ui"
         echo "============================================="
         ;;
     logs)
@@ -322,18 +346,26 @@ case "$cmd" in
         ;;
     ui|dashboard)
         PORT=8085
-        echo "Opening Web Dashboard at http://localhost:${PORT}..."
+        echo "Opening authenticated Web Dashboard..."
+        DASHBOARD_URL="$(get_authenticated_dashboard_url)" || {
+            echo "Dashboard authorization is unavailable. Make sure the daemon is running."
+            exit 1
+        }
         if command -v xdg-open > /dev/null; then
-            xdg-open "http://localhost:${PORT}" 2>/dev/null
+            xdg-open "$DASHBOARD_URL" 2>/dev/null
         elif command -v open > /dev/null; then
-            open "http://localhost:${PORT}"
+            open "$DASHBOARD_URL"
         else
-            echo "Please open http://localhost:${PORT} in your browser."
+            echo "Use the tray icon to open the authenticated dashboard."
         fi
         ;;
     login)
         echo "Opening authentication page..."
-        xdg-open "http://localhost:8085" 2>/dev/null || echo "Open http://localhost:8085 to sign in"
+        DASHBOARD_URL="$(get_authenticated_dashboard_url)" || {
+            echo "Dashboard authorization is unavailable. Make sure the daemon is running."
+            exit 1
+        }
+        xdg-open "$DASHBOARD_URL" 2>/dev/null || echo "Use the tray icon to open the authenticated dashboard."
         ;;
     reset)
         echo "Stopping daemon, systemd service, and tray..."

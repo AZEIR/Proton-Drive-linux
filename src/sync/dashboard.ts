@@ -866,11 +866,34 @@ export function startDashboard(
 
             // HTML FRONTEND PAGE
             if (url.pathname === '/' || url.pathname === '/index.html') {
+                const hasBootstrapToken = safeTokenEqual(
+                    url.searchParams.get('bootstrap'),
+                    dashboardToken,
+                );
+                if (!hasDashboardSession && !hasBootstrapToken) {
+                    return new Response(
+                        'Dashboard authorization required. Open the dashboard from the Drive tray or CLI.',
+                        {
+                            status: 401,
+                            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                        },
+                    );
+                }
+                if (hasBootstrapToken) {
+                    return new Response(null, {
+                        status: 303,
+                        headers: {
+                            'Location': '/',
+                            'Set-Cookie': `proton_dashboard=${dashboardToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`,
+                            'Cache-Control': 'no-store',
+                        },
+                    });
+                }
                 const isFod = fod?.isFuseMode ?? false;
                 return new Response(getHtmlContent(isFod), {
                     headers: {
                         'Content-Type': 'text/html; charset=utf-8',
-                        'Set-Cookie': `proton_dashboard=${dashboardToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`,
+                        'Cache-Control': 'no-store',
                     },
                 });
             }
@@ -881,6 +904,9 @@ export function startDashboard(
 
     logger.info(`Dashboard server running at http://localhost:${port}`);
     return Object.assign(server, {
+        getAuthenticatedUrl() {
+            return `http://localhost:${port}/?bootstrap=${dashboardToken}`;
+        },
         updateContext(nextEngine: SyncEngine | null, nextSession: any, nextFod?: FodHooks) {
             engine = nextEngine;
             session = nextSession;

@@ -238,25 +238,18 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
 
                     activeWorkers++;
                     try {
-                        const childrenUids: string[] = [];
-                        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(
-                            current.uid,
-                            undefined,
-                            signal,
-                        )) {
-                            childrenUids.push(uid);
-                        }
-
-                        const chunkSize = 50;
-                        for (let i = 0; i < childrenUids.length && !signal.aborted; i += chunkSize) {
-                            const chunk = childrenUids.slice(i, i + chunkSize);
+                        let chunk: string[] = [];
+                        const processChunk = async () => {
+                            if (chunk.length === 0 || signal.aborted) return;
+                            const currentChunk = chunk;
+                            chunk = [];
                             try {
-                                for await (const node of this.sdk.iterateNodes(chunk, signal)) {
+                                for await (const node of this.sdk.iterateNodes(currentChunk, signal)) {
                                     processNode(current.relPath, node);
                                 }
                             } catch (chunkError) {
                                 if (signal.aborted) throw chunkError;
-                                for (const singleUid of chunk) {
+                                for (const singleUid of currentChunk) {
                                     if (signal.aborted) break;
                                     try {
                                         for await (const node of this.sdk.iterateNodes([singleUid], signal)) {
@@ -272,7 +265,16 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
                                     }
                                 }
                             }
+                        };
+                        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(
+                            current.uid,
+                            undefined,
+                            signal,
+                        )) {
+                            chunk.push(uid);
+                            if (chunk.length >= 50) await processChunk();
                         }
+                        await processChunk();
                     } catch (folderErr) {
                         if (signal.aborted) break;
                         scanIncomplete = true;
@@ -357,6 +359,10 @@ export class ProtonFuseEngine extends EventEmitter implements FodHooks {
 
     getIsPaused(): boolean {
         return this.isPaused;
+    }
+
+    getLastError(): string {
+        return this.lastError;
     }
 
     // FodHooks & Dashboard Active Transfer implementation

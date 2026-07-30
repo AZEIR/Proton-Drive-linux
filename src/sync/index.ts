@@ -42,6 +42,9 @@ export async function runSync(port: number = 8085) {
         enablePersistedEvents: true,
         enableConsoleLog: false,
         enableMetrics: false,
+        // SyncEngine is the sole event subscription owner. It durably writes
+        // each event to journal.sqlite before advancing the persisted cursor.
+        startEventSubscriptions: false,
         flags: {
             [FeatureFlags.DriveCryptoEncryptBlocksWithPgpAead]: true,
             [FeatureFlags.DriveSmallFileUpload]: false,
@@ -67,6 +70,11 @@ export async function runSync(port: number = 8085) {
         if (requestedMode === 'fuse') {
             fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger, undefined, session.clientUid);
             engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+            engine.setFodMetadataSync(async () => {
+                await fuseEngine!.scanRemoteTree();
+                const error = fuseEngine!.getLastError();
+                if (error) throw new Error(error);
+            });
         } else {
             engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
             if (process.env.PROTON_SYNC_ONCE === 'true') {
@@ -91,6 +99,7 @@ export async function runSync(port: number = 8085) {
     // Start Dashboard HTTP Server immediately
     const server = startDashboard(db, engine, session, port, fuseEngine || undefined);
     const controlSocket = startControlSocket({
+        dashboardUrl: () => server.getAuthenticatedUrl(),
         status: () => ({
             status: fuseEngine?.getStatus() ?? engine?.getStatus() ?? 'offline',
             mode: db.getSyncMode(),
@@ -154,6 +163,11 @@ export async function runSync(port: number = 8085) {
                         session.clientUid,
                     );
                     engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+                    engine.setFodMetadataSync(async () => {
+                        await fuseEngine!.scanRemoteTree();
+                        const error = fuseEngine!.getLastError();
+                        if (error) throw new Error(error);
+                    });
                     server.updateContext(engine, session, fuseEngine);
                     if (session.auth.isLoggedIn()) {
                         await fuseEngine.start();

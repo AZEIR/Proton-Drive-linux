@@ -8,6 +8,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="drive-core.service"
 LEGACY_SERVICE_NAME="proton-sync.service"
+TRAY_AUTOSTART_UNIT='app-proton\x2ddrive\x2dtray@autostart.service'
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
 SERVICE_DST="${SYSTEMD_DIR}/${SERVICE_NAME}"
 RELEASE_BINARY="${SCRIPT_DIR}/release/proton-sync"
@@ -51,10 +52,9 @@ _check_bun() {
                 echo "ERROR: kwallet-query is required for secure credential storage on KDE Plasma."
                 exit 1
             fi
-            if ! command -v qdbus6 >/dev/null 2>&1 &&
-               ! command -v qdbus-qt6 >/dev/null 2>&1 &&
-               ! command -v qdbus >/dev/null 2>&1; then
-                echo "ERROR: a Qt qdbus client is required to initialize secure KWallet storage."
+            if ! python3 -c 'import dbus' >/dev/null 2>&1; then
+                echo "ERROR: Python D-Bus bindings are required for secure KWallet storage."
+                echo "Install python3-dbus (Debian/Fedora) or the equivalent package for your distribution."
                 exit 1
             fi
         elif ! command -v secret-tool >/dev/null 2>&1; then
@@ -164,6 +164,10 @@ if [ "$FORCE_REBUILD" -eq 1 ]; then
     else
         echo "(Service/Daemon not running — start it with: ./drive.sh start)"
     fi
+    if systemctl --user is-active --quiet "$TRAY_AUTOSTART_UNIT" 2>/dev/null; then
+        echo "Restarting tray to pick up the authenticated dashboard launcher..."
+        systemctl --user restart "$TRAY_AUTOSTART_UNIT"
+    fi
     echo "Done."
     exit 0
 fi
@@ -249,5 +253,5 @@ echo ""
 echo "============================================="
 echo "  Setup complete!"
 echo "  Daemon service is enabled and running."
-echo "  Dashboard will be at:      http://localhost:8085"
+echo "  Open the dashboard with:   ./drive.sh ui"
 echo "============================================="

@@ -1229,7 +1229,10 @@
         setInterval(fetchQuota, 30000);
 
         window.switchSyncMode = async function(targetMode) {
-            if (!confirm(`Switch synchronization mode to ${targetMode.toUpperCase()}?\n\nThe daemon will restart in the selected mode.`)) return;
+            const fuseWarning = targetMode === 'fuse'
+                ? '\n\nFUSE mode is experimental and has not passed the crash-recovery release gates. Use Full Sync for important data.'
+                : '';
+            if (!confirm(`Switch synchronization mode to ${targetMode.toUpperCase()}?\n\nThe daemon will restart in the selected mode.${fuseWarning}`)) return;
             try {
                 const res = await fetch('/api/set-mode', {
                     method: 'POST',

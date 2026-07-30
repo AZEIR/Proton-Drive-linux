@@ -9,6 +9,7 @@ import path from 'node:path';
 
 export interface ControlHooks {
     status(): unknown;
+    dashboardUrl(): string;
     pause(): Promise<void>;
     resume(): Promise<void>;
     sync(): Promise<void>;
@@ -81,6 +82,8 @@ async function handleCommand(line: string, hooks: ControlHooks): Promise<unknown
     switch (request.command) {
         case 'status':
             return { ok: true, status: hooks.status() };
+        case 'dashboard-url':
+            return { ok: true, url: hooks.dashboardUrl() };
         case 'pause':
             await hooks.pause();
             return { ok: true };
