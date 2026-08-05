@@ -17,6 +17,10 @@ CURRENT_LINK="${INSTALL_BASE}/current"
 PREVIOUS_LINK="${INSTALL_BASE}/previous"
 BINARY="${CURRENT_LINK}/proton-sync"
 FORCE_REBUILD=0
+CREDENTIALS_STORE_SETTING="${PROTON_DRIVE_CREDENTIALS_STORE:-keychain}"
+KEYCHAIN_BACKEND_SETTING=""
+CREDENTIAL_DROPIN_DIR="${SYSTEMD_DIR}/${SERVICE_NAME}.d"
+CREDENTIAL_DROPIN="${CREDENTIAL_DROPIN_DIR}/credentials.conf"
 
 for arg in "$@"; do
     [ "$arg" = "--rebuild" ] && FORCE_REBUILD=1
@@ -42,27 +46,57 @@ _check_bun() {
         echo "ERROR: Rust/Cargo and the FUSE 3 development package are required."
         exit 1
     fi
-    if [ "${PROTON_DRIVE_CREDENTIALS_STORE:-}" != "unsafe_file" ]; then
-        IS_KDE_SESSION=0
-        case "${XDG_CURRENT_DESKTOP:-}:${DESKTOP_SESSION:-}:${KDE_FULL_SESSION:-}" in
-            *KDE*|*kde*|*Plasma*|*plasma*) IS_KDE_SESSION=1 ;;
-        esac
-        if [ "$IS_KDE_SESSION" -eq 1 ]; then
-            if ! command -v kwallet-query >/dev/null 2>&1; then
-                echo "ERROR: kwallet-query is required for secure credential storage on KDE Plasma."
+    case "$CREDENTIALS_STORE_SETTING" in
+        unsafe_file)
+            ;;
+        pass)
+            if ! command -v pass >/dev/null 2>&1; then
+                echo "ERROR: pass is required when PROTON_DRIVE_CREDENTIALS_STORE=pass."
                 exit 1
             fi
-            if ! python3 -c 'import dbus' >/dev/null 2>&1; then
-                echo "ERROR: Python D-Bus bindings are required for secure KWallet storage."
-                echo "Install python3-dbus (Debian/Fedora) or the equivalent package for your distribution."
+            ;;
+        keychain)
+            case "${PROTON_DRIVE_KEYCHAIN_BACKEND:-}" in
+                kwallet) KEYCHAIN_BACKEND_SETTING="kwallet" ;;
+                secret-service|secret_service) KEYCHAIN_BACKEND_SETTING="secret-service" ;;
+                "")
+                    IS_KDE_SESSION=0
+                    case "${XDG_CURRENT_DESKTOP:-}:${DESKTOP_SESSION:-}:${KDE_FULL_SESSION:-}" in
+                        *KDE*|*kde*|*Plasma*|*plasma*) IS_KDE_SESSION=1 ;;
+                    esac
+                    if [ "$IS_KDE_SESSION" -eq 1 ]; then
+                        KEYCHAIN_BACKEND_SETTING="kwallet"
+                    else
+                        KEYCHAIN_BACKEND_SETTING="secret-service"
+                    fi
+                    ;;
+                *)
+                    echo "ERROR: Unsupported PROTON_DRIVE_KEYCHAIN_BACKEND: ${PROTON_DRIVE_KEYCHAIN_BACKEND}"
+                    exit 1
+                    ;;
+            esac
+
+            if [ "$KEYCHAIN_BACKEND_SETTING" = "kwallet" ]; then
+                if ! command -v kwallet-query >/dev/null 2>&1; then
+                    echo "ERROR: kwallet-query is required for secure credential storage on KDE Plasma."
+                    exit 1
+                fi
+                if ! python3 -c 'import dbus' >/dev/null 2>&1; then
+                    echo "ERROR: Python D-Bus bindings are required for secure KWallet storage."
+                    echo "Install python3-dbus (Debian/Fedora) or the equivalent package for your distribution."
+                    exit 1
+                fi
+            elif ! command -v secret-tool >/dev/null 2>&1; then
+                echo "ERROR: secret-tool/libsecret is required for secure credential storage."
+                echo "For headless systems only, explicitly set PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file."
                 exit 1
             fi
-        elif ! command -v secret-tool >/dev/null 2>&1; then
-            echo "ERROR: secret-tool/libsecret is required for secure credential storage."
-            echo "For headless systems only, explicitly set PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file."
+            ;;
+        *)
+            echo "ERROR: Unsupported PROTON_DRIVE_CREDENTIALS_STORE: $CREDENTIALS_STORE_SETTING"
             exit 1
-        fi
-    fi
+            ;;
+    esac
     if ! command -v python3 >/dev/null 2>&1; then
         echo "ERROR: Python 3 is required for the system tray."
         exit 1
@@ -75,6 +109,19 @@ _check_bun() {
         echo "ERROR: FUSE 3 userspace tools (fusermount3) are required."
         exit 1
     fi
+}
+
+_install_credential_backend_override() {
+    mkdir -p "$CREDENTIAL_DROPIN_DIR"
+    {
+        echo "[Service]"
+        echo "Environment=PROTON_DRIVE_CREDENTIALS_STORE=$CREDENTIALS_STORE_SETTING"
+        if [ "$CREDENTIALS_STORE_SETTING" = "keychain" ]; then
+            echo "Environment=PROTON_DRIVE_KEYCHAIN_BACKEND=$KEYCHAIN_BACKEND_SETTING"
+        fi
+    } > "$CREDENTIAL_DROPIN"
+    chmod 600 "$CREDENTIAL_DROPIN"
+    echo "Pinned credential storage for systemd: $CREDENTIALS_STORE_SETTING${KEYCHAIN_BACKEND_SETTING:+/$KEYCHAIN_BACKEND_SETTING}"
 }
 
 _do_build() {
@@ -148,6 +195,8 @@ if [ "$FORCE_REBUILD" -eq 1 ]; then
     echo "============================================="
     _do_build
     _install_release
+    _install_credential_backend_override
+    systemctl --user daemon-reload
     if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         echo "Restarting daemon (systemd) to pick up newly built binary..."
         if ! systemctl --user restart "$SERVICE_NAME"; then
@@ -217,6 +266,8 @@ OOMPolicy=stop
 [Install]
 WantedBy=default.target
 EOF
+
+_install_credential_backend_override
 
 # Install desktop autostart entry dynamically
 AUTOSTART_DIR="${HOME}/.config/autostart"

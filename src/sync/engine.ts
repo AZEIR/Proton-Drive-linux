@@ -61,6 +61,14 @@ interface QueuedLocalChange {
   isDir: boolean;
 }
 
+interface LocalFileVersion {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
+
 export class SyncEngine extends EventEmitter {
   private db: SyncDatabase;
   private sdk: ProtonDriveClient;
@@ -577,6 +585,14 @@ export class SyncEngine extends EventEmitter {
 
     // Restore any pending deletes that survived a crash/restart
     for (const row of this.db.getPendingDeletes()) {
+      // An atomic editor save is commonly reported as unlink+add. Older
+      // versions cancelled the in-memory delete on add but accidentally left
+      // its durable row behind. Never replay such a stale delete when the path
+      // is present at startup.
+      if (existsSync(this.resolveLocalPath(row.local_path))) {
+        this.db.deletePendingDelete(row.local_path);
+        continue;
+      }
       if (!this.pendingLocalDeletes.has(row.local_path)) {
         this.pendingLocalDeletes.set(row.local_path, {
           timestamp: row.queued_at,
@@ -2016,7 +2032,7 @@ export class SyncEngine extends EventEmitter {
           }
         } else {
           // We have a database mapping. Check if changed.
-          const localChanged =
+          let localChanged =
             local.size !== mapped.size ||
             Math.abs(local.mtime - mapped.mtime) > 2000;
 
@@ -2024,6 +2040,20 @@ export class SyncEngine extends EventEmitter {
             ? remote.activeRevision.value.uid
             : "";
           const remoteChanged = remoteRevUid !== mapped.remote_revision_uid;
+
+          // Metadata alone cannot distinguish a rapid same-size edit (for
+          // example replacing text in an Obsidian note). Pay the hash cost only
+          // when a remote revision is competing with a file that otherwise
+          // looks unchanged.
+          if (
+            !local.isDir &&
+            !localChanged &&
+            remoteChanged &&
+            mapped.sha1
+          ) {
+            localChanged =
+              (await getSha1(this.resolveLocalPath(relPath))) !== mapped.sha1;
+          }
 
           if (localChanged && remoteChanged) {
             // Conflict! Both sides updated independently
@@ -2333,6 +2363,7 @@ export class SyncEngine extends EventEmitter {
             `Cancelling pending deletion for ${relativePath} due to local recreation/update`,
           );
           this.pendingLocalDeletes.delete(relativePath);
+          this.db.deletePendingDelete(relativePath);
         }
 
         // Check if this is a moved folder or file from pending deletes
@@ -2518,11 +2549,6 @@ export class SyncEngine extends EventEmitter {
       } else if (type === "unlink") {
         const mapped = this.db.getMapping(relativePath);
         if (mapped) {
-          this.cachedMappingCount = Math.max(0, this.cachedMappingCount - 1);
-          this.cachedLocalFileCount = Math.max(
-            0,
-            this.cachedLocalFileCount - 1,
-          );
           this.pendingLocalDeletes.set(relativePath, {
             timestamp: Date.now(),
             isDir,
@@ -2547,6 +2573,23 @@ export class SyncEngine extends EventEmitter {
               if (this.isPaused || this.bulkDeletionWarning || this.isOffline) {
                 return;
               }
+
+              // Treat the filesystem as authoritative at execution time, not
+              // the earlier watcher edge. This covers atomic-save add events
+              // that were coalesced, delayed, or missed entirely.
+              if (existsSync(absolutePath)) {
+                this.logger.info(
+                  `Cancelling pending deletion for ${relativePath} because the local path exists`,
+                );
+                this.pendingLocalDeletes.delete(relativePath);
+                this.db.deletePendingDelete(relativePath);
+                return;
+              }
+
+              this.cachedLocalFileCount = Math.max(
+                0,
+                this.cachedLocalFileCount - 1,
+              );
 
               // Optimization: check if any parent directory of this path is also pending deletion
               let ancestorPending = false;
@@ -2835,10 +2878,7 @@ export class SyncEngine extends EventEmitter {
     if (event.type === DriveEventType.NodeDeleted) {
       const mapped = this.db.getMappingByNodeUid(nodeUid);
       if (mapped) {
-        this.logger.info(
-          `Remote node deleted, deleting local path: ${mapped.local_path}`,
-        );
-        await this.deleteLocalFile(mapped.local_path);
+        await this.applyRemoteDeletion(mapped, "Remote node deleted");
       }
       return;
     }
@@ -2850,10 +2890,7 @@ export class SyncEngine extends EventEmitter {
     if (node.trashTime || event.isTrashed) {
       const mapped = this.db.getMappingByNodeUid(nodeUid);
       if (mapped) {
-        this.logger.info(
-          `Remote node trashed, deleting local path: ${mapped.local_path}`,
-        );
-        await this.deleteLocalFile(mapped.local_path);
+        await this.applyRemoteDeletion(mapped, "Remote node trashed");
       }
       return;
     }
@@ -2871,10 +2908,7 @@ export class SyncEngine extends EventEmitter {
     if (hierarchy.some((n) => (n as any).trashTime)) {
       const mapped = this.db.getMappingByNodeUid(nodeUid);
       if (mapped) {
-        this.logger.info(
-          `Remote ancestor trashed, deleting local path: ${mapped.local_path}`,
-        );
-        await this.deleteLocalFile(mapped.local_path);
+        await this.applyRemoteDeletion(mapped, "Remote ancestor trashed");
       }
       return;
     }
@@ -3013,7 +3047,30 @@ export class SyncEngine extends EventEmitter {
         `A transfer is already handling ${relativePath}`,
       );
     }
-    await this.syncRemoteToLocal(relativePath, node);
+    // Remote events must use the same three-way comparison as a full scan.
+    // Downloading directly here could overwrite edits made since the last
+    // mapping (especially frequent Obsidian saves) without preserving them as
+    // a conflict.
+    const localPath = this.resolveLocalPath(relativePath);
+    let local: { size: number; mtime: number; isDir: boolean } | undefined;
+    try {
+      const localStat = await lstat(localPath);
+      if (!localStat.isSymbolicLink()) {
+        local = {
+          size: localStat.isDirectory() ? 0 : localStat.size,
+          mtime: localStat.mtimeMs,
+          isDir: localStat.isDirectory(),
+        };
+      }
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await this.reconcilePath(
+      relativePath,
+      local,
+      node,
+      this.db.getMapping(relativePath),
+    );
   }
 
   // Synchronization operations: Sync Local -> Remote
@@ -3524,6 +3581,11 @@ export class SyncEngine extends EventEmitter {
           throw new Error("Remote file has no active revision");
         }
 
+        // Capture the exact local inode/version that reconciliation approved.
+        // The note may be edited while the remote bytes are downloading.
+        const localVersionBeforeDownload =
+          await this.readLocalFileVersion(localPath);
+
         // Check if directory containing file exists locally
         const parentLocalPath = path.dirname(localPath);
         this.ignorePathTemporarily(parentLocalPath, 3000);
@@ -3643,6 +3705,24 @@ export class SyncEngine extends EventEmitter {
           throw downloadErr;
         } finally {
           this.ignoredLocalChanges.delete(tmpPath);
+        }
+
+        // Do not publish over a file that changed while the download was in
+        // flight. The durable remote event (or the next full reconciliation)
+        // will retry and run conflict handling against the newer local state.
+        const localVersionAfterDownload =
+          await this.readLocalFileVersion(localPath);
+        if (
+          !this.localFileVersionsMatch(
+            localVersionBeforeDownload,
+            localVersionAfterDownload,
+          )
+        ) {
+          await unlink(tmpPath).catch(() => {});
+          await this.removeFullSyncStagingDirectoryIfEmpty();
+          throw new RemoteEventDeferredError(
+            `Local file ${relativePath} changed during download; refusing to overwrite it`,
+          );
         }
 
         // Atomically swap the temp file to the final path
@@ -3992,6 +4072,43 @@ export class SyncEngine extends EventEmitter {
     }
   }
 
+  private async applyRemoteDeletion(
+    mapped: SyncMapping,
+    reason: string,
+  ): Promise<void> {
+    const localPath = this.resolveLocalPath(mapped.local_path);
+
+    // A remote delete racing an unsynced editor save must not erase the local
+    // work. Re-create a locally modified file as a new remote node; clean files
+    // continue to follow the remote deletion exactly as before.
+    if (mapped.is_dir === 0 && existsSync(localPath)) {
+      const localStat = await stat(localPath);
+      let localChanged =
+        localStat.size !== mapped.size ||
+        Math.abs(localStat.mtimeMs - mapped.mtime) > 2000;
+      if (!localChanged && mapped.sha1) {
+        localChanged = (await getSha1(localPath)) !== mapped.sha1;
+      }
+      if (localChanged) {
+        this.logger.warn(
+          `${reason} at ${mapped.local_path}, but the local file has unsynced edits; preserving and re-uploading it`,
+        );
+        this.db.log(
+          mapped.local_path,
+          "upload",
+          "syncing",
+          `${reason}; preserving newer local edits`,
+        );
+        this.db.deleteMapping(mapped.local_path);
+        await this.syncLocalToRemote(mapped.local_path, false);
+        return;
+      }
+    }
+
+    this.logger.info(`${reason}, deleting local path: ${mapped.local_path}`);
+    await this.deleteLocalFile(mapped.local_path);
+  }
+
   private resolveLocalPath(relativePath: string): string {
     const resolved = path.resolve(this.localSyncRoot, relativePath);
     const rootWithSep = this.localSyncRoot.endsWith(path.sep) ? this.localSyncRoot : this.localSyncRoot + path.sep;
@@ -3999,6 +4116,38 @@ export class SyncEngine extends EventEmitter {
       throw new Error(`Path traversal attempt detected: ${relativePath}`);
     }
     return resolved;
+  }
+
+  private async readLocalFileVersion(
+    absolutePath: string,
+  ): Promise<LocalFileVersion | null> {
+    try {
+      const fileStat = await lstat(absolutePath);
+      return {
+        dev: fileStat.dev,
+        ino: fileStat.ino,
+        size: fileStat.size,
+        mtimeMs: fileStat.mtimeMs,
+        ctimeMs: fileStat.ctimeMs,
+      };
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  private localFileVersionsMatch(
+    before: LocalFileVersion | null,
+    after: LocalFileVersion | null,
+  ): boolean {
+    if (before === null || after === null) return before === after;
+    return (
+      before.dev === after.dev &&
+      before.ino === after.ino &&
+      before.size === after.size &&
+      before.mtimeMs === after.mtimeMs &&
+      before.ctimeMs === after.ctimeMs
+    );
   }
 
   getBulkDeletionCount(): number {

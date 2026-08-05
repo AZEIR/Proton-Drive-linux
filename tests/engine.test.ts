@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import { SyncEngine } from "../src/sync/engine";
 import { SyncDatabase } from "../src/sync/db";
 import { DriveEventType } from "@protontech/drive-sdk";
-import { existsSync, unlinkSync, rmSync, mkdirSync, writeFileSync, readdirSync, utimesSync } from "node:fs";
+import { existsSync, unlinkSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -596,6 +596,195 @@ describe("SyncEngine", () => {
     });
 
     describe("Conflict Resolution & Edge Cases", () => {
+        it("should reconcile a remote update against unsynced local edits", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "note.md");
+            const localEdits = "local edits still being typed";
+            writeFileSync(notePath, localEdits);
+            db.setMapping({
+                local_path: "note.md",
+                node_uid: "note-uid",
+                is_dir: 0,
+                // Same size and near-identical mtime exercise the content-hash
+                // fallback used for rapid editor saves.
+                size: Buffer.byteLength(localEdits),
+                mtime: Date.now(),
+                sha1: "old-sha1",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now() - 10_000,
+            });
+
+            const remoteNode = {
+                uid: "note-uid",
+                name: { ok: true, value: "note.md" },
+                modificationTime: new Date(),
+                creationTime: new Date(),
+                type: 1,
+                activeRevision: {
+                    ok: true,
+                    value: {
+                        uid: "rev-2",
+                        claimedSize: 12,
+                        claimedModificationTime: new Date(),
+                        creationTime: new Date(),
+                    },
+                },
+            };
+            mockSdk.getNode = mock().mockResolvedValue(remoteNode);
+            mockSdk.getNodeHierarchy = mock().mockResolvedValue([
+                { uid: "root-uid", name: { ok: true, value: "My files" } },
+                remoteNode,
+            ]);
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).isStarted = true;
+            const handleConflict = mock().mockResolvedValue(undefined);
+            const directDownload = mock().mockResolvedValue(undefined);
+            (engine as any).handleConflict = handleConflict;
+            (engine as any).syncRemoteToLocal = directDownload;
+
+            await (engine as any).handleRemoteEvent({
+                type: DriveEventType.NodeUpdated,
+                treeEventScopeId: "scope",
+                eventId: "event-2",
+                nodeUid: "note-uid",
+            });
+
+            expect(handleConflict).toHaveBeenCalledWith("note.md", remoteNode);
+            expect(directDownload).not.toHaveBeenCalled();
+        });
+
+        it("should not publish a remote download over a note edited in flight", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "active-note.md");
+            writeFileSync(notePath, "before");
+            db.setMapping({
+                local_path: "active-note.md",
+                node_uid: "active-note-uid",
+                is_dir: 0,
+                size: 6,
+                mtime: Date.now() - 10_000,
+                sha1: "",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now() - 10_000,
+            });
+            const remoteBytes = new TextEncoder().encode("remote version");
+            const remoteNode = {
+                uid: "active-note-uid",
+                name: { ok: true, value: "active-note.md" },
+                modificationTime: new Date(),
+                creationTime: new Date(),
+                type: 1,
+                activeRevision: {
+                    ok: true,
+                    value: {
+                        uid: "rev-2",
+                        claimedSize: remoteBytes.byteLength,
+                        claimedModificationTime: new Date(),
+                        creationTime: new Date(),
+                    },
+                },
+            };
+            mockSdk.getFileDownloader = mock().mockResolvedValue({
+                downloadToStream: (writable: WritableStream<Uint8Array>) => ({
+                    completion: async () => {
+                        const writer = writable.getWriter();
+                        await writer.write(remoteBytes);
+                        writer.releaseLock();
+                        writeFileSync(notePath, "typed while downloading");
+                    },
+                }),
+            });
+            (engine as any).isStarted = true;
+
+            await expect(
+                (engine as any).syncRemoteToLocal("active-note.md", remoteNode),
+            ).rejects.toThrow("changed during download");
+            expect(readFileSync(notePath, "utf8")).toBe("typed while downloading");
+            expect(db.getMapping("active-note.md")?.remote_revision_uid).toBe("rev-1");
+        });
+
+        it("should preserve unsynced note edits when a remote deletion arrives", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "deleted-remotely.md");
+            const localEdits = "unsynced local note edits";
+            writeFileSync(notePath, localEdits);
+            db.setMapping({
+                local_path: "deleted-remotely.md",
+                node_uid: "deleted-note-uid",
+                is_dir: 0,
+                size: Buffer.byteLength(localEdits),
+                mtime: Date.now(),
+                sha1: "old-content-sha1",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now(),
+            });
+            (engine as any).isStarted = true;
+
+            await (engine as any).handleRemoteEvent({
+                type: DriveEventType.NodeDeleted,
+                treeEventScopeId: "scope",
+                eventId: "delete-event",
+                nodeUid: "deleted-note-uid",
+            });
+
+            expect(readFileSync(notePath, "utf8")).toBe(localEdits);
+            expect(mockSdk.getFileUploader).toHaveBeenCalled();
+            expect(db.getMapping("deleted-remotely.md")?.node_uid).toBe("new-node-uid");
+        });
+
+        it("should durably cancel a transient unlink when an atomic save restores the path", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "atomic-note.md");
+            writeFileSync(notePath, "saved note");
+            db.setMapping({
+                local_path: "atomic-note.md",
+                node_uid: "atomic-note-uid",
+                is_dir: 0,
+                size: 10,
+                mtime: Date.now() - 10_000,
+                sha1: "old-sha1",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now() - 10_000,
+            });
+            (engine as any).isStarted = true;
+
+            await (engine as any).handleLocalChange(notePath, "unlink", false);
+            expect(db.getPendingDeletes().map((row) => row.local_path)).toContain("atomic-note.md");
+
+            await (engine as any).handleLocalChange(notePath, "add", false);
+
+            expect((engine as any).pendingLocalDeletes.has("atomic-note.md")).toBe(false);
+            expect(db.getPendingDeletes().map((row) => row.local_path)).not.toContain("atomic-note.md");
+        });
+
         it("should pause when bulk deletion threshold is exceeded", async () => {
             const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
             await engine.setLocalSyncRoot(syncRoot);

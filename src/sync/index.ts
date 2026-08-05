@@ -142,6 +142,52 @@ export async function runSync(port: number = 8085) {
         db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
     }
 
+    // A desktop keychain can become available shortly after the systemd user
+    // service starts. Retry the saved session quietly instead of treating that
+    // boot-order race as a logout that requires opening the web sign-in flow.
+    let credentialRecoveryInterval: ReturnType<typeof setInterval> | null = null;
+    let credentialRecoveryInProgress = false;
+    const startCredentialRecovery = () => {
+        if (credentialRecoveryInterval || !session) return;
+        credentialRecoveryInterval = setInterval(async () => {
+            if (!session || credentialRecoveryInProgress) return;
+            if (session.auth.isLoggedIn()) {
+                clearInterval(credentialRecoveryInterval!);
+                credentialRecoveryInterval = null;
+                return;
+            }
+
+            credentialRecoveryInProgress = true;
+            try {
+                await session.auth.loadSession();
+                if (!session.auth.isLoggedIn()) return;
+
+                session.logger.info('Recovered saved authentication session after credential store became available');
+                if (fuseEngine && engine) {
+                    await fuseEngine.start();
+                    engine.startFodEventLoop().catch((err) => {
+                        session.logger.error('FUSE event loop error:', err);
+                    });
+                } else if (engine) {
+                    await engine.start();
+                }
+                clearInterval(credentialRecoveryInterval!);
+                credentialRecoveryInterval = null;
+            } catch (error: any) {
+                session.logger.debug(
+                    `Saved session is not available yet; retrying without requesting login: ${error?.message || error}`,
+                );
+            } finally {
+                credentialRecoveryInProgress = false;
+            }
+        }, 15000);
+        credentialRecoveryInterval.unref();
+    };
+
+    if (session && !session.auth.isLoggedIn()) {
+        startCredentialRecovery();
+    }
+
     // Background reconnect loop if initialized offline on boot
     let reconnectInterval: ReturnType<typeof setInterval> | null = null;
     if (!session) {
@@ -174,6 +220,8 @@ export async function runSync(port: number = 8085) {
                         engine.startFodEventLoop().catch((err) => {
                             logger.error('FUSE event loop error:', err);
                         });
+                    } else {
+                        startCredentialRecovery();
                     }
                 } else {
                     engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
@@ -182,6 +230,8 @@ export async function runSync(port: number = 8085) {
                         await engine.start().catch((err) => {
                             logger.error('SyncEngine startup error:', err);
                         });
+                    } else {
+                        startCredentialRecovery();
                     }
                 }
             } catch {
@@ -199,6 +249,7 @@ export async function runSync(port: number = 8085) {
         if (cleanupPromise) return cleanupPromise;
         cleanupPromise = (async () => {
             if (reconnectInterval) clearInterval(reconnectInterval);
+            if (credentialRecoveryInterval) clearInterval(credentialRecoveryInterval);
             clearInterval(keepAliveInterval);
             server.stop();
             await controlSocket.stop().catch(() => {});
