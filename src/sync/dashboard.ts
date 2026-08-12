@@ -6,6 +6,7 @@ import path from 'node:path';
 import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
 import { openBrowserUrl } from '../sdk/adapter';
+import type { StartupIssue } from './startupIssue';
 import {
     getDashboardCss,
     getDashboardFavicon,
@@ -63,10 +64,12 @@ export function startDashboard(
     initialSession: any,
     port: number = 8085,
     initialFod?: FodHooks,
+    initialStartupIssue: StartupIssue | null = null,
 ) {
     let engine = initialEngine;
     let session = initialSession;
     let fod = initialFod;
+    let startupIssue = initialStartupIssue;
     let logger = session?.logger ?? console;
     let isAuthenticating = false;
     let cachedEmail = 'Not Logged In';
@@ -202,7 +205,7 @@ export function startDashboard(
                 }
 
                 return Response.json({
-                    status:            engine?.getStatus() ?? 'offline',
+                    status:            engine?.getStatus() ?? (startupIssue ? 'error' : 'offline'),
                     mode:              fod?.isFuseMode ? 'fuse' : db.getSyncMode(),
                     activeTransfers:   engine?.getActiveTransfers() ?? [],
                     localSyncRoot:     fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? ''),
@@ -215,6 +218,10 @@ export function startDashboard(
                     statusDetail: engine?.getDetailedStatus?.(),
                     email,
                     isAuthenticating,
+                    ...(startupIssue && {
+                        error: startupIssue.message,
+                        startupIssue: startupIssue.kind,
+                    }),
                 });
             }
 
@@ -804,8 +811,9 @@ export function startDashboard(
                                     });
                                 } else {
                                     payload = JSON.stringify({
-                                        status: 'error',
-                                        error: 'Engine/FOD not initialized',
+                                        status: startupIssue ? 'error' : 'offline',
+                                        error: startupIssue?.message ?? 'Engine/FOD not initialized',
+                                        ...(startupIssue && { startupIssue: startupIssue.kind }),
                                         email: cachedEmail,
                                         isAuthenticating,
                                     });
@@ -912,6 +920,9 @@ export function startDashboard(
             session = nextSession;
             fod = nextFod;
             logger = session?.logger ?? console;
+        },
+        updateStartupIssue(nextIssue: StartupIssue | null) {
+            startupIssue = nextIssue;
         },
     });
 }

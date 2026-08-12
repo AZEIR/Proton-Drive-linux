@@ -164,7 +164,8 @@ Stops the service, removes the systemd unit, and removes the tray icon. Your loc
 - [Bun](https://bun.sh) (for building)
 - Node.js 22 or newer (runtime)
 - Rust 1.85+ and FUSE 3 development headers (native sidecar build)
-- Secret Service/libsecret (`secret-tool`) for the default credential store
+- Secret Service/libsecret (`secret-tool`) for the desktop-neutral default
+  credential store (the session chooses the conforming provider)
 - Python 3 with GTK/AppIndicator bindings (system tray)
 - SQLite 3 command-line tools
 - FUSE 3 userspace tools (`fusermount3`)

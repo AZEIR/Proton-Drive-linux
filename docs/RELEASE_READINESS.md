@@ -9,8 +9,10 @@ production-ready.
 - Node 22 production runtime; Bun is limited to build and development tasks.
 - SDK submodule based on the current official `main`, with a small Linux
   compatibility patch for Node credentials/runtime behavior and quota display.
-- KWallet credentials on KDE Plasma and Secret Service credentials on other
-  desktops. The headless plaintext store requires explicit opt-in and uses
+- Freedesktop Secret Service credentials on all Linux desktops, allowing the
+  active session to provide GNOME Keyring, KWallet-compatible Secret Service,
+  KeePassXC, or another conforming provider without app-specific detection.
+  The headless plaintext store requires explicit opt-in and uses
   `0700` directories, `0600` files, atomic rename, and file/directory sync.
 - Authenticated browser APIs with a short-lived HttpOnly session, same-origin
   enforcement, CSRF protection, strict CSP, and no inline script/style.

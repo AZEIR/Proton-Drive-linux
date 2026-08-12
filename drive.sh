@@ -174,18 +174,17 @@ start_daemon() {
     echo " Target Folder:   ${TARGET_DIR}"
     echo "============================================="
 
-    NODE_BIN="$(command -v node || echo /usr/bin/node)"
     LOGFILE="$DAEMON_LOG"
     touch "$LOGFILE"
     chmod 600 "$LOGFILE"
     # Use setsid to create a new session so the daemon survives shell exit
     if [ "$SYNC_MODE" = "fuse" ]; then
         setsid env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_FUSE_MOUNT_POINT="$TARGET_DIR" \
-            "$NODE_BIN" "$DAEMON_JS" \
+            "$DAEMON_BIN" \
             > "$LOGFILE" 2>&1 &
     else
         setsid env PROTON_SYNC_MODE="$SYNC_MODE" PROTON_FULL_SYNC_PATH="$TARGET_DIR" \
-            "$NODE_BIN" "$DAEMON_JS" \
+            "$DAEMON_BIN" \
             > "$LOGFILE" 2>&1 &
     fi
     DAEMON_PID=$!

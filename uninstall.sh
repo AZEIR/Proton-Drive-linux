@@ -20,6 +20,13 @@ for SERVICE_NAME in "${SERVICE_NAMES[@]}"; do
         echo "Removing systemd unit file: $SERVICE_NAME"
         rm -f "$SERVICE_PATH"
     fi
+    CREDENTIAL_DROPIN_DIR="${SERVICE_PATH}.d"
+    CREDENTIAL_DROPIN="${CREDENTIAL_DROPIN_DIR}/credentials.conf"
+    if [ -f "$CREDENTIAL_DROPIN" ]; then
+        echo "Removing app-managed credential override for: $SERVICE_NAME"
+        rm -f "$CREDENTIAL_DROPIN"
+        rmdir "$CREDENTIAL_DROPIN_DIR" 2>/dev/null || true
+    fi
 done
 
 if [ -f "$AUTOSTART_PATH" ]; then

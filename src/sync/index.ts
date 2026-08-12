@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { startControlSocket } from './controlSocket';
+import { classifyStartupIssue, type StartupIssue } from './startupIssue';
 
 const APP_VERSION = 'external-drive-azeir_proton_drive_linux@1.3.0-stable';
 const SDK_VERSION = 'js@0.19.2';
@@ -54,13 +55,15 @@ export async function runSync(port: number = 8085) {
     let session: any = null;
     let engine: SyncEngine | null = null;
     let fuseEngine: ProtonFuseEngine | null = null;
+    let startupIssue: StartupIssue | null = null;
 
     try {
         session = await initSdk(initOptions);
     } catch (initErr: any) {
+        startupIssue = classifyStartupIssue(initErr);
         console.error('Initialization error details:', initErr);
-        console.warn('Network offline or initialization error on startup:', initErr?.message || initErr);
-        db.log('system', 'system', 'failed', `Startup offline: ${initErr?.message || initErr}. Monitoring connection...`);
+        console.warn(`${startupIssue.message}. Retrying initialization...`);
+        db.log('system', 'system', 'failed', `${startupIssue.message}. Retrying initialization...`);
     }
 
     if (session) {
@@ -97,11 +100,18 @@ export async function runSync(port: number = 8085) {
     }
 
     // Start Dashboard HTTP Server immediately
-    const server = startDashboard(db, engine, session, port, fuseEngine || undefined);
+    const server = startDashboard(
+        db,
+        engine,
+        session,
+        port,
+        fuseEngine || undefined,
+        startupIssue,
+    );
     const controlSocket = startControlSocket({
         dashboardUrl: () => server.getAuthenticatedUrl(),
         status: () => ({
-            status: fuseEngine?.getStatus() ?? engine?.getStatus() ?? 'offline',
+            status: fuseEngine?.getStatus() ?? engine?.getStatus() ?? (startupIssue ? 'error' : 'offline'),
             mode: db.getSyncMode(),
             isPaused: fuseEngine?.getIsPaused() ?? engine?.getStatus() === 'paused',
             pendingOperations: db.journal.getPendingOperationCount(),
@@ -142,62 +152,25 @@ export async function runSync(port: number = 8085) {
         db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
     }
 
-    // A desktop keychain can become available shortly after the systemd user
-    // service starts. Retry the saved session quietly instead of treating that
-    // boot-order race as a logout that requires opening the web sign-in flow.
-    let credentialRecoveryInterval: ReturnType<typeof setInterval> | null = null;
-    let credentialRecoveryInProgress = false;
-    const startCredentialRecovery = () => {
-        if (credentialRecoveryInterval || !session) return;
-        credentialRecoveryInterval = setInterval(async () => {
-            if (!session || credentialRecoveryInProgress) return;
-            if (session.auth.isLoggedIn()) {
-                clearInterval(credentialRecoveryInterval!);
-                credentialRecoveryInterval = null;
-                return;
-            }
-
-            credentialRecoveryInProgress = true;
-            try {
-                await session.auth.loadSession();
-                if (!session.auth.isLoggedIn()) return;
-
-                session.logger.info('Recovered saved authentication session after credential store became available');
-                if (fuseEngine && engine) {
-                    await fuseEngine.start();
-                    engine.startFodEventLoop().catch((err) => {
-                        session.logger.error('FUSE event loop error:', err);
-                    });
-                } else if (engine) {
-                    await engine.start();
-                }
-                clearInterval(credentialRecoveryInterval!);
-                credentialRecoveryInterval = null;
-            } catch (error: any) {
-                session.logger.debug(
-                    `Saved session is not available yet; retrying without requesting login: ${error?.message || error}`,
-                );
-            } finally {
-                credentialRecoveryInProgress = false;
-            }
-        }, 15000);
-        credentialRecoveryInterval.unref();
-    };
-
-    if (session && !session.auth.isLoggedIn()) {
-        startCredentialRecovery();
-    }
-
-    // Background reconnect loop if initialized offline on boot
-    let reconnectInterval: ReturnType<typeof setInterval> | null = null;
+    // Retry local SDK initialization when a session service or another startup
+    // dependency was not ready yet. Network connectivity is owned by the sync
+    // engine after initialization and is never inferred from this path.
+    let initializationRecoveryInterval: ReturnType<typeof setInterval> | null = null;
+    let initializationRecoveryInProgress = false;
     if (!session) {
-        reconnectInterval = setInterval(async () => {
+        initializationRecoveryInterval = setInterval(async () => {
+            if (initializationRecoveryInProgress) return;
+            initializationRecoveryInProgress = true;
             try {
                 const newSession = await initSdk(initOptions);
-                if (reconnectInterval) clearInterval(reconnectInterval);
+                if (initializationRecoveryInterval) clearInterval(initializationRecoveryInterval);
+                initializationRecoveryInterval = null;
                 session = newSession;
+                startupIssue = null;
+                server.updateStartupIssue(null);
                 const logger = session.logger;
-                logger.info('Connection established! Initializing sync engine...');
+                logger.info('Startup initialization recovered; initializing sync engine...');
+                db.log('system', 'system', 'completed', 'Startup initialization recovered.');
 
                 if (requestedMode === 'fuse') {
                     fuseEngine = new ProtonFuseEngine(
@@ -221,7 +194,7 @@ export async function runSync(port: number = 8085) {
                             logger.error('FUSE event loop error:', err);
                         });
                     } else {
-                        startCredentialRecovery();
+                        db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
                     }
                 } else {
                     engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
@@ -231,13 +204,27 @@ export async function runSync(port: number = 8085) {
                             logger.error('SyncEngine startup error:', err);
                         });
                     } else {
-                        startCredentialRecovery();
+                        db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
                     }
                 }
-            } catch {
-                // Still offline
+            } catch (error) {
+                if (!session) {
+                    startupIssue = classifyStartupIssue(error);
+                    server.updateStartupIssue(startupIssue);
+                } else {
+                    session.logger.error('Post-initialization sync startup failed:', error);
+                    db.log(
+                        'system',
+                        'system',
+                        'failed',
+                        `Startup recovered, but the sync engine failed to start: ${error instanceof Error ? error.message : String(error)}`,
+                    );
+                }
+            } finally {
+                initializationRecoveryInProgress = false;
             }
         }, 15000);
+        initializationRecoveryInterval.unref();
     }
 
     // Keep-alive timer to prevent Node event loop from exiting when running in background
@@ -248,8 +235,7 @@ export async function runSync(port: number = 8085) {
     const cleanup = () => {
         if (cleanupPromise) return cleanupPromise;
         cleanupPromise = (async () => {
-            if (reconnectInterval) clearInterval(reconnectInterval);
-            if (credentialRecoveryInterval) clearInterval(credentialRecoveryInterval);
+            if (initializationRecoveryInterval) clearInterval(initializationRecoveryInterval);
             clearInterval(keepAliveInterval);
             server.stop();
             await controlSocket.stop().catch(() => {});

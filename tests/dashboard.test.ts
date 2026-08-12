@@ -370,6 +370,39 @@ describe("Dashboard API", () => {
         }
     });
 
+    it("GET /api/status should expose a credential startup failure as an error", async () => {
+        const credentialServer = startDashboard(
+            mockDb as any,
+            null,
+            null,
+            8091,
+            undefined,
+            {
+                kind: "credentials",
+                message: "Credential service unavailable: keyring locked",
+            },
+        );
+        try {
+            const credentialCookie = await bootstrapDashboard(credentialServer);
+            const res = await fetch("http://localhost:8091/api/status", {
+                headers: { Cookie: credentialCookie },
+            });
+            const data: any = await res.json();
+
+            expect(data.status).toBe("error");
+            expect(data.startupIssue).toBe("credentials");
+            expect(data.error).toBe("Credential service unavailable: keyring locked");
+
+            credentialServer.updateStartupIssue(null);
+            const recoveredRes = await fetch("http://localhost:8091/api/status", {
+                headers: { Cookie: credentialCookie },
+            });
+            expect((await recoveredRes.json() as any).status).toBe("offline");
+        } finally {
+            credentialServer.stop(true);
+        }
+    });
+
     it("GET /api/browser/list should return file tree with breadcrumbs and items", async () => {
         mockDb.getAllMappings = mock().mockReturnValue([
             { local_path: "document.txt", node_uid: "n1", is_dir: 0, size: 100, mtime: 1000 },

@@ -18,7 +18,6 @@ PREVIOUS_LINK="${INSTALL_BASE}/previous"
 BINARY="${CURRENT_LINK}/proton-sync"
 FORCE_REBUILD=0
 CREDENTIALS_STORE_SETTING="${PROTON_DRIVE_CREDENTIALS_STORE:-keychain}"
-KEYCHAIN_BACKEND_SETTING=""
 CREDENTIAL_DROPIN_DIR="${SYSTEMD_DIR}/${SERVICE_NAME}.d"
 CREDENTIAL_DROPIN="${CREDENTIAL_DROPIN_DIR}/credentials.conf"
 
@@ -56,37 +55,7 @@ _check_bun() {
             fi
             ;;
         keychain)
-            case "${PROTON_DRIVE_KEYCHAIN_BACKEND:-}" in
-                kwallet) KEYCHAIN_BACKEND_SETTING="kwallet" ;;
-                secret-service|secret_service) KEYCHAIN_BACKEND_SETTING="secret-service" ;;
-                "")
-                    IS_KDE_SESSION=0
-                    case "${XDG_CURRENT_DESKTOP:-}:${DESKTOP_SESSION:-}:${KDE_FULL_SESSION:-}" in
-                        *KDE*|*kde*|*Plasma*|*plasma*) IS_KDE_SESSION=1 ;;
-                    esac
-                    if [ "$IS_KDE_SESSION" -eq 1 ]; then
-                        KEYCHAIN_BACKEND_SETTING="kwallet"
-                    else
-                        KEYCHAIN_BACKEND_SETTING="secret-service"
-                    fi
-                    ;;
-                *)
-                    echo "ERROR: Unsupported PROTON_DRIVE_KEYCHAIN_BACKEND: ${PROTON_DRIVE_KEYCHAIN_BACKEND}"
-                    exit 1
-                    ;;
-            esac
-
-            if [ "$KEYCHAIN_BACKEND_SETTING" = "kwallet" ]; then
-                if ! command -v kwallet-query >/dev/null 2>&1; then
-                    echo "ERROR: kwallet-query is required for secure credential storage on KDE Plasma."
-                    exit 1
-                fi
-                if ! python3 -c 'import dbus' >/dev/null 2>&1; then
-                    echo "ERROR: Python D-Bus bindings are required for secure KWallet storage."
-                    echo "Install python3-dbus (Debian/Fedora) or the equivalent package for your distribution."
-                    exit 1
-                fi
-            elif ! command -v secret-tool >/dev/null 2>&1; then
+            if ! command -v secret-tool >/dev/null 2>&1; then
                 echo "ERROR: secret-tool/libsecret is required for secure credential storage."
                 echo "For headless systems only, explicitly set PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file."
                 exit 1
@@ -111,17 +80,26 @@ _check_bun() {
     fi
 }
 
-_install_credential_backend_override() {
+_install_credential_store_override() {
+    if [ -f "$CREDENTIAL_DROPIN" ] && grep -q 'PROTON_DRIVE_KEYCHAIN_BACKEND=kwallet' "$CREDENTIAL_DROPIN"; then
+        echo "NOTICE: Replacing the legacy KWallet credential backend with freedesktop Secret Service."
+        echo "        You will need to sign in once. The old KWallet entry is not deleted automatically."
+    fi
+
+    if [ "$CREDENTIALS_STORE_SETTING" = "keychain" ]; then
+        rm -f "$CREDENTIAL_DROPIN"
+        rmdir "$CREDENTIAL_DROPIN_DIR" 2>/dev/null || true
+        echo "Credential storage for systemd: keychain (freedesktop Secret Service)"
+        return
+    fi
+
     mkdir -p "$CREDENTIAL_DROPIN_DIR"
     {
         echo "[Service]"
         echo "Environment=PROTON_DRIVE_CREDENTIALS_STORE=$CREDENTIALS_STORE_SETTING"
-        if [ "$CREDENTIALS_STORE_SETTING" = "keychain" ]; then
-            echo "Environment=PROTON_DRIVE_KEYCHAIN_BACKEND=$KEYCHAIN_BACKEND_SETTING"
-        fi
     } > "$CREDENTIAL_DROPIN"
     chmod 600 "$CREDENTIAL_DROPIN"
-    echo "Pinned credential storage for systemd: $CREDENTIALS_STORE_SETTING${KEYCHAIN_BACKEND_SETTING:+/$KEYCHAIN_BACKEND_SETTING}"
+    echo "Credential storage for systemd: $CREDENTIALS_STORE_SETTING"
 }
 
 _do_build() {
@@ -147,6 +125,7 @@ _install_release() {
         sha256sum \
             "${SCRIPT_DIR}/release/proton-sync.js" \
             "${SCRIPT_DIR}/release/drive-fuse-sidecar" \
+            "${SCRIPT_DIR}/release/lib/libfuse.so.2" \
             "${SCRIPT_DIR}/bun.lockb" |
             sha256sum |
             cut -c1-12
@@ -159,6 +138,7 @@ _install_release() {
         mkdir -m 700 "$STAGING_DIR"
         cp "${SCRIPT_DIR}/release/proton-sync" "${SCRIPT_DIR}/release/proton-sync.js" "$STAGING_DIR/"
         cp -R "${SCRIPT_DIR}/release/node_modules" "$STAGING_DIR/"
+        cp -R "${SCRIPT_DIR}/release/lib" "$STAGING_DIR/"
         if [ -f "${SCRIPT_DIR}/release/drive-fuse-sidecar" ]; then
             cp "${SCRIPT_DIR}/release/drive-fuse-sidecar" "$STAGING_DIR/"
         fi
@@ -195,7 +175,7 @@ if [ "$FORCE_REBUILD" -eq 1 ]; then
     echo "============================================="
     _do_build
     _install_release
-    _install_credential_backend_override
+    _install_credential_store_override
     systemctl --user daemon-reload
     if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         echo "Restarting daemon (systemd) to pick up newly built binary..."
@@ -267,7 +247,7 @@ OOMPolicy=stop
 WantedBy=default.target
 EOF
 
-_install_credential_backend_override
+_install_credential_store_override
 
 # Install desktop autostart entry dynamically
 AUTOSTART_DIR="${HOME}/.config/autostart"
