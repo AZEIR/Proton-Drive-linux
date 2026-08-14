@@ -1,4 +1,7 @@
+import { setupNetworkSocketLimits } from '../utils/httpAgent';
 import { runSync } from '../sync/index';
+
+setupNetworkSocketLimits();
 
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 8085;
 

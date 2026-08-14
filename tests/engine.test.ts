@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import { SyncEngine } from "../src/sync/engine";
 import { SyncDatabase } from "../src/sync/db";
-import { existsSync, unlinkSync, rmSync, mkdirSync, writeFileSync, readdirSync, utimesSync } from "node:fs";
+import { DriveEventType } from "@protontech/drive-sdk";
+import { existsSync, unlinkSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -93,7 +94,9 @@ describe("SyncEngine", () => {
             on: mock(),
             off: mock(),
             start: mock().mockResolvedValue(undefined),
-            stop: mock().mockResolvedValue(undefined)
+            stop: mock().mockResolvedValue(undefined),
+            getLatestEventId: mock().mockResolvedValue(null),
+            setLatestEventId: mock().mockResolvedValue(undefined),
         };
     });
 
@@ -155,12 +158,75 @@ describe("SyncEngine", () => {
                 remote_mtime: Date.now(),
             });
             db.setConfig("full_sync_completed", "1");
+            db.setConfig("full_sync_in_progress", "0");
+            db.setConfig("last_successful_sync_at", String(Date.now()));
+            db.setConfig("event_cursor_safety_version", "1");
 
             let fastSyncCalled = false;
             engine.fastSync = async () => { fastSyncCalled = true; };
 
             await engine.startupSync();
             expect(fastSyncCalled).toBe(true);
+        });
+
+        it("should run a one-time full scan for pre-journal event cursors", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            db.setMapping({
+                local_path: "mapped.txt",
+                node_uid: "mapped-node",
+                is_dir: 0,
+                size: 1,
+                mtime: Date.now(),
+                sha1: "",
+                remote_revision_uid: "revision",
+                remote_mtime: Date.now(),
+            });
+            db.setConfig("full_sync_completed", "1");
+            db.setConfig("full_sync_in_progress", "0");
+            db.setConfig("last_successful_sync_at", String(Date.now()));
+            let fullSyncCalled = false;
+            engine.forceSync = async () => {
+                fullSyncCalled = true;
+            };
+
+            await engine.startupSync();
+
+            expect(fullSyncCalled).toBe(true);
+        });
+
+        it("should resume an interrupted full sync after restart even when an older pass completed", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
+            await engine.setLocalSyncRoot(syncRoot);
+
+            db.setMapping({
+                local_path: "file.txt",
+                node_uid: "node-1",
+                is_dir: 0,
+                size: 1,
+                mtime: Date.now(),
+                sha1: "abc",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now(),
+            });
+            db.setConfig("full_sync_completed", "1");
+            db.setConfig("full_sync_in_progress", "1");
+
+            let forceSyncCalled = false;
+            let fastSyncCalled = false;
+            engine.forceSync = async () => { forceSyncCalled = true; };
+            engine.fastSync = async () => { fastSyncCalled = true; };
+
+            await engine.startupSync();
+
+            expect(forceSyncCalled).toBe(true);
+            expect(fastSyncCalled).toBe(false);
         });
 
         it("should execute fresh initial sync end-to-end when starting clean", async () => {
@@ -244,6 +310,158 @@ describe("SyncEngine", () => {
 
             await engine.forceSync();
             expect(engine.getStatus()).toBe("idle");
+            expect(db.getConfig("full_sync_in_progress", "1")).toBe("0");
+        });
+
+        it("should persist an unfinished full scan so the next process retries it", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            db.setConfig("full_sync_completed", "1");
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).scanRemoteDir = async () => {
+                expect(db.getConfig("full_sync_in_progress", "0")).toBe("1");
+                throw new Error("interrupted metadata scan");
+            };
+
+            await engine.forceSync();
+
+            expect(db.getConfig("full_sync_completed", "0")).toBe("1");
+            expect(db.getConfig("full_sync_in_progress", "0")).toBe("1");
+        });
+
+        it("should retry an interrupted full scan after the network reconnects", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+
+            let remoteScanAttempts = 0;
+            (engine as any).scanRemoteDir = async () => {
+                remoteScanAttempts++;
+                if (remoteScanAttempts === 1) {
+                    throw new TypeError("fetch failed");
+                }
+            };
+            // Avoid the monitor's real 15-second timer; this test drives the
+            // same offline/online transition directly.
+            (engine as any).startOfflineMonitor = () => {
+                (engine as any).isOffline = true;
+            };
+
+            await engine.forceSync();
+            expect(engine.getStatus()).toBe("offline");
+            expect(remoteScanAttempts).toBe(1);
+
+            (engine as any).handleOnlineEvent();
+            expect(["error", "scanning"]).toContain(engine.getStatus());
+            await (engine as any).reconnectReconciliationPromise;
+
+            expect(remoteScanAttempts).toBe(2);
+            expect(engine.getStatus()).toBe("synced");
+            expect(
+                db.getRecentLogs(20).some((entry) =>
+                    entry.message.includes("Retrying interrupted synchronization"),
+                ),
+            ).toBe(true);
+        });
+
+        it("should report an error instead of synced after a non-network scan failure", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).scanRemoteDir = async () => {
+                throw new Error("remote metadata is invalid");
+            };
+
+            await engine.forceSync();
+
+            expect(engine.getStatus()).toBe("error");
+        });
+
+        it("should not mark a pass complete when a transfer worker detected an outage", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).scanRemoteDir = async () => {};
+            (engine as any).reconcile = async () => {
+                // Transfer workers intentionally catch their individual errors.
+                // The offline state must still make the overall pass fail.
+                (engine as any).isOffline = true;
+                (engine as any).reconciliationRetryPending = true;
+            };
+            (engine as any).startOfflineMonitor = () => {
+                (engine as any).isOffline = true;
+            };
+
+            await engine.forceSync();
+
+            expect(engine.getStatus()).toBe("offline");
+            expect(db.getConfig("full_sync_completed", "0")).toBe("0");
+            expect(
+                db.getRecentLogs(20).some((entry) =>
+                    entry.message.includes("Synchronization was interrupted"),
+                ),
+            ).toBe(true);
+        });
+
+        it("should keep a full scan incomplete when one path fails permanently", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            writeFileSync(path.join(syncRoot, "failed.txt"), "local content");
+            (engine as any).isStarted = true;
+            mockSdk.getFileUploader = mock().mockResolvedValue({
+                uploadFromStream: mock().mockResolvedValue({
+                    completion: mock().mockRejectedValue(
+                        Object.assign(new Error("permanent upload failure"), {
+                            name: "ValidationError",
+                        }),
+                    ),
+                }),
+            });
+
+            await engine.forceSync();
+
+            expect(db.getConfig("full_sync_in_progress", "0")).toBe("1");
+            expect(engine.getStatus()).toBe("error");
+            expect(
+                db.getRecentLogs(30).some(
+                    (entry) =>
+                        entry.status === "completed" &&
+                        entry.message === "Full synchronization complete",
+                ),
+            ).toBe(false);
         });
 
         it("should upload local files that are not on remote", async () => {
@@ -261,9 +479,45 @@ describe("SyncEngine", () => {
             
             // Should have uploaded the file
             expect(mockSdk.getFileUploader).toHaveBeenCalled();
+            expect(mockSdk.getFileUploader).toHaveBeenCalledWith(
+                "root-uid",
+                "local.txt",
+                expect.objectContaining({ mediaType: "text/plain" }),
+            );
             const mapping = db.getMapping("local.txt");
             expect(mapping).toBeDefined();
             expect(mapping?.node_uid).toBe("new-node-uid");
+            expect(existsSync(path.join(syncRoot, ".proton-drive-staging"))).toBe(false);
+        });
+
+        it("should recover when lazy file creation reports an existing remote node", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            writeFileSync(path.join(syncRoot, "existing.txt"), "local content");
+            (engine as any).isStarted = true;
+            mockSdk.getFileUploader = mock().mockResolvedValue({
+                uploadFromStream: mock().mockResolvedValue({
+                    completion: mock().mockRejectedValue(
+                        Object.assign(new Error("name already exists"), {
+                            existingNodeUid: "existing-node",
+                        }),
+                    ),
+                }),
+            });
+
+            await engine.forceSync();
+
+            expect(mockSdk.getFileRevisionUploader).toHaveBeenCalledWith(
+                "existing-node",
+                expect.anything(),
+            );
+            expect(db.getConfig("full_sync_in_progress", "1")).toBe("0");
         });
 
         it("should download remote files that are not local", async () => {
@@ -342,6 +596,195 @@ describe("SyncEngine", () => {
     });
 
     describe("Conflict Resolution & Edge Cases", () => {
+        it("should reconcile a remote update against unsynced local edits", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "note.md");
+            const localEdits = "local edits still being typed";
+            writeFileSync(notePath, localEdits);
+            db.setMapping({
+                local_path: "note.md",
+                node_uid: "note-uid",
+                is_dir: 0,
+                // Same size and near-identical mtime exercise the content-hash
+                // fallback used for rapid editor saves.
+                size: Buffer.byteLength(localEdits),
+                mtime: Date.now(),
+                sha1: "old-sha1",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now() - 10_000,
+            });
+
+            const remoteNode = {
+                uid: "note-uid",
+                name: { ok: true, value: "note.md" },
+                modificationTime: new Date(),
+                creationTime: new Date(),
+                type: 1,
+                activeRevision: {
+                    ok: true,
+                    value: {
+                        uid: "rev-2",
+                        claimedSize: 12,
+                        claimedModificationTime: new Date(),
+                        creationTime: new Date(),
+                    },
+                },
+            };
+            mockSdk.getNode = mock().mockResolvedValue(remoteNode);
+            mockSdk.getNodeHierarchy = mock().mockResolvedValue([
+                { uid: "root-uid", name: { ok: true, value: "My files" } },
+                remoteNode,
+            ]);
+            (engine as any).remoteRootUid = "root-uid";
+            (engine as any).isStarted = true;
+            const handleConflict = mock().mockResolvedValue(undefined);
+            const directDownload = mock().mockResolvedValue(undefined);
+            (engine as any).handleConflict = handleConflict;
+            (engine as any).syncRemoteToLocal = directDownload;
+
+            await (engine as any).handleRemoteEvent({
+                type: DriveEventType.NodeUpdated,
+                treeEventScopeId: "scope",
+                eventId: "event-2",
+                nodeUid: "note-uid",
+            });
+
+            expect(handleConflict).toHaveBeenCalledWith("note.md", remoteNode);
+            expect(directDownload).not.toHaveBeenCalled();
+        });
+
+        it("should not publish a remote download over a note edited in flight", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "active-note.md");
+            writeFileSync(notePath, "before");
+            db.setMapping({
+                local_path: "active-note.md",
+                node_uid: "active-note-uid",
+                is_dir: 0,
+                size: 6,
+                mtime: Date.now() - 10_000,
+                sha1: "",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now() - 10_000,
+            });
+            const remoteBytes = new TextEncoder().encode("remote version");
+            const remoteNode = {
+                uid: "active-note-uid",
+                name: { ok: true, value: "active-note.md" },
+                modificationTime: new Date(),
+                creationTime: new Date(),
+                type: 1,
+                activeRevision: {
+                    ok: true,
+                    value: {
+                        uid: "rev-2",
+                        claimedSize: remoteBytes.byteLength,
+                        claimedModificationTime: new Date(),
+                        creationTime: new Date(),
+                    },
+                },
+            };
+            mockSdk.getFileDownloader = mock().mockResolvedValue({
+                downloadToStream: (writable: WritableStream<Uint8Array>) => ({
+                    completion: async () => {
+                        const writer = writable.getWriter();
+                        await writer.write(remoteBytes);
+                        writer.releaseLock();
+                        writeFileSync(notePath, "typed while downloading");
+                    },
+                }),
+            });
+            (engine as any).isStarted = true;
+
+            await expect(
+                (engine as any).syncRemoteToLocal("active-note.md", remoteNode),
+            ).rejects.toThrow("changed during download");
+            expect(readFileSync(notePath, "utf8")).toBe("typed while downloading");
+            expect(db.getMapping("active-note.md")?.remote_revision_uid).toBe("rev-1");
+        });
+
+        it("should preserve unsynced note edits when a remote deletion arrives", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "deleted-remotely.md");
+            const localEdits = "unsynced local note edits";
+            writeFileSync(notePath, localEdits);
+            db.setMapping({
+                local_path: "deleted-remotely.md",
+                node_uid: "deleted-note-uid",
+                is_dir: 0,
+                size: Buffer.byteLength(localEdits),
+                mtime: Date.now(),
+                sha1: "old-content-sha1",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now(),
+            });
+            (engine as any).isStarted = true;
+
+            await (engine as any).handleRemoteEvent({
+                type: DriveEventType.NodeDeleted,
+                treeEventScopeId: "scope",
+                eventId: "delete-event",
+                nodeUid: "deleted-note-uid",
+            });
+
+            expect(readFileSync(notePath, "utf8")).toBe(localEdits);
+            expect(mockSdk.getFileUploader).toHaveBeenCalled();
+            expect(db.getMapping("deleted-remotely.md")?.node_uid).toBe("new-node-uid");
+        });
+
+        it("should durably cancel a transient unlink when an atomic save restores the path", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const notePath = path.join(syncRoot, "atomic-note.md");
+            writeFileSync(notePath, "saved note");
+            db.setMapping({
+                local_path: "atomic-note.md",
+                node_uid: "atomic-note-uid",
+                is_dir: 0,
+                size: 10,
+                mtime: Date.now() - 10_000,
+                sha1: "old-sha1",
+                remote_revision_uid: "rev-1",
+                remote_mtime: Date.now() - 10_000,
+            });
+            (engine as any).isStarted = true;
+
+            await (engine as any).handleLocalChange(notePath, "unlink", false);
+            expect(db.getPendingDeletes().map((row) => row.local_path)).toContain("atomic-note.md");
+
+            await (engine as any).handleLocalChange(notePath, "add", false);
+
+            expect((engine as any).pendingLocalDeletes.has("atomic-note.md")).toBe(false);
+            expect(db.getPendingDeletes().map((row) => row.local_path)).not.toContain("atomic-note.md");
+        });
+
         it("should pause when bulk deletion threshold is exceeded", async () => {
             const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
             await engine.setLocalSyncRoot(syncRoot);
@@ -553,6 +996,79 @@ describe("SyncEngine", () => {
             expect(mockSdk.getFileUploader).not.toHaveBeenCalled();
         });
 
+        it("should pair a 10-file bulk move without leaving durable deletes or duplicate originals", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: console.error, debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            mkdirSync(path.join(syncRoot, "destination"), { recursive: true });
+            db.setMapping({
+                local_path: "destination",
+                node_uid: "destination-uid",
+                is_dir: 1,
+                size: 0,
+                mtime: Date.now(),
+                sha1: "",
+                remote_revision_uid: "",
+                remote_mtime: Date.now(),
+            });
+
+            let moveCount = 0;
+            mockSdk.moveNodes = async function* (uids: string[], parentUid: string) {
+                moveCount++;
+                expect(parentUid).toBe("destination-uid");
+                yield { uid: uids[0], ok: true };
+            };
+
+            const events: {
+                absolutePath: string;
+                type: "add" | "change" | "unlink";
+                isDir: boolean;
+            }[] = [];
+            for (let index = 0; index < 10; index++) {
+                const name = `file-${index}.txt`;
+                const oldRelativePath = `source/${name}`;
+                const newRelativePath = `destination/${name}`;
+                const content = `bulk move ${index}`;
+                writeFileSync(path.join(syncRoot, newRelativePath), content);
+                db.setMapping({
+                    local_path: oldRelativePath,
+                    node_uid: `node-${index}`,
+                    is_dir: 0,
+                    size: Buffer.byteLength(content),
+                    mtime: Date.now(),
+                    sha1: "",
+                    remote_revision_uid: `revision-${index}`,
+                    remote_mtime: Date.now(),
+                });
+                events.push({
+                    absolutePath: path.join(syncRoot, oldRelativePath),
+                    type: "unlink",
+                    isDir: false,
+                });
+                events.push({
+                    absolutePath: path.join(syncRoot, newRelativePath),
+                    type: "add",
+                    isDir: false,
+                });
+            }
+
+            (engine as any).isStarted = true;
+            (engine as any).remoteRootUid = "root-uid";
+            await (engine as any).flushLocalChanges(events);
+
+            expect(moveCount).toBe(10);
+            expect(db.getPendingDeletes()).toHaveLength(0);
+            for (let index = 0; index < 10; index++) {
+                expect(db.getMapping(`source/file-${index}.txt`)).toBeFalsy();
+                expect(db.getMapping(`destination/file-${index}.txt`)?.node_uid).toBe(`node-${index}`);
+            }
+        });
+
         it("should upload local file if modified locally after remote deletion", async () => {
             const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: console.error, debug: mock() }, mockEventsManager);
             await engine.setLocalSyncRoot(syncRoot);
@@ -610,6 +1126,151 @@ describe("SyncEngine", () => {
             expect(db.getMapping("same.txt")?.node_uid).toBe("same-uid");
             expect(mockSdk.getFileUploader).not.toHaveBeenCalled();
             expect(mockSdk.getFileDownloader).not.toHaveBeenCalled();
+        });
+
+        it("should adopt an unmapped remote node before uploading newer local content", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            await engine.setLocalSyncRoot(syncRoot);
+            const localPath = path.join(syncRoot, "newer-local.txt");
+            writeFileSync(localPath, "newer local content");
+            const localTime = new Date();
+            utimesSync(localPath, localTime, localTime);
+            const remoteTime = Date.now() - 60_000;
+
+            mockSdk.iterateFolderChildrenNodeUids = async function* () {
+                yield "existing-node";
+            };
+            mockSdk.iterateNodes = async function* () {
+                yield {
+                    uid: "existing-node",
+                    name: { ok: true, value: "newer-local.txt" },
+                    modificationTime: new Date(remoteTime),
+                    creationTime: new Date(remoteTime),
+                    type: 1,
+                    activeRevision: {
+                        ok: true,
+                        value: {
+                            uid: "existing-revision",
+                            claimedSize: 4,
+                            claimedModificationTime: new Date(remoteTime),
+                            claimedDigests: { sha1: "remote-sha1" },
+                        },
+                    },
+                };
+            };
+            (engine as any).isStarted = true;
+
+            await engine.forceSync();
+
+            expect(mockSdk.getFileRevisionUploader).toHaveBeenCalledWith(
+                "existing-node",
+                expect.anything(),
+            );
+            expect(mockSdk.getFileUploader).not.toHaveBeenCalled();
+        });
+
+        it("should complete a safety reconciliation before applying cursor fast-forward events", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            (engine as any).isStarted = true;
+            let reconciled = false;
+            engine.forceSync = async () => {
+                reconciled = true;
+                db.setConfig("full_sync_in_progress", "0");
+            };
+
+            await (engine as any).handleRemoteEvent({
+                type: DriveEventType.FastForward,
+                treeEventScopeId: "scope",
+                eventId: "event",
+            });
+
+            expect(reconciled).toBe(true);
+        });
+
+        it("should durably reconcile when a new subscription initializes its cursor", async () => {
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            (engine as any).isStarted = true;
+            mockSdk.subscribeToTreeEvents = mock().mockResolvedValue({
+                getLatestEventId: () => "initial-server-cursor",
+                dispose: mock(),
+            });
+            let reconciled = false;
+            engine.forceSync = async () => {
+                reconciled = true;
+                db.setConfig("full_sync_in_progress", "0");
+            };
+
+            await (engine as any).subscribeToRemoteEvents("scope");
+
+            expect(reconciled).toBe(true);
+            expect(mockEventsManager.setLatestEventId).toHaveBeenCalledWith(
+                "drive",
+                "scope",
+                "initial-server-cursor",
+            );
+            expect(db.journal.getPendingRemoteEventCount()).toBe(0);
+        });
+
+        it("should not acknowledge an event when durable inboxing fails", async () => {
+            mockEventsManager.getLatestEventId = mock().mockResolvedValue(
+                "existing-cursor",
+            );
+            let listener: ((event: any) => Promise<void>) | null = null;
+            mockSdk.subscribeToTreeEvents = mock().mockImplementation(
+                async (_scope: string, callback: (event: any) => Promise<void>) => {
+                    listener = callback;
+                    return {
+                        getLatestEventId: () => "existing-cursor",
+                        dispose: mock(),
+                    };
+                },
+            );
+            const engine = new SyncEngine(
+                db,
+                mockSdk,
+                mockAuth,
+                { info: mock(), warn: mock(), error: mock(), debug: mock() },
+                mockEventsManager,
+            );
+            (engine as any).isStarted = true;
+            const durableFailure = new Error("journal disk failure");
+            db.journal.enqueueRemoteEvent = mock(() => {
+                throw durableFailure;
+            });
+            await (engine as any).subscribeToRemoteEvents("scope");
+
+            expect(listener).not.toBeNull();
+            await expect(
+                listener!({
+                    type: DriveEventType.NodeUpdated,
+                    treeEventScopeId: "scope",
+                    eventId: "next-cursor",
+                    nodeUid: "node",
+                }),
+            ).rejects.toBe(durableFailure);
+            expect(mockEventsManager.setLatestEventId).not.toHaveBeenCalledWith(
+                "drive",
+                "scope",
+                "next-cursor",
+            );
         });
 
         it("should create conflict copy when unmapped files with differing content are added locally and remotely", async () => {
@@ -758,7 +1419,72 @@ describe("SyncEngine", () => {
             expect((engine as any).isPaused).toBe(true);
             expect((engine as any).bulkDeletionWarning).toBe(true);
         });
+
+        it("should get and set network concurrency limit correctly", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            expect(engine.getConcurrencyLimit()).toBe(2);
+            expect(engine.getNetworkProfile()).toBe("custom");
+
+            engine.setConcurrencyLimit(4);
+            expect(engine.getConcurrencyLimit()).toBe(4);
+            expect(db.getConfig("sync_concurrency", "2")).toBe("4");
+            expect(engine.getNetworkProfile()).toBe("custom");
+
+            engine.setConcurrencyLimit(6);
+            expect(engine.getConcurrencyLimit()).toBe(4);
+        });
+
+        it("should apply and persist network profiles", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+
+            engine.setNetworkProfile("performance");
+            expect(engine.getNetworkProfile()).toBe("performance");
+            expect(engine.getConcurrencyLimit()).toBe(5);
+            expect(engine.isWifiSafeMode()).toBe(false);
+
+            engine.setNetworkProfile("safe");
+            expect(engine.getNetworkProfile()).toBe("safe");
+            expect(engine.getConcurrencyLimit()).toBe(1);
+            expect(engine.isWifiSafeMode()).toBe(true);
+
+            engine.setWifiSafeMode(false);
+            expect(engine.getNetworkProfile()).toBe("performance");
+            expect(engine.getConcurrencyLimit()).toBe(5);
+            expect(engine.isWifiSafeMode()).toBe(false);
+            expect(db.getConfig("sync_network_profile", "")).toBe("performance");
+        });
+
+        it("should get and set bandwidth speed limit correctly", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            expect(engine.getMaxSpeedKbps()).toBe(0);
+
+            engine.setMaxSpeedKbps(1024);
+            expect(engine.getMaxSpeedKbps()).toBe(1024);
+            expect(db.getConfig("sync_max_speed_kbps", "0")).toBe("1024");
+        });
+
+        it("should get and set Wi-Fi Safe Mode correctly", () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            expect(engine.isWifiSafeMode()).toBe(false);
+
+            engine.setWifiSafeMode(true);
+            expect(engine.isWifiSafeMode()).toBe(true);
+            expect(engine.getConcurrencyLimit()).toBe(1);
+            expect(db.getConfig("sync_wifi_safe_mode", "0")).toBe("1");
+        });
+
+        it("should apply rate limiting to transfers when maxSpeedKbps is set", async () => {
+            const engine = new SyncEngine(db, mockSdk, mockAuth, { info: mock(), warn: mock(), error: mock(), debug: mock() }, mockEventsManager);
+            engine.setMaxSpeedKbps(100); // 100 KB/s limit
+            expect(engine.getMaxSpeedKbps()).toBe(100);
+
+            const now = Date.now();
+            // Simulate 100ms passed and 20 KB transferred. Target is 100 KB/s, so 20 KB should take 200ms -> expected sleep ~100ms
+            (engine as any).transferRateTrackers.set("test.txt", { startTime: now - 100, bytesStart: 0 });
+            const startCall = Date.now();
+            await (engine as any).rateLimitTransfer("test.txt", 20 * 1024); 
+            const elapsed = Date.now() - startCall;
+            expect(elapsed).toBeGreaterThanOrEqual(50);
+        });
     });
 });
-
-

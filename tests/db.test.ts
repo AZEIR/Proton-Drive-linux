@@ -20,6 +20,9 @@ describe("SyncDatabase", () => {
             unlinkSync(`${dbPath}-wal`);
             unlinkSync(`${dbPath}-shm`);
         } catch {}
+        for (const suffix of [".journal", ".journal-wal", ".journal-shm"]) {
+            try { unlinkSync(`${dbPath}${suffix}`); } catch {}
+        }
     });
 
     describe("Config", () => {
@@ -94,6 +97,28 @@ describe("SyncDatabase", () => {
             db.deleteMappingsByPrefix("renamed_parent");
             expect(db.getMappingCount()).toBe(1); // Only other/child3.txt remains
         });
+
+        it("should isolate full-sync and FUSE mappings", () => {
+            db.setSyncMode("full");
+            db.setMapping(mockMapping);
+            db.setSyncMode("fuse");
+            expect(db.getMapping(mockMapping.local_path)).toBeFalsy();
+            db.setMapping({ ...mockMapping, node_uid: "fuse-uid" });
+            expect(db.getMapping(mockMapping.local_path)?.node_uid).toBe("fuse-uid");
+            db.setSyncMode("full");
+            expect(db.getMapping(mockMapping.local_path)?.node_uid).toBe("uid-123");
+        });
+
+        it("should return direct children without scanning descendants", () => {
+            db.setMapping({ ...mockMapping, local_path: "parent", node_uid: "parent", is_dir: 1 });
+            db.setMapping({ ...mockMapping, local_path: "parent/child.txt", node_uid: "child" });
+            db.setMapping({ ...mockMapping, local_path: "parent/sub", node_uid: "sub", is_dir: 1 });
+            db.setMapping({ ...mockMapping, local_path: "parent/sub/deep.txt", node_uid: "deep" });
+            expect(db.getDirectChildren("parent").map((item) => item.local_path)).toEqual([
+                "parent/child.txt",
+                "parent/sub",
+            ]);
+        });
     });
 
     describe("Pending Deletes", () => {
@@ -120,6 +145,63 @@ describe("SyncDatabase", () => {
             db.setPendingDelete("parent/file2.txt", "uid-2", false);
             db.deletePendingDeletesByPrefix("parent");
             expect(db.getPendingDeletes().length).toBe(0);
+        });
+    });
+
+    describe("FUSE pending uploads", () => {
+        it("persists failed writeback work until completion", () => {
+            db.setPendingFodUpload("document.txt", "node-1", "/tmp/cache-node-1");
+            expect(db.getPendingFodUploadCount()).toBe(1);
+            db.markPendingFodUploadFailed("document.txt", "offline");
+            expect(db.getPendingFodUploads()[0].last_error).toBe("offline");
+            db.deletePendingFodUpload("document.txt");
+            expect(db.getPendingFodUploadCount()).toBe(0);
+        });
+
+        it("finds only uploads whose latest attempt is still failed", () => {
+            db.log("retry.txt", "upload", "failed", "offline");
+            db.log("recovered.txt", "upload", "failed", "offline");
+            db.log("recovered.txt", "upload", "completed", "uploaded");
+            expect(db.getUnresolvedFailedUploadPaths()).toEqual(["retry.txt"]);
+        });
+    });
+
+    describe("Durable operation and event journal", () => {
+        it("coalesces queued writeback intents and completes them idempotently", () => {
+            const first = db.journal.enqueueOperation({
+                syncMode: "fuse",
+                stableInodeId: "inode-1",
+                kind: "update_file",
+                localPath: "document.txt",
+                nodeUid: "node-1",
+                cachePath: "/tmp/cache-1",
+                dedupeKey: "write:document.txt",
+            });
+            const second = db.journal.enqueueOperation({
+                syncMode: "fuse",
+                stableInodeId: "inode-1",
+                kind: "update_file",
+                localPath: "document.txt",
+                nodeUid: "node-1",
+                cachePath: "/tmp/cache-2",
+                dedupeKey: "write:document.txt",
+            });
+
+            expect(second).toBe(first);
+            expect(db.journal.getReadyOperations()).toHaveLength(1);
+            expect(db.journal.getReadyOperations()[0].cache_path).toBe("/tmp/cache-2");
+            db.journal.markDedupeKeyCompleted("write:document.txt");
+            expect(db.journal.getPendingOperationCount()).toBe(0);
+        });
+
+        it("persists a remote event only once until it is applied", () => {
+            const event = { eventId: "event-1", type: "NodeUpdated", nodeUid: "node-1" };
+            db.journal.enqueueRemoteEvent("scope-1", "event-1", "node-1", "NodeUpdated", event);
+            db.journal.enqueueRemoteEvent("scope-1", "event-1", "node-1", "NodeUpdated", event);
+            expect(db.journal.getPendingRemoteEventCount()).toBe(1);
+            expect(db.journal.getReadyRemoteEvents("scope-1")).toHaveLength(1);
+            db.journal.markRemoteEventApplied("scope-1", "event-1");
+            expect(db.journal.getPendingRemoteEventCount()).toBe(0);
         });
     });
 

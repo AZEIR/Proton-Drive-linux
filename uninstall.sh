@@ -1,9 +1,8 @@
 #!/bin/bash
 # Proton Drive Linux — Uninstall Script
 
-SERVICE_NAME="proton-sync.service"
+SERVICE_NAMES=("drive-fuse.service" "drive-core.service" "proton-sync.service")
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
-SERVICE_PATH="${SYSTEMD_DIR}/${SERVICE_NAME}"
 AUTOSTART_PATH="${HOME}/.config/autostart/proton-drive-tray.desktop"
 
 echo "============================================="
@@ -14,20 +13,21 @@ echo "Stopping daemon and tray processes..."
 pkill -f "proton-sync" 2>/dev/null || true
 pkill -f "proton-drive-tray.py" 2>/dev/null || true
 
-if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-    echo "Stopping systemd service..."
-    systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
-fi
-
-if systemctl --user is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-    echo "Disabling systemd service..."
-    systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
-fi
-
-if [ -f "$SERVICE_PATH" ]; then
-    echo "Removing systemd unit file..."
-    rm -f "$SERVICE_PATH"
-fi
+for SERVICE_NAME in "${SERVICE_NAMES[@]}"; do
+    systemctl --user disable --now "$SERVICE_NAME" 2>/dev/null || true
+    SERVICE_PATH="${SYSTEMD_DIR}/${SERVICE_NAME}"
+    if [ -f "$SERVICE_PATH" ]; then
+        echo "Removing systemd unit file: $SERVICE_NAME"
+        rm -f "$SERVICE_PATH"
+    fi
+    CREDENTIAL_DROPIN_DIR="${SERVICE_PATH}.d"
+    CREDENTIAL_DROPIN="${CREDENTIAL_DROPIN_DIR}/credentials.conf"
+    if [ -f "$CREDENTIAL_DROPIN" ]; then
+        echo "Removing app-managed credential override for: $SERVICE_NAME"
+        rm -f "$CREDENTIAL_DROPIN"
+        rmdir "$CREDENTIAL_DROPIN_DIR" 2>/dev/null || true
+    fi
+done
 
 if [ -f "$AUTOSTART_PATH" ]; then
     echo "Removing desktop autostart entry..."

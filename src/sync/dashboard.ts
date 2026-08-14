@@ -1,38 +1,180 @@
-import { exec } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { SyncDatabase } from './db';
 import { SyncEngine } from './engine';
-import { openBrowserUrl } from '../../sdk/cli/src/cli/openBrowserUrl';
-import { getHtmlContent } from './dashboard/template';
+import { openBrowserUrl } from '../sdk/adapter';
+import type { StartupIssue } from './startupIssue';
+import {
+    getDashboardCss,
+    getDashboardFavicon,
+    getDashboardJs,
+    getHtmlContent,
+} from './dashboard/template';
+import { serveFetch } from '../utils/fetchServer';
+import {
+    inferNetworkProfile,
+    MAX_PARALLEL_FILE_TRANSFERS,
+    NETWORK_PROFILE_SETTINGS,
+    type NetworkProfile,
+} from '../utils/httpAgent';
 
 export interface FodHooks {
-    isFuseMode:   boolean;
-    mountPoint:   string;
-    getInodes:    () => any[];
-    getCached:    () => any[];
-    getCacheStats: () => { totalFiles: number; totalBytes: number };
-    evictFile:    (nodeUid: string) => Promise<boolean>;
-    pinFile:      (nodeUid: string) => Promise<boolean>;
-    getUploads:   () => any[];
+    isFuseMode:         boolean;
+    mountPoint:         string;
+    getInodes:          () => any[];
+    getCached:          () => any[];
+    getCacheStats:       () => { totalFiles: number; totalBytes: number };
+    evictFile:          (nodeUid: string) => Promise<boolean>;
+    pinFile:            (nodeUid: string) => Promise<boolean>;
+    hydrateFile?:       (nodeUid: string, relativePath: string) => Promise<string>;
+    getUploads:         () => any[];
+    getActiveTransfers?: () => any[];
+    scanRemoteTree?:     () => Promise<void>;
+    pause?:              () => Promise<void>;
+    resume?:             () => Promise<void>;
+    start?:              () => Promise<void>;
+    stop?:               () => Promise<void>;
+    getStatus?:          () => string;
+    getIsPaused?:        () => boolean;
+}
+
+export async function startAuthenticatedSync(
+    engine: SyncEngine | null,
+    fod?: FodHooks,
+): Promise<void> {
+    if (fod?.isFuseMode) {
+        if (!fod.start) throw new Error('FUSE engine is unavailable after authentication');
+        await fod.start();
+        await engine?.startFodEventLoop();
+        engine?.emit('statusChanged');
+        return;
+    }
+    if (engine) {
+        await engine.start();
+        engine.emit('statusChanged');
+    }
 }
 
 export function startDashboard(
     db: SyncDatabase,
-    engine: SyncEngine | null,
-    session: any,
+    initialEngine: SyncEngine | null,
+    initialSession: any,
     port: number = 8085,
-    fod?: FodHooks,
+    initialFod?: FodHooks,
+    initialStartupIssue: StartupIssue | null = null,
 ) {
-    const logger = session?.logger ?? console;
+    let engine = initialEngine;
+    let session = initialSession;
+    let fod = initialFod;
+    let startupIssue = initialStartupIssue;
+    let logger = session?.logger ?? console;
     let isAuthenticating = false;
     let cachedEmail = 'Not Logged In';
+    // Browser authority is deliberately in-memory and expires on daemon
+    // restart; it is not a long-lived bearer secret stored beside sync state.
+    const dashboardToken = randomBytes(32).toString('hex');
+    const csrfToken = randomBytes(32).toString('hex');
+    const readConfig = (key: string, fallback: string): string =>
+        typeof (db as any).getConfig === 'function' ? db.getConfig(key, fallback) : fallback;
+    const writeConfig = (key: string, value: string): void => {
+        if (typeof (db as any).setConfig === 'function') db.setConfig(key, value);
+    };
+    const getPerformanceSettings = () => {
+        const concurrencyLimit = engine?.getConcurrencyLimit() ?? parseInt(readConfig('sync_concurrency', '2'), 10);
+        const maxSpeedKbps = engine?.getMaxSpeedKbps() ?? parseInt(readConfig('sync_max_speed_kbps', '0'), 10);
+        const wifiSafeMode = engine?.isWifiSafeMode() ?? readConfig('sync_wifi_safe_mode', '0') === '1';
+        const storedProfile = readConfig('sync_network_profile', '');
+        const networkProfile =
+            engine?.getNetworkProfile() ??
+            (storedProfile === 'custom'
+                ? 'custom'
+                : inferNetworkProfile(concurrencyLimit, wifiSafeMode));
+        return { concurrencyLimit, maxSpeedKbps, wifiSafeMode, networkProfile };
+    };
 
-    const server = Bun.serve({
+    const getBoundPort = () => (server as any)?.port ?? port;
+
+    const server = serveFetch({
         port,
         hostname: "127.0.0.1",
         async fetch(req) {
-            const url = new URL(req.url);
+            const boundPort = getBoundPort();
+            const validHosts = new Set([
+                `127.0.0.1:${boundPort}`,
+                `localhost:${boundPort}`,
+                `127.0.0.1:${port}`,
+                `localhost:${port}`,
+            ]);
+            const allowedOrigins = new Set([
+                `http://127.0.0.1:${boundPort}`,
+                `http://localhost:${boundPort}`,
+                `http://127.0.0.1:${port}`,
+                `http://localhost:${port}`,
+            ]);
 
+            const url = new URL(req.url);
+            if (url.pathname.startsWith('/api/v1/') && url.pathname !== '/api/v1/session') {
+                url.pathname = `/api/${url.pathname.slice('/api/v1/'.length)}`;
+            }
+            const host = req.headers.get('host') ?? '';
+            if (!validHosts.has(host)) {
+                return Response.json({ ok: false, error: 'Invalid Host header' }, { status: 421 });
+            }
+            const origin = req.headers.get('origin');
+            if (origin && !allowedOrigins.has(origin)) {
+                return Response.json({ ok: false, error: 'Cross-origin request rejected' }, { status: 403 });
+            }
+            const cookie = req.headers.get('cookie') ?? '';
+            const hasDashboardSession = cookie
+                .split(';')
+                .some((part) => part.trim() === `proton_dashboard=${dashboardToken}`);
+            if (url.pathname.startsWith('/api/') && !hasDashboardSession) {
+                return Response.json({ ok: false, error: 'Dashboard authorization required' }, { status: 403 });
+            }
+            if (
+                url.pathname.startsWith('/api/') &&
+                !['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+            ) {
+                if (!origin || !allowedOrigins.has(origin) || !hasDashboardSession) {
+                    return Response.json({ ok: false, error: 'Authenticated browser origin required' }, { status: 403 });
+                }
+                if (!safeTokenEqual(req.headers.get('x-csrf-token'), csrfToken)) {
+                    return Response.json({ ok: false, error: 'Invalid CSRF token' }, { status: 403 });
+                }
+            }
+            if (url.pathname === '/api/v1/session') {
+                if (!hasDashboardSession) {
+                    return Response.json({ ok: false, error: 'Dashboard authorization required' }, { status: 403 });
+                }
+                return Response.json({ csrfToken });
+            }
+            if (url.pathname === '/assets/dashboard.css') {
+                return new Response(getDashboardCss(), {
+                    headers: {
+                        'Content-Type': 'text/css; charset=utf-8',
+                        'Cache-Control': 'no-store',
+                    },
+                });
+            }
+            if (url.pathname === '/assets/dashboard.js') {
+                return new Response(getDashboardJs(), {
+                    headers: {
+                        'Content-Type': 'text/javascript; charset=utf-8',
+                        'Cache-Control': 'no-store',
+                    },
+                });
+            }
+            if (url.pathname === '/assets/favicon.svg') {
+                return new Response(getDashboardFavicon(), {
+                    headers: {
+                        'Content-Type': 'image/svg+xml; charset=utf-8',
+                        'Cache-Control': 'no-store',
+                    },
+                });
+            }
             // API ENDPOINTS
             if (url.pathname === '/api/status') {
                 let email = 'Not Logged In';
@@ -43,7 +185,7 @@ export function startDashboard(
                         cachedEmail = email;
 
                         // Legacy full-sync: auto-start if idle
-                        if (engine && engine.getStatus() === 'idle') {
+                        if (!fod?.isFuseMode && db.getSyncMode() !== 'fuse' && engine && engine.getStatus() === 'idle') {
                             engine.start();
                         }
                     } else {
@@ -52,37 +194,170 @@ export function startDashboard(
                 } catch {}
 
                 if (fod?.isFuseMode) {
-                    // FOD mode status
-                    const uploads = fod.getUploads();
+                    const transfers = fod.getActiveTransfers ? fod.getActiveTransfers() : fod.getUploads().map((u: any) => ({ ...u, type: 'upload' }));
                     return Response.json({
-                        status:          session?.auth?.isLoggedIn() ? 'synced' : 'auth_required',
-                        mode:            'fod',
+                        status:          session?.auth?.isLoggedIn() ? (fod.getStatus?.() ?? 'error') : 'auth_required',
+                        mode:            'fuse',
                         mountPoint:      fod.mountPoint,
-                        activeTransfers: uploads.map((u: any) => ({ ...u, type: 'upload' })),
-                        isPaused:        false,
+                        activeTransfers: transfers,
+                        isPaused:        fod.getIsPaused?.() ?? false,
                         bulkDeletionCount: 0,
+                        ...getPerformanceSettings(),
+                        network: engine?.getNetworkSnapshot?.(),
+                        pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                        pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                        statusDetail: engine?.getDetailedStatus?.(),
                         email,
                         isAuthenticating,
-                    }, {
-                        headers: { 'Access-Control-Allow-Origin': '*' }
                     });
                 }
 
                 return Response.json({
-                    status:            engine?.getStatus() ?? 'offline',
-                    mode:              'full',
+                    status:            engine?.getStatus() ?? (startupIssue ? 'error' : 'offline'),
+                    mode:              fod?.isFuseMode ? 'fuse' : db.getSyncMode(),
                     activeTransfers:   engine?.getActiveTransfers() ?? [],
-                    localSyncRoot:     engine?.getLocalSyncRoot() ?? '',
+                    localSyncRoot:     fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? ''),
                     isPaused:          engine?.getStatus() === 'paused',
                     bulkDeletionCount: engine?.getBulkDeletionCount() ?? 0,
+                    ...getPerformanceSettings(),
+                    network: engine?.getNetworkSnapshot?.(),
+                    pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                    pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                    statusDetail: engine?.getDetailedStatus?.(),
                     email,
                     isAuthenticating,
-                }, {
-                    headers: { 'Access-Control-Allow-Origin': '*' }
+                    ...(startupIssue && {
+                        error: startupIssue.message,
+                        startupIssue: startupIssue.kind,
+                    }),
                 });
             }
 
+            if (req.method === 'POST' && url.pathname === '/api/set-mode') {
+                try {
+                    const body = await req.json() as { mode?: string };
+                    const targetMode = body.mode === 'fuse' ? 'fuse' : 'full';
+                    await engine?.stop();
+                    await fod?.stop?.();
+                    db.setSyncMode(targetMode);
+                    db.log('system', 'system', 'completed', `Sync mode updated to ${targetMode.toUpperCase()}. Applying changes...`);
+
+                    setTimeout(() => {
+                        process.kill(process.pid, 'SIGTERM');
+                    }, 500);
+
+                    return Response.json({ ok: true, mode: targetMode, message: 'Sync mode updated. Daemon restarting...' });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Failed to set sync mode' }, { status: 500 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-concurrency') {
+                try {
+                    const body = await req.json() as { concurrency?: number | string };
+                    const limit = Number(body.concurrency);
+                    if (Number.isInteger(limit) && limit >= 1 && limit <= MAX_PARALLEL_FILE_TRANSFERS) {
+                        if (engine) {
+                            engine.setConcurrencyLimit(limit);
+                        } else {
+                            writeConfig('sync_concurrency', limit.toString());
+                            writeConfig('sync_wifi_safe_mode', '0');
+                            writeConfig('sync_network_profile', 'custom');
+                        }
+                        db.log('system', 'system', 'completed', `Network concurrency updated to ${limit}.`);
+                        return Response.json({ ok: true, concurrency: limit, ...getPerformanceSettings() });
+                    }
+                    return Response.json({
+                        ok: false,
+                        error: `Invalid concurrency limit (must be a whole number between 1 and ${MAX_PARALLEL_FILE_TRANSFERS})`,
+                    }, { status: 400 });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-network-profile') {
+                try {
+                    const body = await req.json() as { profile?: string };
+                    const profile = body.profile as Exclude<NetworkProfile, 'custom'>;
+                    if (profile !== 'safe' && profile !== 'balanced' && profile !== 'performance') {
+                        return Response.json({ ok: false, error: 'Invalid network profile' }, { status: 400 });
+                    }
+                    const settings = NETWORK_PROFILE_SETTINGS[profile];
+                    if (engine) {
+                        engine.setNetworkProfile(profile);
+                    } else {
+                        writeConfig('sync_concurrency', settings.concurrency.toString());
+                        writeConfig('sync_wifi_safe_mode', settings.wifiSafeMode ? '1' : '0');
+                        writeConfig('sync_network_profile', profile);
+                    }
+                    db.log('system', 'system', 'completed', `Network profile updated to ${profile}.`);
+                    return Response.json({ ok: true, profile, ...getPerformanceSettings() });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-speed-limit') {
+                try {
+                    const body = await req.json() as { maxSpeedKbps?: number | string };
+                    const kbps = typeof body.maxSpeedKbps === 'number' ? body.maxSpeedKbps : parseInt(String(body.maxSpeedKbps || '0'), 10);
+                    if (!isNaN(kbps) && kbps >= 0 && kbps <= 10_000_000) {
+                        if (engine) {
+                            engine.setMaxSpeedKbps(kbps);
+                        } else {
+                            db.setConfig('sync_max_speed_kbps', kbps.toString());
+                        }
+                        db.log('system', 'system', 'completed', `Network bandwidth limit set to ${kbps === 0 ? 'Unlimited' : `${kbps} KB/s`}.`);
+                        return Response.json({ ok: true, maxSpeedKbps: kbps });
+                    }
+                    return Response.json({ ok: false, error: 'Invalid speed limit (must be between 0 and 10,000,000 KB/s)' }, { status: 400 });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/set-wifi-safe-mode') {
+                try {
+                    const body = await req.json() as { enabled?: boolean };
+                    const enabled = Boolean(body.enabled);
+                    if (engine) {
+                        engine.setWifiSafeMode(enabled);
+                    } else {
+                        const settings = enabled
+                            ? NETWORK_PROFILE_SETTINGS.safe
+                            : NETWORK_PROFILE_SETTINGS.balanced;
+                        writeConfig('sync_wifi_safe_mode', settings.wifiSafeMode ? '1' : '0');
+                        writeConfig('sync_concurrency', settings.concurrency.toString());
+                        writeConfig('sync_network_profile', enabled ? 'safe' : 'balanced');
+                    }
+                    db.log('system', 'system', 'completed', `Wi-Fi Safe Mode ${enabled ? 'enabled' : 'disabled'}.`);
+                    return Response.json({ ok: true, ...getPerformanceSettings() });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err?.message || 'Invalid request' }, { status: 400 });
+                }
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/fod/hydrate') {
+                const body = await req.json() as { nodeUid?: string };
+                const nodeUid = body.nodeUid;
+                if (!nodeUid) return Response.json({ ok: false, error: 'Missing nodeUid' }, { status: 400 });
+                try {
+                    const mapping = db.getMappingByNodeUid(nodeUid);
+                    if (fod && mapping) {
+                        const cachePath = await fod.hydrateFile?.(nodeUid, mapping.local_path);
+                        return Response.json({ ok: true, cachePath });
+                    }
+                    return Response.json({ ok: false, error: 'Hydrator unavailable or mapping not found' }, { status: 404 });
+                } catch (err: any) {
+                    return Response.json({ ok: false, error: err.message }, { status: 500 });
+                }
+            }
+
             if (req.method === 'POST' && url.pathname === '/api/login') {
+                if (!session?.auth) {
+                    return Response.json({ ok: false, error: 'Session not initialized' }, { status: 503 });
+                }
                 if (session.auth.isLoggedIn()) {
                     return Response.json({ ok: false, error: 'Already logged in' }, { status: 400 });
                 }
@@ -103,16 +378,29 @@ export function startDashboard(
                             openBrowserUrl(signInUrl);
                         }).then(async () => {
                             isAuthenticating = false;
-                            db.log('system', 'system', 'completed', 'Authentication successful. Starting sync engine...');
+                            db.log(
+                                'system',
+                                'system',
+                                'completed',
+                                `Authentication successful. Starting ${fod?.isFuseMode ? 'FUSE engine' : 'sync engine'}...`,
+                            );
                             try {
                                 if (session.auth.isLoggedIn()) {
                                     const primaryAddress = await session.addresses.getOwnPrimaryAddress();
                                     cachedEmail = primaryAddress.email;
                                 }
                             } catch {}
-                            if (engine) {
-                                await engine.start();
-                                engine.emit('statusChanged');
+                            try {
+                                await startAuthenticatedSync(engine, fod);
+                            } catch (startupErr: any) {
+                                const message = startupErr?.message || String(startupErr);
+                                db.log(
+                                    'system',
+                                    'system',
+                                    'failed',
+                                    `Authentication succeeded but sync startup failed: ${message}`,
+                                );
+                                logger.error('Post-authentication sync startup failed:', startupErr);
                             }
                         }).catch((err: any) => {
                             isAuthenticating = false;
@@ -137,7 +425,7 @@ export function startDashboard(
 
             if (url.pathname === '/api/quota') {
                 try {
-                    if (session.auth.isLoggedIn()) {
+                    if (session?.auth?.isLoggedIn()) {
                         const quota = await session.getQuota();
                         const percent = quota.maxSpace > 0 ? (quota.usedSpace / quota.maxSpace) * 100 : 0;
                         return Response.json({
@@ -155,9 +443,201 @@ export function startDashboard(
             }
 
             if (url.pathname === '/api/logs') {
-                const limit = parseInt(url.searchParams.get('limit') || '500', 10) || 500;
-                const logs = db.getRecentLogs(limit);
+                const requestedLimit = parseInt(url.searchParams.get('limit') || '500', 10) || 500;
+                const limit = Math.min(1000, Math.max(1, requestedLimit));
+                const afterId = parseInt(url.searchParams.get('after_id') || '0', 10) || 0;
+                const logs =
+                    afterId > 0 && typeof (db as any).getLogsAfter === 'function'
+                        ? db.getLogsAfter(afterId, limit)
+                        : db.getRecentLogs(limit);
                 return Response.json(logs);
+            }
+
+            if (url.pathname === '/api/network-policy') {
+                return Response.json(
+                    engine?.getNetworkSnapshot?.() ?? {
+                        state: 'offline',
+                        policy: null,
+                        activeTransfers: 0,
+                        queuedTransfers: 0,
+                    },
+                );
+            }
+
+            if (url.pathname === '/api/journal') {
+                const requestedLimit = parseInt(url.searchParams.get('limit') || '100', 10) || 100;
+                const limit = Math.min(1000, Math.max(1, requestedLimit));
+                return Response.json({
+                    pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                    pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                    operations: db.journal?.getPendingOperations?.(limit) ?? [],
+                });
+            }
+
+            // ── Integrated File Browser Endpoint ────────────────────────────
+            if (url.pathname === '/api/browser/list') {
+                const requestedPath = (url.searchParams.get('path') || '').replace(/^\/+|\/+$/g, '');
+                const allMappings =
+                    typeof (db as any).getDirectChildren === 'function'
+                        ? db.getDirectChildren(requestedPath)
+                        : db.getAllMappings();
+
+                // Build Breadcrumbs
+                const breadcrumbs: { name: string; path: string }[] = [{ name: 'My Files', path: '' }];
+                if (requestedPath) {
+                    const parts = requestedPath.split('/');
+                    let acc = '';
+                    for (const p of parts) {
+                        acc = acc ? `${acc}/${p}` : p;
+                        breadcrumbs.push({ name: p, path: acc });
+                    }
+                }
+
+                // Get cached files set if in FUSE mode
+                const cachedSet = new Set<string>();
+                const pinnedSet = new Set<string>();
+                if (fod) {
+                    try {
+                        const cachedFiles = fod.getCached();
+                        for (const c of cachedFiles) {
+                            if (c.nodeUid) cachedSet.add(c.nodeUid);
+                            if (c.isPinned) pinnedSet.add(c.nodeUid);
+                        }
+                    } catch {}
+                }
+
+                const localRoot = fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? '');
+
+                const directChildren = new Map<string, {
+                    name: string;
+                    relPath: string;
+                    nodeUid: string;
+                    isDir: boolean;
+                    size: number;
+                    mtime: number;
+                    isCached: boolean;
+                    isPinned: boolean;
+                }>();
+
+                const reqLen = requestedPath.length;
+                for (const m of allMappings) {
+                    const lp = m.local_path;
+                    if (!lp) continue;
+
+                    let isMatch = false;
+                    let childRelPath = '';
+
+                    if (reqLen === 0) {
+                        isMatch = true;
+                        childRelPath = lp;
+                    } else if (lp.startsWith(requestedPath + '/')) {
+                        isMatch = true;
+                        childRelPath = lp.substring(reqLen + 1);
+                    }
+
+                    if (isMatch && childRelPath) {
+                        const slashIdx = childRelPath.indexOf('/');
+                        const itemName = slashIdx !== -1 ? childRelPath.substring(0, slashIdx) : childRelPath;
+                        const itemRelPath = requestedPath ? `${requestedPath}/${itemName}` : itemName;
+                        const isDirItem = slashIdx !== -1 ? true : (m.is_dir === 1);
+
+                        if (!directChildren.has(itemName)) {
+                            let isCached = false;
+                            if (fod?.isFuseMode) {
+                                isCached = isDirItem || cachedSet.has(m.node_uid);
+                            } else {
+                                const fullPath = path.join(localRoot, itemRelPath);
+                                isCached = existsSync(fullPath);
+                            }
+
+                            const isPinned = pinnedSet.has(m.node_uid);
+
+                            directChildren.set(itemName, {
+                                name: itemName,
+                                relPath: itemRelPath,
+                                nodeUid: slashIdx !== -1 ? '' : m.node_uid,
+                                isDir: isDirItem,
+                                size: isDirItem ? 0 : m.size,
+                                mtime: m.mtime || Date.now(),
+                                isCached,
+                                isPinned,
+                            });
+                        } else if (!isDirItem) {
+                            const existing = directChildren.get(itemName)!;
+                            existing.nodeUid = m.node_uid;
+                            existing.size = m.size;
+                            existing.mtime = m.mtime;
+                            existing.isDir = false;
+                            if (fod?.isFuseMode) {
+                                existing.isCached = cachedSet.has(m.node_uid);
+                            }
+                            existing.isPinned = pinnedSet.has(m.node_uid);
+                        }
+                    }
+                }
+
+                const items = Array.from(directChildren.values()).sort((a, b) => {
+                    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+                    return a.name.localeCompare(b.name);
+                });
+
+                return Response.json({ currentPath: requestedPath, breadcrumbs, items });
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/browser/open-item') {
+                const body = await req.json() as { relPath?: string };
+                if (!body?.relPath && body?.relPath !== '') {
+                    return Response.json({ ok: false, error: 'relPath required' }, { status: 400 });
+                }
+                const localRoot = fod?.isFuseMode ? fod.mountPoint : (engine?.getLocalSyncRoot() ?? '');
+                const isFusePath = Boolean(fod?.isFuseMode);
+                const fullPath = resolveContainedPath(localRoot, body.relPath, !isFusePath);
+                if (!fullPath) {
+                    return Response.json({ ok: false, error: 'Path escapes the configured root' }, { status: 400 });
+                }
+                if (isFusePath) {
+                    // Never synchronously stat/realpath our own FUSE mount from
+                    // the Node process that must answer that FUSE request. Use
+                    // the already-loaded remote mapping tree for existence
+                    // validation, then let xdg-open access the mount from a
+                    // separate process.
+                    const relPath = body.relPath.replace(/^\/+|\/+$/g, '');
+                    const mapped =
+                        relPath === '' ||
+                        Boolean((db as any).getMapping?.(relPath)) ||
+                        Boolean((db as any).hasMappingsByPrefix?.(relPath)) ||
+                        Boolean((db as any).getAllMappings?.().some(
+                            (mapping: any) =>
+                                mapping.local_path === relPath ||
+                                mapping.local_path.startsWith(`${relPath}/`),
+                        ));
+                    if (!mapped) {
+                        return Response.json({ ok: false, error: 'File/directory not found in Proton Drive.' }, { status: 404 });
+                    }
+                    execFile('xdg-open', [fullPath]);
+                    return Response.json({ ok: true });
+                }
+                if (existsSync(fullPath)) {
+                    execFile('xdg-open', [fullPath]);
+                    return Response.json({ ok: true });
+                }
+                return Response.json({ ok: false, error: 'File/directory not found on local disk.' }, { status: 404 });
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/evict') {
+                const body = await req.json() as { nodeUid?: string };
+                if (!body?.nodeUid) return Response.json({ ok: false, error: 'nodeUid required' }, { status: 400 });
+                const ok = fod ? await fod.evictFile(body.nodeUid) : false;
+                db.log(body.nodeUid, 'system', ok ? 'completed' : 'failed', ok ? 'Evicted from cache' : 'Evict failed');
+                return Response.json({ ok });
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/pin') {
+                const body = await req.json() as { nodeUid?: string };
+                if (!body?.nodeUid) return Response.json({ ok: false, error: 'nodeUid required' }, { status: 400 });
+                const ok = fod ? await fod.pinFile(body.nodeUid) : false;
+                db.log(body.nodeUid, 'download', ok ? 'completed' : 'failed', ok ? 'Pinned to local cache' : 'Pin failed');
+                return Response.json({ ok });
             }
 
             // ── FOD-specific endpoints ──────────────────────────────────────
@@ -168,25 +648,13 @@ export function startDashboard(
                     return Response.json({ files: cached, stats });
                 }
 
-                if (req.method === 'POST' && url.pathname === '/api/evict') {
-                    const body = await req.json() as { nodeUid?: string };
-                    if (!body?.nodeUid) return Response.json({ ok: false, error: 'nodeUid required' }, { status: 400 });
-                    const ok = await fod.evictFile(body.nodeUid);
-                    db.log(body.nodeUid, 'system', ok ? 'completed' : 'failed', ok ? 'Evicted from cache' : 'Evict failed');
-                    return Response.json({ ok });
-                }
-
-                if (req.method === 'POST' && url.pathname === '/api/pin') {
-                    const body = await req.json() as { nodeUid?: string };
-                    if (!body?.nodeUid) return Response.json({ ok: false, error: 'nodeUid required' }, { status: 400 });
-                    const ok = await fod.pinFile(body.nodeUid);
-                    db.log(body.nodeUid, 'download', ok ? 'completed' : 'failed', ok ? 'Pinned to local cache' : 'Pin failed');
-                    return Response.json({ ok });
-                }
-
                 if (req.method === 'POST' && url.pathname === '/api/open-folder') {
-                    if (existsSync(fod.mountPoint)) {
-                        exec(`xdg-open "${fod.mountPoint}"`);
+                    const mountPoint = fod.mountPoint;
+                    if (mountPoint) {
+                        // The mount point is created before FUSE starts. A
+                        // synchronous mkdir/stat here would ask the daemon to
+                        // service its own filesystem request and deadlock.
+                        execFile('xdg-open', [mountPoint]);
                         return Response.json({ ok: true });
                     }
                     return Response.json({ ok: false, error: 'Mount point does not exist' }, { status: 404 });
@@ -194,6 +662,8 @@ export function startDashboard(
 
                 if (req.method === 'POST' && url.pathname === '/api/logout') {
                     db.log('system', 'system', 'syncing', 'Logging out from Proton Drive');
+                    await fod.stop?.();
+                    await engine?.stop();
                     await session.auth.logout();
                     return Response.json({ ok: true });
                 }
@@ -202,12 +672,14 @@ export function startDashboard(
             // ── Legacy full-sync endpoints ──────────────────────────────────
             if (req.method === 'POST') {
                 if (url.pathname === '/api/pause') {
-                    await engine?.pause();
+                    if (fod?.isFuseMode) await fod.pause?.();
+                    else await engine?.pause();
                     return Response.json({ ok: true });
                 }
 
                 if (url.pathname === '/api/resume') {
-                    await engine?.resume();
+                    if (fod?.isFuseMode) await fod.resume?.();
+                    else await engine?.resume();
                     return Response.json({ ok: true });
                 }
 
@@ -222,7 +694,11 @@ export function startDashboard(
                 }
 
                 if (url.pathname === '/api/sync') {
-                    engine?.forceSync(); // Run async
+                    if (fod?.isFuseMode && fod) {
+                        void fod.scanRemoteTree?.();
+                    } else if (engine) {
+                        engine.forceSync(); // Run async
+                    }
                     return Response.json({ ok: true });
                 }
 
@@ -230,7 +706,12 @@ export function startDashboard(
                     const body = await req.json() as { path?: string };
                     if (body && body.path) {
                         try {
-                            await engine?.setLocalSyncRoot(body.path);
+                            const safePath = validateConfiguredPath(body.path);
+                            if (fod?.isFuseMode) {
+                                db.setFuseMountPoint(safePath);
+                            } else if (engine) {
+                                await engine.setLocalSyncRoot(safePath);
+                            }
                             return Response.json({ ok: true });
                         } catch (err: any) {
                             return Response.json({ ok: false, error: err.message || String(err) }, { status: 400 });
@@ -249,8 +730,9 @@ export function startDashboard(
 
                 if (url.pathname === '/api/open-folder') {
                     const localPath = engine?.getLocalSyncRoot() ?? '';
-                    if (localPath && existsSync(localPath)) {
-                        exec(`xdg-open "${localPath}"`);
+                    if (localPath) {
+                        try { mkdirSync(localPath, { recursive: true }); } catch {}
+                        execFile('xdg-open', [localPath]);
                         return Response.json({ ok: true });
                     }
                     return Response.json({ ok: false, error: 'Directory does not exist' }, { status: 404 });
@@ -259,7 +741,10 @@ export function startDashboard(
                 if (url.pathname === '/api/daemon/stop') {
                     db.log('system', 'system', 'syncing', 'Daemon stop requested from dashboard');
                     setTimeout(() => {
-                        exec('systemctl --user stop proton-sync.service 2>/dev/null', () => process.exit(0));
+                        execFile('systemctl', ['--user', 'stop', 'drive-core.service'], () => {
+                            process.kill(process.pid, 'SIGTERM');
+                        });
+                        process.kill(process.pid, 'SIGTERM');
                     }, 300);
                     return Response.json({ ok: true });
                 }
@@ -267,7 +752,7 @@ export function startDashboard(
                 if (url.pathname === '/api/daemon/restart') {
                     db.log('system', 'system', 'syncing', 'Daemon restart requested from dashboard');
                     setTimeout(() => {
-                        exec('systemctl --user restart proton-sync.service 2>/dev/null', (err) => {
+                        execFile('systemctl', ['--user', 'restart', 'drive-core.service'], (err) => {
                             if (err) process.exit(1); // non-zero so systemd restarts us
                         });
                     }, 300);
@@ -283,25 +768,32 @@ export function startDashboard(
                         const encoder = new TextEncoder();
                         const send = async () => {
                             try {
-                                if (cachedEmail === 'Not Logged In' && session.auth.isLoggedIn()) {
+                                if (cachedEmail === 'Not Logged In' && session?.auth?.isLoggedIn()) {
                                     try {
                                         const primaryAddress = await session.addresses.getOwnPrimaryAddress();
                                         cachedEmail = primaryAddress.email;
                                     } catch {}
-                                } else if (!session.auth.isLoggedIn()) {
+                                } else if (!session?.auth?.isLoggedIn()) {
                                     cachedEmail = 'Not Logged In';
                                 }
 
                                 let payload: string;
                                 if (fod?.isFuseMode) {
-                                    const uploads = fod.getUploads();
+                                    const transfers = fod.getActiveTransfers ? fod.getActiveTransfers() : fod.getUploads().map((u: any) => ({ ...u, type: 'upload' }));
+                                    const isTransferring = transfers.length > 0;
+                                    const status = fod.getStatus?.() ?? (isTransferring ? 'syncing' : 'synced');
                                     payload = JSON.stringify({
-                                        status:          session.auth.isLoggedIn() ? 'synced' : 'auth_required',
-                                        mode:            'fod',
+                                        status:          session?.auth?.isLoggedIn() ? status : 'auth_required',
+                                        mode:            'fuse',
                                         mountPoint:      fod.mountPoint,
-                                        activeTransfers: uploads.map((u: any) => ({ ...u, type: 'upload' })),
-                                        isPaused:        false,
+                                        activeTransfers: transfers,
+                                        isPaused:        fod.getIsPaused?.() ?? status === 'paused',
                                         bulkDeletionCount: 0,
+                                        ...getPerformanceSettings(),
+                                        network: engine?.getNetworkSnapshot?.(),
+                                        pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                                        pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                                        statusDetail: engine?.getDetailedStatus?.(),
                                         email:           cachedEmail,
                                         isAuthenticating,
                                     });
@@ -318,12 +810,18 @@ export function startDashboard(
                                         isPaused: status === 'paused',
                                         isAuthenticating,
                                         localSyncRoot,
+                                        ...getPerformanceSettings(),
+                                        network: engine.getNetworkSnapshot?.(),
+                                        pendingOperations: db.journal?.getPendingOperationCount?.() ?? 0,
+                                        pendingEvents: db.journal?.getPendingRemoteEventCount?.() ?? 0,
+                                        statusDetail: engine.getDetailedStatus?.(),
                                         email: cachedEmail
                                     });
                                 } else {
                                     payload = JSON.stringify({
-                                        status: 'error',
-                                        error: 'Engine/FOD not initialized',
+                                        status: startupIssue ? 'error' : 'offline',
+                                        error: startupIssue?.message ?? 'Engine/FOD not initialized',
+                                        ...(startupIssue && { startupIssue: startupIssue.kind }),
                                         email: cachedEmail,
                                         isAuthenticating,
                                     });
@@ -335,12 +833,37 @@ export function startDashboard(
                         };
                         // Send immediately on connect, then on every change
                         send();
-                        if (engine) {
-                            engine.on('statusChanged', send);
-                            cleanup = () => engine.off('statusChanged', send);
-                        } else if (fod?.isFuseMode) {
-                            const interval = setInterval(send, 3000);
-                            cleanup = () => clearInterval(interval);
+                        if (fod?.isFuseMode) {
+                            const subscribedFod = fod;
+                            const subscribedEngine = engine;
+                            // Network goodput is calculated in five-second
+                            // windows independently of transfer events. Push a
+                            // lightweight snapshot regularly so the dashboard
+                            // remains live even when no lifecycle event fires.
+                            const interval = setInterval(send, 1000);
+                            const onTransfersChanged = () => send();
+                            const onStatusChanged = () => send();
+                            (subscribedFod as any).on?.('transfersChanged', onTransfersChanged);
+                            (subscribedFod as any).on?.('statusChanged', onStatusChanged);
+                            if (subscribedEngine) {
+                                subscribedEngine.on('statusChanged', send);
+                            }
+                            cleanup = () => {
+                                clearInterval(interval);
+                                (subscribedFod as any).off?.('transfersChanged', onTransfersChanged);
+                                (subscribedFod as any).off?.('statusChanged', onStatusChanged);
+                                if (subscribedEngine) {
+                                    subscribedEngine.off('statusChanged', send);
+                                }
+                            };
+                        } else if (engine) {
+                            const subscribedEngine = engine;
+                            const interval = setInterval(send, 1000);
+                            subscribedEngine.on('statusChanged', send);
+                            cleanup = () => {
+                                clearInterval(interval);
+                                subscribedEngine.off('statusChanged', send);
+                            };
                         }
                     },
                     cancel() {
@@ -359,9 +882,35 @@ export function startDashboard(
 
             // HTML FRONTEND PAGE
             if (url.pathname === '/' || url.pathname === '/index.html') {
+                const hasBootstrapToken = safeTokenEqual(
+                    url.searchParams.get('bootstrap'),
+                    dashboardToken,
+                );
+                if (!hasDashboardSession && !hasBootstrapToken) {
+                    return new Response(
+                        'Dashboard authorization required. Open the dashboard from the Drive tray or CLI.',
+                        {
+                            status: 401,
+                            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                        },
+                    );
+                }
+                if (hasBootstrapToken) {
+                    return new Response(null, {
+                        status: 303,
+                        headers: {
+                            'Location': '/',
+                            'Set-Cookie': `proton_dashboard=${dashboardToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`,
+                            'Cache-Control': 'no-store',
+                        },
+                    });
+                }
                 const isFod = fod?.isFuseMode ?? false;
                 return new Response(getHtmlContent(isFod), {
-                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                    headers: {
+                        'Content-Type': 'text/html; charset=utf-8',
+                        'Cache-Control': 'no-store',
+                    },
                 });
             }
 
@@ -369,15 +918,66 @@ export function startDashboard(
         },
     });
 
-    logger.info(`Dashboard server running at http://localhost:${port}`);
-    return server;
+    logger.info(`Dashboard server running at http://localhost:${getBoundPort()}`);
+    return Object.assign(server, {
+        getAuthenticatedUrl() {
+            return `http://localhost:${getBoundPort()}/?bootstrap=${dashboardToken}`;
+        },
+        updateContext(nextEngine: SyncEngine | null, nextSession: any, nextFod?: FodHooks) {
+            engine = nextEngine;
+            session = nextSession;
+            fod = nextFod;
+            logger = session?.logger ?? console;
+        },
+        updateStartupIssue(nextIssue: StartupIssue | null) {
+            startupIssue = nextIssue;
+        },
+    });
+}
+
+function resolveContainedPath(root: string, relativePath: string, inspectFilesystem = true): string | null {
+    if (!root || path.isAbsolute(relativePath) || relativePath.includes('\0')) return null;
+    const resolvedRoot = path.resolve(root);
+    const candidate = path.resolve(resolvedRoot, relativePath);
+    if (candidate !== resolvedRoot && !candidate.startsWith(`${resolvedRoot}${path.sep}`)) return null;
+    if (!inspectFilesystem) return candidate;
+    if (!existsSync(candidate)) return candidate;
+    try {
+        const realRoot = realpathSync(resolvedRoot);
+        const realCandidate = realpathSync(candidate);
+        if (realCandidate !== realRoot && !realCandidate.startsWith(`${realRoot}${path.sep}`)) return null;
+        return realCandidate;
+    } catch {
+        return null;
+    }
+}
+
+function validateConfiguredPath(rawPath: string): string {
+    if (rawPath.includes('\0') || !path.isAbsolute(rawPath)) {
+        throw new Error('Path must be an absolute filesystem path');
+    }
+    const resolved = path.resolve(rawPath);
+    const forbidden = new Set(['/', homedir(), '/etc', '/usr', '/bin', '/sbin', '/var', '/proc', '/sys', '/dev']);
+    if (forbidden.has(resolved)) {
+        throw new Error('Refusing to use a system or home root as a sync path');
+    }
+    return resolved;
 }
 
 function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes <= 0 || isNaN(bytes)) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+function safeTokenEqual(candidate: string | null, expected: string): boolean {
+    if (!candidate) return false;
+    const candidateBuffer = Buffer.from(candidate);
+    const expectedBuffer = Buffer.from(expected);
+    return (
+        candidateBuffer.length === expectedBuffer.length &&
+        timingSafeEqual(candidateBuffer, expectedBuffer)
+    );
+}

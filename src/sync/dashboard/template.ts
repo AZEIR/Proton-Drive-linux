@@ -1,5 +1,6 @@
 import css from './style.css' with { type: 'text' };
 import js from './app.js' with { type: 'text' };
+import favicon from './favicon.svg' with { type: 'text' };
 
 export function getHtmlContent(isFodMode: boolean = false): string {
     return `<!DOCTYPE html>
@@ -7,45 +8,39 @@ export function getHtmlContent(isFodMode: boolean = false): string {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Proton Drive - Desktop Sync</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 20 106 95'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M49.9553 33.7554H95.0391C101.095 33.7554 106 38.6208 106 44.6278V101.117C106 107.124 101.095 111.989 95.0391 111.989H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V35.8722C0 29.8654 4.90503 25 10.9609 25H31.5307C33.6089 25 35.6313 25.6539 37.2961 26.873L44.1788 31.8824C45.8547 33.1015 47.8771 33.7554 49.9553 33.7554Z' fill='%23a78bfa'/%3E%3Cpath d='M74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V101.128C0 107.135 4.90503 112 10.9609 112H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999Z' fill='%236d4aff'/%3E%3C/svg%3E">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
-    <style>${css}</style>
+    <meta name="theme-color" content="#191b24">
+    <title>Drive for Linux — Unofficial Proton client</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=ui-polish-2">
+    <link rel="stylesheet" href="/assets/dashboard.css?v=ui-polish-2">
 </head>
-<body>
+<body data-fod-mode="${isFodMode ? 'true' : 'false'}">
     <div class="app-layout">
         <!-- Left Sidebar -->
-        <aside class="sidebar">
-            <a href="https://github.com/AZEIR/Proton-Drive-linux" target="_blank" rel="noopener" class="sidebar-header" style="text-decoration:none;">
-                <!-- Official Proton Drive Folder Icon SVG -->
-                <svg class="proton-logo" viewBox="0 20 106 95" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <!-- Background folder flap -->
-                    <path fill-rule="evenodd" clip-rule="evenodd" d="M49.9553 33.7554H95.0391C101.095 33.7554 106 38.6208 106 44.6278V101.117C106 107.124 101.095 111.989 95.0391 111.989H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V35.8722C0 29.8654 4.90503 25 10.9609 25H31.5307C33.6089 25 35.6313 25.6539 37.2961 26.873L44.1788 31.8824C45.8547 33.1015 47.8771 33.7554 49.9553 33.7554Z" fill="#a78bfa"/>
-                    <!-- Foreground folder body -->
-                    <path d="M74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V101.128C0 107.135 4.90503 112 10.9609 112H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999Z" fill="#6d4aff"/>
-                </svg>
+        <aside class="sidebar" id="sidebarNavigation">
+            <a href="https://github.com/AZEIR/Proton-Drive-linux" target="_blank" rel="noopener" class="sidebar-header sidebar-brand-link">
+                <img class="proton-logo" src="/assets/favicon.svg?v=ui-polish-2" alt="" aria-hidden="true">
                 <span class="brand-name">Proton Drive<span class="sub-brand" id="modeLabel">Sync</span></span>
             </a>
 
-            <nav class="sidebar-menu">
-                <div class="menu-item active" data-tab="dashboard" onclick="showTab('dashboard')">
+            <nav class="sidebar-menu" aria-label="Dashboard navigation">
+                <button type="button" class="menu-item active" data-tab="dashboard" data-action="show-tab" data-action-value="dashboard" aria-current="page">
                     <span class="material-symbols-outlined menu-icon">dashboard</span>
                     Dashboard
-                </div>
-                <div class="menu-item" data-tab="settings" onclick="showTab('settings')">
+                </button>
+                <button type="button" class="menu-item" data-tab="browser" data-action="show-tab" data-action-value="browser">
+                    <span class="material-symbols-outlined menu-icon">folder_open</span>
+                    File Browser
+                </button>
+                <button type="button" class="menu-item" data-tab="settings" data-action="show-tab" data-action-value="settings">
                     <span class="material-symbols-outlined menu-icon">settings</span>
                     Settings
-                </div>
-                <div class="menu-item" id="cacheMenuItem" data-tab="cache" onclick="showTab('cache')" style="display:none;">
-                    <span class="material-symbols-outlined menu-icon">database</span>
-                    Local Cache
-                </div>
+                </button>
             </nav>
 
             <div class="sidebar-footer">
                 <!-- Theme Toggle Button -->
                 <div class="theme-toggle-container">
-                    <button class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle light/dark theme">
+                    <button type="button" class="theme-toggle-btn" data-action="toggle-theme" aria-label="Toggle light/dark theme">
                         <span class="material-symbols-outlined sun-icon">light_mode</span>
                         <span class="material-symbols-outlined moon-icon">dark_mode</span>
                         <span id="themeToggleText">Light Mode</span>
@@ -56,7 +51,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                 <div class="storage-widget">
                     <div class="storage-title">Storage Quota</div>
                     <div class="storage-bar-bg">
-                        <div id="quotaBar" class="storage-bar-fill"></div>
+                        <progress id="quotaBar" class="storage-bar-fill" max="100" value="0" aria-label="Storage used"></progress>
                     </div>
                     <div class="storage-details">
                         <span class="storage-text" id="quotaText">0 B of 0 B</span>
@@ -79,14 +74,14 @@ export function getHtmlContent(isFodMode: boolean = false): string {
         <main class="main-content">
             <!-- Topbar showing title & global status badge -->
             <header class="topbar">
-                <div style="display: flex; align-items: center; gap: 12px;">
-                    <button class="menu-toggle" id="sidebarToggle" onclick="toggleSidebar()">
+                <div class="topbar-title-group">
+                    <button type="button" class="menu-toggle" id="sidebarToggle" aria-label="Open navigation" aria-controls="sidebarNavigation" aria-expanded="false" data-action="toggle-sidebar">
                         <span class="material-symbols-outlined">menu</span>
                     </button>
                     <h1 class="section-title" id="pageTitle">Sync Dashboard</h1>
                 </div>
                 <div class="topbar-actions">
-                    <div id="statusBadge" class="status-badge status-synced">
+                    <div id="statusBadge" class="status-badge status-synced" role="status" aria-live="polite">
                         <span class="dot"></span>
                         <span id="statusText">Synced</span>
                     </div>
@@ -98,7 +93,7 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                 <!-- Tab Pane: Dashboard -->
                 <div id="tab-dashboard" class="tab-pane active">
                     <!-- Bulk Deletion Warning Banner -->
-                    <div id="bulkDeletionWarningCard" class="card card-warning" style="display: none;">
+                    <div id="bulkDeletionWarningCard" class="card card-warning hidden">
                         <div class="warning-banner-content">
                             <span class="material-symbols-outlined warning-banner-icon">warning</span>
                             <div class="warning-text-wrapper">
@@ -107,26 +102,12 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                             </div>
                         </div>
                         <div class="warning-actions">
-                            <button class="btn btn-danger" onclick="confirmBulkDeletions()">Delete from Cloud</button>
-                            <button class="btn btn-success" onclick="restoreBulkDeletions()">Restore Files from Cloud</button>
+                            <button type="button" class="btn btn-danger" data-action="confirm-bulk-deletions">Delete from Cloud</button>
+                            <button type="button" class="btn btn-success" data-action="restore-bulk-deletions">Restore Files from Cloud</button>
                         </div>
                     </div>
 
-                    <!-- FOD Mode Hero Card (hidden by default, shown when mode=fod) -->
-                    <div id="fodHeroCard" class="card" style="display:none;">
-                        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
-                            <div style="width:52px;height:52px;border-radius:50%;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                <span class="material-symbols-outlined text-success" style="font-size:24px;">cloud</span>
-                            </div>
-                            <div>
-                                <h2 style="font-size:1.1rem;font-weight:700;color:var(--text-main);margin:0 0 4px;border:none;padding:0;">File On Demand — FUSE Mode</h2>
-                                <p style="font-size:0.88rem;color:var(--text-muted);margin:0;">Mount point: <code id="mountPointDisplay" style="color:var(--primary);font-size:0.85rem;font-weight:600;">~/P-Drive</code></p>
-                            </div>
-                            <div style="margin-left:auto;display:flex;gap:8px;">
-                                <button class="btn" onclick="openFolder()">Open Mount Folder</button>
-                            </div>
-                        </div>
-                    </div>
+
 
                     <!-- Dashboard Layout -->
                     <div class="dashboard-main-col">
@@ -143,15 +124,38 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                             </div>
                             <div class="card-hero-actions">
                                 <div id="syncActions">
-                                    <button id="btnPause" class="btn btn-primary" onclick="togglePause()">Pause Sync</button>
-                                    <button id="syncNowBtn" class="btn" onclick="forceSync()">Sync Now</button>
-                                    <button class="btn" onclick="openFolder()">Open Folder</button>
+                                    <button type="button" id="btnPause" class="btn btn-primary" aria-pressed="false" aria-label="Pause synchronization" data-action="toggle-pause">Pause Sync</button>
+                                    <button type="button" id="syncNowBtn" class="btn" data-action="force-sync">Sync Now</button>
+                                    <button type="button" class="btn" data-action="open-folder">Open Folder</button>
                                 </div>
-                                <div id="authActions" style="display: none;">
-                                    <button id="btnLogin" class="btn btn-primary btn-login-action" onclick="login()">Login to Proton Drive</button>
+                                <div id="authActions" class="hidden">
+                                    <button type="button" id="btnLogin" class="btn btn-primary btn-login-action" data-action="login">Login to Proton Drive</button>
                                 </div>
                             </div>
                         </div>
+
+                        <section class="runtime-grid" aria-label="Live synchronization health" aria-live="polite">
+                            <div class="runtime-metric">
+                                <span class="runtime-label">Network</span>
+                                <strong id="networkState">Starting</strong>
+                                <span id="networkDetail" class="runtime-detail">Measuring connection health…</span>
+                            </div>
+                            <div class="runtime-metric">
+                                <span class="runtime-label">Throughput</span>
+                                <strong id="throughputValue">0 B/s</strong>
+                                <span id="transferEta" class="runtime-detail">No active transfer</span>
+                            </div>
+                            <div class="runtime-metric">
+                                <span class="runtime-label">Transfers</span>
+                                <strong id="queueDepth">0</strong>
+                                <span id="queueDetail" class="runtime-detail">No queued work</span>
+                            </div>
+                            <div class="runtime-metric">
+                                <span class="runtime-label">Durable work</span>
+                                <strong id="durablePending">0</strong>
+                                <span id="durableDetail" class="runtime-detail">No pending journal work</span>
+                            </div>
+                        </section>
 
                         <!-- Activity History Card -->
                         <div class="card">
@@ -160,14 +164,14 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                                 <div class="filter-search-container">
                                     <div class="search-box">
                                         <span class="material-symbols-outlined search-icon">search</span>
-                                        <input type="text" id="logSearchInput" placeholder="Search logs..." oninput="filterLogs()">
+                                        <input type="text" id="logSearchInput" aria-label="Search activity logs" placeholder="Search logs..." data-input-action="filter-logs">
                                     </div>
                                     <div class="filter-pills" id="logFilterPills">
-                                        <button class="filter-pill active" onclick="setLogFilter('all')">All</button>
-                                        <button class="filter-pill" onclick="setLogFilter('uploads')">Uploads</button>
-                                        <button class="filter-pill" onclick="setLogFilter('downloads')">Downloads</button>
-                                        <button class="filter-pill" onclick="setLogFilter('system')">System</button>
-                                        <button class="filter-pill" onclick="setLogFilter('failed')">Errors</button>
+                                        <button type="button" class="filter-pill active" data-action="set-log-filter" data-action-value="all">All</button>
+                                        <button type="button" class="filter-pill" data-action="set-log-filter" data-action-value="uploads">Uploads</button>
+                                        <button type="button" class="filter-pill" data-action="set-log-filter" data-action-value="downloads">Downloads</button>
+                                        <button type="button" class="filter-pill" data-action="set-log-filter" data-action-value="system">System</button>
+                                        <button type="button" class="filter-pill" data-action="set-log-filter" data-action-value="failed">Errors</button>
                                     </div>
                                 </div>
                             </div>
@@ -190,87 +194,168 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                     </div>
                 </div>
 
-                <!-- Tab Pane: Cache -->
-                <div id="tab-cache" class="tab-pane">
-                    <div class="card" style="margin-bottom:1rem;">
-                        <div class="card-header-flex">
-                            <div>
-                                <h2 style="margin-bottom:4px; border:none; padding:0;">Local Cache</h2>
-                                <p style="font-size:0.85rem;color:var(--text-muted);margin:0;">Files downloaded to your device. Click Evict to free space; click Pin to pre-download.</p>
-                            </div>
-                            <div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-                                <div id="cacheSizeDisplay" style="font-size:0.85rem;color:var(--text-muted);">Loading…</div>
-                                <button class="btn btn-danger" style="font-size:0.8rem;padding:0.4rem 0.8rem;" onclick="evictAll()">Free All Space</button>
-                            </div>
-                        </div>
-
-                        <!-- Cache Filters -->
-                        <div class="filter-search-container" style="margin-bottom: 1.2rem;">
-                            <div class="search-box">
-                                <span class="material-symbols-outlined search-icon">search</span>
-                                <input type="text" id="cacheSearchInput" placeholder="Search cache..." oninput="filterCache()">
-                            </div>
-                            <div class="filter-pills" id="cacheFilterPills">
-                                <button class="filter-pill active" onclick="setCacheFilter('all')">All</button>
-                                <button class="filter-pill" onclick="setCacheFilter('local')">Local Only</button>
-                                <button class="filter-pill" onclick="setCacheFilter('stub')">Stubs Only</button>
-                            </div>
-                        </div>
-
-                        <div class="logs-table-wrapper">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>File</th>
-                                        <th>Size</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="cacheBody">
-                                    <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:2rem;">Loading…</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Tab Pane: Settings -->
                 <div id="tab-settings" class="tab-pane">
-                    <div class="card">
-                        <h2>Configuration Settings</h2>
-                        <div class="settings-group">
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <span class="setting-title">Sync Folder Path</span>
-                                    <span class="setting-desc">Files inside this directory will sync with your Proton Cloud root.</span>
-                                </div>
-                                <div class="setting-input-group">
-                                    <input type="text" id="syncPath" value="">
-                                    <button class="btn btn-primary" onclick="savePath()">Save Path</button>
+                    <div class="settings-grid">
+                        <!-- Section: Sync & Storage -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">folder_managed</span>
+                                <div>
+                                    <h2>Sync & Storage</h2>
+                                    <p class="settings-header-desc">Manage local directory paths and file synchronization engine modes.</p>
                                 </div>
                             </div>
                             
                             <div class="setting-row">
                                 <div class="setting-info">
-                                    <span class="setting-title">Session Connection</span>
-                                    <span class="setting-desc">Disconnect this daemon from your Proton account. All local files will remain intact.</span>
+                                    <span class="setting-title">Sync Folder Path</span>
+                                    <span class="setting-desc">Files inside this local directory will sync with your Proton Cloud root.</span>
                                 </div>
-                                <button class="btn btn-danger" onclick="logout()">Logout Account</button>
+                                <div class="setting-input-group">
+                                    <input type="text" id="syncPath" value="" placeholder="/home/user/ProtonDrive">
+                                    <button type="button" class="btn btn-primary" data-action="save-path">Save Path</button>
+                                </div>
+                            </div>
+                            
+                            <div class="setting-row vertical-setting">
+                                <div class="setting-info setting-info-spaced">
+                                    <span class="setting-title">Synchronization Mode</span>
+                                    <span class="setting-desc">Choose how Proton Drive handles local files and cloud storage.</span>
+                                </div>
+                                <div class="mode-cards-container" role="radiogroup" aria-label="Synchronization mode">
+                                    <button type="button" class="mode-card" id="cardModeFull" role="radio" aria-checked="false" data-action="switch-sync-mode" data-action-value="full">
+                                        <div class="mode-card-header">
+                                            <span class="material-symbols-outlined mode-card-icon">folder_copy</span>
+                                            <span class="mode-card-badge" id="badgeModeFull">Active</span>
+                                        </div>
+                                        <h4 class="mode-card-title">Standard Full Sync</h4>
+                                        <p class="mode-card-desc">Downloads full copies of all files to your local drive for offline access.</p>
+                                        <div class="mode-card-footer">
+                                            <span class="material-symbols-outlined check-icon">check_circle</span>
+                                            <span>Offline Access Enabled</span>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="mode-card" id="cardModeFuse" role="radio" aria-checked="false" data-action="switch-sync-mode" data-action-value="fuse">
+                                        <div class="mode-card-header">
+                                            <span class="material-symbols-outlined mode-card-icon">cloud_sync</span>
+                                            <span class="mode-card-badge" id="badgeModeFuse">Active</span>
+                                        </div>
+                                        <h4 class="mode-card-title">FUSE File-On-Demand — Experimental</h4>
+                                        <p class="mode-card-desc">Mounts a virtual filesystem and downloads files on demand. The production FUSE 3 sidecar and crash-recovery gates are not complete; use Full Sync for important data.</p>
+                                        <div class="mode-card-footer">
+                                            <span class="material-symbols-outlined check-icon">warning</span>
+                                            <span>Testing and evaluation only</span>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Section: Network & Speed Performance -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">speed</span>
+                                <div>
+                                    <h2>Network & Performance</h2>
+                                    <p class="settings-header-desc">Control transfer limits and choose a tested connection profile.</p>
+                                </div>
                             </div>
 
                             <div class="setting-row">
                                 <div class="setting-info">
-                                    <span class="setting-title">Daemon Control</span>
-                                    <span class="setting-desc">Stop or restart the background sync process. Stopping will disconnect this dashboard until the daemon is restarted manually.</span>
+                                    <span class="setting-title">Network Profile</span>
+                                    <span class="setting-desc">Choose a tested connection profile. Changes affect newly scheduled transfers.</span>
                                 </div>
-                                <div style="display:flex;gap:8px;flex-shrink:0;">
-                                    <button class="btn" onclick="restartDaemon()">
-                                        <span class="material-symbols-outlined" style="font-size:16px;">refresh</span>
-                                        Restart
+                                <div class="network-profile-options" role="group" aria-label="Network performance profile">
+                                    <button type="button" class="network-profile-btn" data-profile="safe" data-action="set-network-profile" data-action-value="safe" aria-pressed="false" title="1 file and up to 2 sockets">Wi-Fi Safe</button>
+                                    <button type="button" class="network-profile-btn" data-profile="balanced" data-action="set-network-profile" data-action-value="balanced" aria-pressed="false" title="3 files and up to 8 sockets">Balanced</button>
+                                    <button type="button" class="network-profile-btn" data-profile="performance" data-action="set-network-profile" data-action-value="performance" aria-pressed="false" title="5 files and up to 16 sockets">Performance</button>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Bandwidth Speed Limit</span>
+                                    <span class="setting-desc">Set maximum upload/download transfer rate (0 = Unlimited).</span>
+                                    <div class="speed-presets">
+                                        <button type="button" class="speed-preset-btn" data-action="set-speed-preset" data-speed-kbps="0">Unlimited</button>
+                                        <button type="button" class="speed-preset-btn" data-action="set-speed-preset" data-speed-kbps="1024">1 MB/s</button>
+                                        <button type="button" class="speed-preset-btn" data-action="set-speed-preset" data-speed-kbps="5120">5 MB/s</button>
+                                        <button type="button" class="speed-preset-btn" data-action="set-speed-preset" data-speed-kbps="10240">10 MB/s</button>
+                                    </div>
+                                </div>
+                                <div class="setting-input-group">
+                                    <div class="input-with-unit">
+                                        <input type="number" id="maxSpeedInput" min="0" placeholder="0">
+                                        <span class="unit-label">KB/s</span>
+                                    </div>
+                                    <button type="button" class="btn btn-primary" data-action="save-max-speed">Save Speed</button>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Parallel File Transfers</span>
+                                    <span class="setting-desc">Simultaneous files (1–5). Manual changes use a Custom profile.</span>
+                                </div>
+                                <div class="setting-input-group">
+                                    <div class="range-with-value">
+                                        <input type="range" id="concurrencyRange" min="1" max="5" step="1" value="2" aria-label="Parallel file transfer limit" data-input-action="update-concurrency-input">
+                                        <input type="number" id="concurrencyInput" min="1" max="5" step="1" value="2" aria-label="Parallel file transfer limit" data-input-action="update-concurrency-range">
+                                    </div>
+                                    <button type="button" id="concurrencySaveBtn" class="btn btn-primary" data-action="save-concurrency">Save Limit</button>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <!-- Section: Account & Session -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">manage_accounts</span>
+                                <div>
+                                    <h2>Account & Session</h2>
+                                    <p class="settings-header-desc">Manage connected Proton account session state.</p>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="account-profile-wrapper">
+                                    <div class="user-avatar-md" id="settingsAvatar">?</div>
+                                    <div class="account-profile-details">
+                                        <span id="settingsUserEmail" class="account-email">Not Logged In</span>
+                                        <span id="settingsUserStatus" class="account-status">Connected</span>
+                                    </div>
+                                </div>
+                                <div class="setting-input-group">
+                                    <button type="button" class="btn btn-danger" data-action="logout">Logout Account</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Section: System & Daemon Control -->
+                        <div class="card settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-symbols-outlined settings-header-icon">terminal</span>
+                                <div>
+                                    <h2>Daemon Service Control</h2>
+                                    <p class="settings-header-desc">Control background synchronization engine process operations.</p>
+                                </div>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <span class="setting-title">Background Daemon Process</span>
+                                    <span class="setting-desc">Restart or stop the local sync service. Stopping will pause synchronization until restarted.</span>
+                                </div>
+                                <div class="daemon-actions">
+                                    <button type="button" class="btn" data-action="restart-daemon">
+                                        <span class="material-symbols-outlined icon-md">refresh</span>
+                                        Restart Service
                                     </button>
-                                    <button class="btn btn-danger" onclick="stopDaemon()">
-                                        <span class="material-symbols-outlined" style="font-size:16px;">stop_circle</span>
+                                    <button type="button" class="btn btn-danger" data-action="stop-daemon">
+                                        <span class="material-symbols-outlined icon-md">stop_circle</span>
                                         Stop Daemon
                                     </button>
                                 </div>
@@ -278,29 +363,84 @@ export function getHtmlContent(isFodMode: boolean = false): string {
                         </div>
                     </div>
                 </div>
+
+                <!-- Tab Pane: File Browser -->
+                <div id="tab-browser" class="tab-pane">
+                    <div class="browser-container card">
+                        <!-- Browser Header & Breadcrumbs -->
+                        <div class="browser-header">
+                            <div class="browser-breadcrumbs" id="browserBreadcrumbs">
+                                <span class="breadcrumb-item active" aria-current="page">My Files</span>
+                            </div>
+                            <div class="browser-toolbar">
+                                <div class="search-box">
+                                    <span class="material-symbols-outlined search-icon">search</span>
+                                    <input type="text" id="browserSearchInput" aria-label="Filter files in current folder" placeholder="Filter current folder..." data-input-action="filter-browser-items">
+                                </div>
+                                <button type="button" class="btn btn-sm browser-refresh-btn" data-action="refresh-browser" title="Refresh file list" aria-label="Refresh file list">
+                                    <span class="material-symbols-outlined" aria-hidden="true">refresh</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Browser File List Table -->
+                        <div class="browser-table-wrapper">
+                            <table class="browser-table">
+                                <caption class="sr-only">Files and folders in the current Proton Drive directory</caption>
+                                <thead>
+                                    <tr>
+                                        <th class="browser-name-heading">Name</th>
+                                        <th class="browser-status-heading">Local Status</th>
+                                        <th class="browser-size-heading">Size</th>
+                                        <th class="browser-actions-heading">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="browserTableBody">
+                                    <tr class="browser-empty-row">
+                                        <td colspan="4" class="text-center browser-empty-cell is-muted">Loading files...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Browser Footer Stats -->
+                        <div class="browser-footer">
+                            <span id="browserItemCount">0 items</span>
+                            <span id="browserCacheSummary">0 B cached locally</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
 
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
     <!-- Dedicated login screen for unauthenticated users -->
     <div id="loginView" class="login-view">
         <div class="login-card">
-            <!-- Official Proton Drive Folder Icon SVG -->
-            <svg class="login-logo" viewBox="0 20 106 95" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <!-- Background folder flap -->
-                <path fill-rule="evenodd" clip-rule="evenodd" d="M49.9553 33.7554H95.0391C101.095 33.7554 106 38.6208 106 44.6278V101.117C106 107.124 101.095 111.989 95.0391 111.989H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V35.8722C0 29.8654 4.90503 25 10.9609 25H31.5307C33.6089 25 35.6313 25.6539 37.2961 26.873L44.1788 31.8824C45.8547 33.1015 47.8771 33.7554 49.9553 33.7554Z" fill="#a78bfa"/>
-                <!-- Foreground folder body -->
-                <path d="M74.8827 46.7999L33.3631 47.0326C31.5754 47.0437 29.8324 46.4926 28.3687 45.4619L19.1173 38.9532C17.676 37.9336 15.9441 37.3906 14.1788 37.3906H0V101.128C0 107.135 4.90503 112 10.9609 112H83.4637V55.256C83.4637 50.568 79.6201 46.7666 74.8827 46.7999Z" fill="#6d4aff"/>
-            </svg>
-            <h1 class="login-title">Welcome to Proton Drive</h1>
+            <span class="app-logo login-logo" aria-hidden="true">DL</span>
+            <h1 class="login-title">Welcome to Drive for Linux</h1>
             <p class="login-desc">Sign in with your Proton account to configure local desktop synchronization and access your secure cloud files.</p>
-            <p class="login-desc" style="margin-top: -0.5rem; margin-bottom: 1.5rem; font-size: 0.8rem; opacity: 0.75;"><em>This is a third-party application not officially supported by Proton.</em></p>
-            <button class="btn btn-primary login-btn btn-login-action" onclick="login()">Login to Proton Drive</button>
+            <p class="login-desc unofficial-notice"><em>This is a third-party application not officially supported by Proton.</em></p>
+            <button type="button" class="btn btn-primary login-btn btn-login-action" data-action="login">Login to Proton Drive</button>
         </div>
     </div>
 
-    <script>const FOD_MODE = ${isFodMode ? 'true' : 'false'};
-${js}</script>
+    <script src="/assets/dashboard.js?v=ui-polish-2" defer></script>
 </body>
 </html>`;
+}
+
+export function getDashboardCss(): string {
+    return css;
+}
+
+export function getDashboardJs(): string {
+    return js;
+}
+
+export function getDashboardFavicon(): string {
+    return favicon;
 }

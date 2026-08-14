@@ -14,6 +14,7 @@ const DEFAULT_PATTERNS: string[] = [
     '.DS_Store',
     'Thumbs.db',
     'desktop.ini',
+    '.proton-drive-staging/', // Private same-filesystem atomic download staging
     '*.tmp-*',      // Proton sync temp files
     '~*',           // Office/LibreOffice lock files
     '*.swp',        // Vim swap files
@@ -84,6 +85,18 @@ export class IgnoreMatcher {
         }
 
         return this.shouldIgnoreDirect(normalized, isDir);
+    }
+
+    /**
+     * Alias for shouldIgnore, calculating relative path from sync root if absolute.
+     */
+    isIgnored(pathStr: string, isDir = false): boolean {
+        let relPath = pathStr;
+        if (path.isAbsolute(pathStr)) {
+            relPath = path.relative(this.syncRoot, pathStr);
+        }
+        if (!relPath || relPath.startsWith('..')) return false;
+        return this.shouldIgnore(relPath, isDir);
     }
 
     /**

@@ -1,18 +1,32 @@
 import { mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 
-const isBun = typeof process !== 'undefined' && process.versions && (process.versions as any).bun;
+const isBun = Boolean(process.versions && (process.versions as any).bun);
+const runtimeRequire = createRequire(import.meta.url);
+
+export interface DatabaseOptions {
+    readonly?: boolean;
+    create?: boolean;
+    synchronous?: 'NORMAL' | 'FULL';
+}
 
 export class Database {
     private inner: any;
 
-    constructor(filename: string, options?: any) {
+    constructor(filename: string, options?: DatabaseOptions) {
+        mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+        try {
+            chmodSync(path.dirname(filename), 0o700);
+        } catch {}
         if (isBun) {
-            const BunDatabase = require('bun:sqlite').Database;
-            this.inner = new BunDatabase(filename, options);
+            const BunDatabase = runtimeRequire('bun:sqlite').Database;
+            const bunOptions = options?.readonly
+                ? { readonly: true, create: options.create !== false }
+                : undefined;
+            this.inner = new BunDatabase(filename, bunOptions);
         } else {
-            const BetterSqlite3 = require('better-sqlite3');
-            mkdirSync(path.dirname(filename), { recursive: true });
+            const BetterSqlite3 = runtimeRequire('better-sqlite3');
             const nodeOptions: any = {};
             if (options) {
                 if (options.readonly) nodeOptions.readonly = true;
@@ -26,8 +40,10 @@ export class Database {
         try {
             this.run('PRAGMA journal_mode = WAL');
             this.run('PRAGMA busy_timeout = 5000');
-            // WAL mode does not need FULL sync — NORMAL is crash-safe and ~2x faster
-            this.run('PRAGMA synchronous = NORMAL');
+            // NORMAL is appropriate for rebuildable indexes. The durable
+            // operation journal explicitly opts into FULL so an acknowledged
+            // FUSE mutation survives power loss, not only process crashes.
+            this.run(`PRAGMA synchronous = ${options?.synchronous ?? 'NORMAL'}`);
             // 8 MB page cache (negative value = KiB units), reduces repeated block reads
             this.run('PRAGMA cache_size = -8000');
         } catch (err) {
@@ -38,21 +54,19 @@ export class Database {
     run(sql: string, ...params: any[]) {
         if (isBun) {
             this.inner.run(sql, ...params);
+            return;
+        }
+        if (params.length === 1 && typeof params[0] === 'object' && params[0] !== null) {
+            this.inner.prepare(sql).run(normalizeParams(params[0]));
+        } else if (params.length > 0) {
+            this.inner.prepare(sql).run(...params);
         } else {
-            if (params.length === 1 && typeof params[0] === 'object' && params[0] !== null) {
-                this.inner.prepare(sql).run(normalizeParams(params[0]));
-            } else if (params.length > 0) {
-                this.inner.prepare(sql).run(...params);
-            } else {
-                this.inner.exec(sql);
-            }
+            this.inner.exec(sql);
         }
     }
 
     prepare(sql: string) {
-        if (isBun) {
-            return this.inner.prepare(sql);
-        }
+        if (isBun) return this.inner.prepare(sql);
         const stmt = this.inner.prepare(sql);
         return {
             get(...params: any[]) {
@@ -80,14 +94,26 @@ export class Database {
     }
 
     query(sql: string) {
-        if (isBun) {
-            return this.inner.query(sql);
-        }
+        if (isBun) return this.inner.query(sql);
         return this.prepare(sql);
     }
 
     close() {
         this.inner.close();
+    }
+
+    transaction<T>(fn: () => T): T {
+        this.run('BEGIN IMMEDIATE');
+        try {
+            const value = fn();
+            this.run('COMMIT');
+            return value;
+        } catch (error) {
+            try {
+                this.run('ROLLBACK');
+            } catch {}
+            throw error;
+        }
     }
 }
 

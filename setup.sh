@@ -6,11 +6,20 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_NAME="proton-sync.service"
+SERVICE_NAME="drive-core.service"
+LEGACY_SERVICE_NAME="proton-sync.service"
+TRAY_AUTOSTART_UNIT='app-proton\x2ddrive\x2dtray@autostart.service'
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
 SERVICE_DST="${SYSTEMD_DIR}/${SERVICE_NAME}"
-BINARY="${SCRIPT_DIR}/release/proton-sync"
+RELEASE_BINARY="${SCRIPT_DIR}/release/proton-sync"
+INSTALL_BASE="${HOME}/.local/lib/drive-for-linux"
+CURRENT_LINK="${INSTALL_BASE}/current"
+PREVIOUS_LINK="${INSTALL_BASE}/previous"
+BINARY="${CURRENT_LINK}/proton-sync"
 FORCE_REBUILD=0
+CREDENTIALS_STORE_SETTING="${PROTON_DRIVE_CREDENTIALS_STORE:-keychain}"
+CREDENTIAL_DROPIN_DIR="${SYSTEMD_DIR}/${SERVICE_NAME}.d"
+CREDENTIAL_DROPIN="${CREDENTIAL_DROPIN_DIR}/credentials.conf"
 
 for arg in "$@"; do
     [ "$arg" = "--rebuild" ] && FORCE_REBUILD=1
@@ -23,23 +32,140 @@ _check_bun() {
         echo "Install with: curl -fsSL https://bun.sh/install | bash"
         exit 1
     fi
+    if ! command -v node >/dev/null 2>&1; then
+        echo "ERROR: Node.js 22 or newer is required to run the daemon."
+        exit 1
+    fi
+    NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+    if [ "$NODE_MAJOR" -lt 22 ]; then
+        echo "ERROR: Node.js 22 or newer is required (found $(node --version))."
+        exit 1
+    fi
+    if ! command -v cargo >/dev/null 2>&1 || ! pkg-config --exists fuse3; then
+        echo "ERROR: Rust/Cargo and the FUSE 3 development package are required."
+        exit 1
+    fi
+    case "$CREDENTIALS_STORE_SETTING" in
+        unsafe_file)
+            ;;
+        pass)
+            if ! command -v pass >/dev/null 2>&1; then
+                echo "ERROR: pass is required when PROTON_DRIVE_CREDENTIALS_STORE=pass."
+                exit 1
+            fi
+            ;;
+        keychain)
+            if ! command -v secret-tool >/dev/null 2>&1; then
+                echo "ERROR: secret-tool/libsecret is required for secure credential storage."
+                echo "For headless systems only, explicitly set PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file."
+                exit 1
+            fi
+            ;;
+        *)
+            echo "ERROR: Unsupported PROTON_DRIVE_CREDENTIALS_STORE: $CREDENTIALS_STORE_SETTING"
+            exit 1
+            ;;
+    esac
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: Python 3 is required for the system tray."
+        exit 1
+    fi
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        echo "ERROR: sqlite3 is required by the launcher and maintenance commands."
+        exit 1
+    fi
+    if ! command -v fusermount3 >/dev/null 2>&1; then
+        echo "ERROR: FUSE 3 userspace tools (fusermount3) are required."
+        exit 1
+    fi
+}
+
+_install_credential_store_override() {
+    if [ -f "$CREDENTIAL_DROPIN" ] && grep -q 'PROTON_DRIVE_KEYCHAIN_BACKEND=kwallet' "$CREDENTIAL_DROPIN"; then
+        echo "NOTICE: Replacing the legacy KWallet credential backend with freedesktop Secret Service."
+        echo "        You will need to sign in once. The old KWallet entry is not deleted automatically."
+    fi
+
+    if [ "$CREDENTIALS_STORE_SETTING" = "keychain" ]; then
+        rm -f "$CREDENTIAL_DROPIN"
+        rmdir "$CREDENTIAL_DROPIN_DIR" 2>/dev/null || true
+        echo "Credential storage for systemd: keychain (freedesktop Secret Service)"
+        return
+    fi
+
+    mkdir -p "$CREDENTIAL_DROPIN_DIR"
+    {
+        echo "[Service]"
+        echo "Environment=PROTON_DRIVE_CREDENTIALS_STORE=$CREDENTIALS_STORE_SETTING"
+    } > "$CREDENTIAL_DROPIN"
+    chmod 600 "$CREDENTIAL_DROPIN"
+    echo "Credential storage for systemd: $CREDENTIALS_STORE_SETTING"
 }
 
 _do_build() {
     _check_bun
     echo "Installing Bun dependencies..."
-    (cd "${SCRIPT_DIR}" && bun install)
+    (cd "${SCRIPT_DIR}" && bun install --frozen-lockfile)
 
     echo "Building Proton Drive Sync Daemon binary..."
     mkdir -p "${SCRIPT_DIR}/release"
     (cd "${SCRIPT_DIR}" && bun run build)
 
-    chmod +x "$BINARY"
-    if [ ! -f "$BINARY" ]; then
-        echo "ERROR: Build failed to produce binary at ${BINARY}"
+    if [ ! -f "$RELEASE_BINARY" ]; then
+        echo "ERROR: Build failed to produce binary at ${RELEASE_BINARY}"
         exit 1
     fi
+    chmod +x "$RELEASE_BINARY"
     echo "Build complete."
+}
+
+_install_release() {
+    RELEASE_VERSION="$(node -e 'console.log(require(process.argv[1]).version)' "${SCRIPT_DIR}/package.json")"
+    RELEASE_HASH="$(
+        sha256sum \
+            "${SCRIPT_DIR}/release/proton-sync.js" \
+            "${SCRIPT_DIR}/release/drive-fuse-sidecar" \
+            "${SCRIPT_DIR}/release/lib/libfuse.so.2" \
+            "${SCRIPT_DIR}/bun.lockb" |
+            sha256sum |
+            cut -c1-12
+    )"
+    INSTALL_DIR="${INSTALL_BASE}/${RELEASE_VERSION}-${RELEASE_HASH}"
+    mkdir -p "${INSTALL_BASE}"
+
+    if [ ! -d "$INSTALL_DIR" ]; then
+        STAGING_DIR="${INSTALL_DIR}.staging-$$"
+        mkdir -m 700 "$STAGING_DIR"
+        cp "${SCRIPT_DIR}/release/proton-sync" "${SCRIPT_DIR}/release/proton-sync.js" "$STAGING_DIR/"
+        cp -R "${SCRIPT_DIR}/release/node_modules" "$STAGING_DIR/"
+        cp -R "${SCRIPT_DIR}/release/lib" "$STAGING_DIR/"
+        if [ -f "${SCRIPT_DIR}/release/drive-fuse-sidecar" ]; then
+            cp "${SCRIPT_DIR}/release/drive-fuse-sidecar" "$STAGING_DIR/"
+        fi
+        chmod 755 "$STAGING_DIR/proton-sync"
+        chmod 644 "$STAGING_DIR/proton-sync.js"
+        [ ! -f "$STAGING_DIR/drive-fuse-sidecar" ] || chmod 755 "$STAGING_DIR/drive-fuse-sidecar"
+        mv "$STAGING_DIR" "$INSTALL_DIR"
+    fi
+
+    OLD_RELEASE="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+    if [ -n "$OLD_RELEASE" ] && [ "$OLD_RELEASE" != "$INSTALL_DIR" ]; then
+        ln -sfn "$OLD_RELEASE" "${PREVIOUS_LINK}.new"
+        mv -Tf "${PREVIOUS_LINK}.new" "$PREVIOUS_LINK"
+    fi
+    ln -sfn "$INSTALL_DIR" "${CURRENT_LINK}.new"
+    mv -Tf "${CURRENT_LINK}.new" "$CURRENT_LINK"
+    echo "Installed immutable release: $INSTALL_DIR"
+}
+
+_rollback_release() {
+    ROLLBACK_TARGET="$(readlink -f "$PREVIOUS_LINK" 2>/dev/null || true)"
+    if [ -z "$ROLLBACK_TARGET" ] || [ ! -d "$ROLLBACK_TARGET" ]; then
+        return 1
+    fi
+    ln -sfn "$ROLLBACK_TARGET" "${CURRENT_LINK}.rollback"
+    mv -Tf "${CURRENT_LINK}.rollback" "$CURRENT_LINK"
+    echo "Rolled back to: $ROLLBACK_TARGET"
 }
 
 # ── --rebuild flag handling ────────────────────────────────────────────────
@@ -48,12 +174,28 @@ if [ "$FORCE_REBUILD" -eq 1 ]; then
     echo "    Proton Drive Linux — Rebuilding"
     echo "============================================="
     _do_build
+    _install_release
+    _install_credential_store_override
+    systemctl --user daemon-reload
     if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        echo "Restarting daemon to pick up newly built binary..."
-        systemctl --user restart "$SERVICE_NAME"
+        echo "Restarting daemon (systemd) to pick up newly built binary..."
+        if ! systemctl --user restart "$SERVICE_NAME"; then
+            echo "New release failed to restart; attempting rollback."
+            _rollback_release
+            systemctl --user restart "$SERVICE_NAME"
+            exit 1
+        fi
+        echo "Daemon restarted."
+    elif pgrep -f "[p]roton-sync" >/dev/null 2>&1 || [ -f "${HOME}/.config/proton-drive-sync/daemon.pid" ]; then
+        echo "Restarting daemon (drive.sh) to pick up newly built binary..."
+        "${SCRIPT_DIR}/drive.sh" restart
         echo "Daemon restarted."
     else
-        echo "(Service not running — start it with: ./drive.sh start)"
+        echo "(Service/Daemon not running — start it with: ./drive.sh start)"
+    fi
+    if systemctl --user is-active --quiet "$TRAY_AUTOSTART_UNIT" 2>/dev/null; then
+        echo "Restarting tray to pick up the authenticated dashboard launcher..."
+        systemctl --user restart "$TRAY_AUTOSTART_UNIT"
     fi
     echo "Done."
     exit 0
@@ -65,29 +207,47 @@ echo "    Proton Drive Linux — Setup"
 echo "============================================="
 
 _do_build
+_install_release
 
-# Install single unified systemd service
+# Install the daemon service. The desktop session owns the tray separately.
 mkdir -p "${SYSTEMD_DIR}"
 cat <<EOF > "$SERVICE_DST"
 [Unit]
-Description=Proton Drive Linux Sync Client
+Description=Drive for Linux core (unofficial Proton client)
 After=network-online.target graphical-session.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=${SCRIPT_DIR}/proton-drive-launcher.sh
-WorkingDirectory=${SCRIPT_DIR}
-Restart=always
-RestartSec=5s
-Environment=PROTON_MOUNT_POINT=${HOME}/P-Drive
-Environment=DISPLAY=${DISPLAY:-:0}
-Environment=WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+ExecStart=${BINARY}
+WorkingDirectory=${CURRENT_LINK}
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+KillMode=control-group
 Environment=PATH=${PATH}
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+SystemCallArchitectures=native
+LimitNOFILE=65536
+MemoryHigh=1G
+OOMPolicy=stop
 
 [Install]
 WantedBy=default.target
 EOF
+
+_install_credential_store_override
 
 # Install desktop autostart entry dynamically
 AUTOSTART_DIR="${HOME}/.config/autostart"
@@ -106,11 +266,23 @@ X-GNOME-Autostart-enabled=true
 EOF
 cp "${SCRIPT_DIR}/proton-drive-tray.desktop" "${AUTOSTART_DIR}/proton-drive-tray.desktop"
 
+# A previous drive.sh start runs outside the systemd service cgroup. Stop it
+# before enabling the managed service so both processes cannot contend for the
+# dashboard port or FUSE mount. The command is safe when nothing is running.
+"${SCRIPT_DIR}/drive.sh" stop
+
 systemctl --user daemon-reload
+systemctl --user disable --now "$LEGACY_SERVICE_NAME" 2>/dev/null || true
+if ! systemctl --user enable --now "$SERVICE_NAME"; then
+    echo "New service failed to start; attempting release rollback."
+    _rollback_release
+    systemctl --user restart "$SERVICE_NAME" 2>/dev/null || true
+    exit 1
+fi
 
 echo ""
 echo "============================================="
 echo "  Setup complete!"
-echo "  Start daemon manually with: ./drive.sh start"
-echo "  Dashboard will be at:      http://localhost:8085"
+echo "  Daemon service is enabled and running."
+echo "  Open the dashboard with:   ./drive.sh ui"
 echo "============================================="

@@ -4,8 +4,10 @@ import sys
 import time
 import threading
 import webbrowser
-import requests
+import json
+import socket
 import fcntl
+import subprocess
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -27,6 +29,23 @@ def ensure_single_instance():
 # Read environment variables
 PORT = int(os.environ.get("PROTON_SYNC_PORT", "8085"))
 STATUS_URL = f"http://localhost:{PORT}/api/status"
+RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", f"/tmp/drive-for-linux-{os.getuid()}")
+CONTROL_SOCKET = os.path.join(RUNTIME_DIR, "drive-for-linux", "control.sock")
+
+def control_command(command):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(2)
+        client.connect(CONTROL_SOCKET)
+        client.sendall((json.dumps({"command": command}) + "\n").encode("utf-8"))
+        chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b"\n" in chunk:
+                break
+        return json.loads(b"".join(chunks).decode("utf-8"))
 
 # Set up icon paths
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -121,19 +140,15 @@ class ProtonDriveTrayApp:
             email = ""
             mode = "full"
             try:
-                r = requests.get(STATUS_URL, timeout=2)
-                if r.status_code == 200:
-                    data = r.json()
-                    status = data.get("status", "unknown")
-                    email = data.get("email", "")
-                    mode = data.get("mode", "full")
-                else:
-                    status = "error"
+                response = control_command("status")
+                data = response.get("status", {}) if response.get("ok") else {}
+                status = data.get("status", "unknown")
+                mode = data.get("mode", "full")
             except Exception:
                 status = "offline"
 
             GLib.idle_add(self.update_ui, status, email, mode)
-            time.sleep(2)
+            self.stop_flag.wait(5)
 
     def update_ui(self, status, email, mode):
         self.current_status = status
@@ -145,10 +160,10 @@ class ProtonDriveTrayApp:
             icon_name = "tray-synced"
         elif status in ("syncing", "scanning", "uploading", "downloading"):
             icon_name = "tray-syncing"
-        elif status == "paused":
+        elif status in ("paused", "auth_required"):
             icon_name = "tray-paused"
         else:
-            # error, auth_required, offline, unknown
+            # error, offline, unknown
             icon_name = "tray-error"
 
         # Update icon path/name
@@ -175,37 +190,76 @@ class ProtonDriveTrayApp:
 
     # Context Menu Callbacks
     def open_dashboard(self, widget):
-        webbrowser.open(f"http://localhost:{PORT}")
+        try:
+            response = control_command("dashboard-url")
+            dashboard_url = response.get("url") if response.get("ok") else None
+            if not dashboard_url:
+                raise RuntimeError("dashboard URL unavailable")
+            webbrowser.open(dashboard_url)
+        except Exception as error:
+            print(f"Error opening authenticated dashboard: {error}", file=sys.stderr)
 
     def open_folder(self, widget):
-        self.async_post("/api/open-folder")
+        self.async_command("open-folder")
 
     def sync_now(self, widget):
-        self.async_post("/api/sync")
+        self.async_command("sync")
 
     def pause_sync(self, widget):
-        self.async_post("/api/pause")
+        self.async_command("pause")
 
     def resume_sync(self, widget):
-        self.async_post("/api/resume")
+        self.async_command("resume")
 
-    def async_post(self, endpoint):
+    def fetch_and_update_status(self):
+        try:
+            response = control_command("status")
+            data = response.get("status", {}) if response.get("ok") else {}
+            GLib.idle_add(
+                self.update_ui,
+                data.get("status", "unknown"),
+                "",
+                data.get("mode", "full"),
+            )
+        except Exception:
+            pass
+
+    def async_command(self, command):
         def worker():
             try:
-                requests.post(f"http://localhost:{PORT}{endpoint}", json={}, timeout=2)
+                control_command(command)
+                time.sleep(0.1)
+                self.fetch_and_update_status()
             except Exception as e:
-                print(f"Error calling {endpoint}: {e}", file=sys.stderr)
+                print(f"Error calling {command}: {e}", file=sys.stderr)
         threading.Thread(target=worker, daemon=True).start()
 
     def restart_service(self, widget):
         def worker():
-            os.system("systemctl --user restart proton-sync.service 2>/dev/null")
+            res = subprocess.run(
+                ["systemctl", "--user", "restart", "drive-core.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if res.returncode != 0:
+                script_dir = os.path.dirname(os.path.realpath(__file__))
+                subprocess.Popen(
+                    ["bash", os.path.join(script_dir, "drive.sh"), "restart"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
         threading.Thread(target=worker, daemon=True).start()
 
     def quit_app(self, widget):
         self.stop_flag.set()
-        os.system("systemctl --user stop proton-sync.service 2>/dev/null || true")
-        os.system("pkill -f proton-sync 2>/dev/null || true")
+        subprocess.run(
+            ["systemctl", "--user", "stop", "drive-core.service"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
         Gtk.main_quit()
 
 def main():
