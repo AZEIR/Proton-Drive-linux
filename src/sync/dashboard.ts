@@ -94,19 +94,27 @@ export function startDashboard(
                 : inferNetworkProfile(concurrencyLimit, wifiSafeMode));
         return { concurrencyLimit, maxSpeedKbps, wifiSafeMode, networkProfile };
     };
-    const allowedOrigins = new Set([
-        `http://127.0.0.1:${port}`,
-        `http://localhost:${port}`,
-    ]);
-    const validHosts = new Set([
-        `127.0.0.1:${port}`,
-        `localhost:${port}`,
-    ]);
+
+    const getBoundPort = () => (server as any)?.port ?? port;
 
     const server = serveFetch({
         port,
         hostname: "127.0.0.1",
         async fetch(req) {
+            const boundPort = getBoundPort();
+            const validHosts = new Set([
+                `127.0.0.1:${boundPort}`,
+                `localhost:${boundPort}`,
+                `127.0.0.1:${port}`,
+                `localhost:${port}`,
+            ]);
+            const allowedOrigins = new Set([
+                `http://127.0.0.1:${boundPort}`,
+                `http://localhost:${boundPort}`,
+                `http://127.0.0.1:${port}`,
+                `http://localhost:${port}`,
+            ]);
+
             const url = new URL(req.url);
             if (url.pathname.startsWith('/api/v1/') && url.pathname !== '/api/v1/session') {
                 url.pathname = `/api/${url.pathname.slice('/api/v1/'.length)}`;
@@ -910,10 +918,10 @@ export function startDashboard(
         },
     });
 
-    logger.info(`Dashboard server running at http://localhost:${port}`);
+    logger.info(`Dashboard server running at http://localhost:${getBoundPort()}`);
     return Object.assign(server, {
         getAuthenticatedUrl() {
-            return `http://localhost:${port}/?bootstrap=${dashboardToken}`;
+            return `http://localhost:${getBoundPort()}/?bootstrap=${dashboardToken}`;
         },
         updateContext(nextEngine: SyncEngine | null, nextSession: any, nextFod?: FodHooks) {
             engine = nextEngine;

@@ -10,17 +10,16 @@ describe("Dashboard API", () => {
     let mockFod: any;
     let sessionCookie = "";
     let csrfToken = "";
-    const PORT = 8089;
-    const BASE_URL = `http://localhost:${PORT}`;
+    let baseUrl = "";
 
     const apiFetch = (path: string, init: RequestInit = {}) => {
         const headers = new Headers(init.headers);
-        headers.set("Origin", BASE_URL);
+        headers.set("Origin", baseUrl);
         headers.set("Cookie", sessionCookie);
         if (!["GET", "HEAD", "OPTIONS"].includes(String(init.method || "GET").toUpperCase())) {
             headers.set("X-CSRF-Token", csrfToken);
         }
-        return fetch(`${BASE_URL}${path}`, { ...init, headers });
+        return fetch(`${baseUrl}${path}`, { ...init, headers });
     };
 
     const bootstrapDashboard = async (dashboardServer: any) => {
@@ -109,17 +108,18 @@ describe("Dashboard API", () => {
             })
         };
 
-        server = startDashboard(mockDb as any, mockEngine as any, mockSession as any, PORT);
+        server = startDashboard(mockDb as any, mockEngine as any, mockSession as any, 0);
+        baseUrl = `http://localhost:${server.port}`;
         sessionCookie = await bootstrapDashboard(server);
-        const sessionResponse = await fetch(`${BASE_URL}/api/v1/session`, {
-            headers: { Origin: BASE_URL, Cookie: sessionCookie },
+        const sessionResponse = await fetch(`${baseUrl}/api/v1/session`, {
+            headers: { Origin: baseUrl, Cookie: sessionCookie },
         });
         csrfToken = (await sessionResponse.json() as any).csrfToken;
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         if (server) {
-            server.stop(true);
+            await server.stop(true);
         }
     });
 
@@ -133,7 +133,7 @@ describe("Dashboard API", () => {
     });
 
     it("GET / should render the accessible browser UI without the disabled cache tab", async () => {
-        const res = await fetch(`${BASE_URL}/`, {
+        const res = await fetch(`${baseUrl}/`, {
             headers: { Cookie: sessionCookie },
         });
         expect(res.status).toBe(200);
@@ -162,16 +162,16 @@ describe("Dashboard API", () => {
         expect(html).not.toMatch(/\son(?:click|input|change|submit)=/);
         expect(html).not.toContain(' style="');
         expect(html).toContain('id="concurrencyRange" min="1" max="5"');
-        const script = await (await fetch(`${BASE_URL}/assets/dashboard.js`)).text();
+        const script = await (await fetch(`${baseUrl}/assets/dashboard.js`)).text();
         expect(script).toContain("installIconRenderer()");
         expect(script).toContain("ICON_SHAPES");
         expect(script).toContain("isPaused = Boolean(data.isPaused || data.status === 'paused')");
         expect(script).toContain("fetch('/api/set-speed-limit'");
         expect(script).not.toContain("toggleWifiSafeMode");
-        const stylesheet = await (await fetch(`${BASE_URL}/assets/dashboard.css`)).text();
+        const stylesheet = await (await fetch(`${baseUrl}/assets/dashboard.css`)).text();
         expect(stylesheet).toContain("width: 44px");
         expect(stylesheet).toContain("--accent-visible:");
-        const faviconResponse = await fetch(`${BASE_URL}/assets/favicon.svg`);
+        const faviconResponse = await fetch(`${baseUrl}/assets/favicon.svg`);
         expect(faviconResponse.status).toBe(200);
         expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
         expect(await faviconResponse.text()).toContain("<svg");
@@ -347,10 +347,10 @@ describe("Dashboard API", () => {
     });
 
     it("GET /api/status should handle null engine and session gracefully when offline", async () => {
-        const offlineServer = startDashboard(mockDb as any, null, null, 8090);
+        const offlineServer = startDashboard(mockDb as any, null, null, 0);
         try {
             const offlineCookie = await bootstrapDashboard(offlineServer);
-            const res = await fetch("http://localhost:8090/api/status", {
+            const res = await fetch(`http://localhost:${offlineServer.port}/api/status`, {
                 headers: { Cookie: offlineCookie },
             });
             expect(res.status).toBe(200);
@@ -359,14 +359,14 @@ describe("Dashboard API", () => {
             expect(data.email).toBe("Not Logged In");
 
             offlineServer.updateContext(mockEngine, mockSession);
-            const recoveredRes = await fetch("http://localhost:8090/api/status", {
+            const recoveredRes = await fetch(`http://localhost:${offlineServer.port}/api/status`, {
                 headers: { Cookie: offlineCookie },
             });
             const recoveredData: any = await recoveredRes.json();
             expect(recoveredData.status).toBe("synced");
             expect(recoveredData.email).toBe("test@example.com");
         } finally {
-            offlineServer.stop(true);
+            await offlineServer.stop(true);
         }
     });
 
@@ -375,7 +375,7 @@ describe("Dashboard API", () => {
             mockDb as any,
             null,
             null,
-            8091,
+            0,
             undefined,
             {
                 kind: "credentials",
@@ -384,7 +384,7 @@ describe("Dashboard API", () => {
         );
         try {
             const credentialCookie = await bootstrapDashboard(credentialServer);
-            const res = await fetch("http://localhost:8091/api/status", {
+            const res = await fetch(`http://localhost:${credentialServer.port}/api/status`, {
                 headers: { Cookie: credentialCookie },
             });
             const data: any = await res.json();
@@ -394,12 +394,12 @@ describe("Dashboard API", () => {
             expect(data.error).toBe("Credential service unavailable: keyring locked");
 
             credentialServer.updateStartupIssue(null);
-            const recoveredRes = await fetch("http://localhost:8091/api/status", {
+            const recoveredRes = await fetch(`http://localhost:${credentialServer.port}/api/status`, {
                 headers: { Cookie: credentialCookie },
             });
             expect((await recoveredRes.json() as any).status).toBe("offline");
         } finally {
-            credentialServer.stop(true);
+            await credentialServer.stop(true);
         }
     });
 
@@ -510,7 +510,7 @@ describe("Dashboard API", () => {
     });
 
     it("should reject cross-origin dashboard API requests", async () => {
-        const res = await fetch(`${BASE_URL}/api/pause`, {
+        const res = await fetch(`${baseUrl}/api/pause`, {
             method: "POST",
             headers: { Origin: "https://attacker.example" },
         });
@@ -519,18 +519,18 @@ describe("Dashboard API", () => {
     });
 
     it("should reject unauthenticated local API reads", async () => {
-        const res = await fetch(`${BASE_URL}/api/status`);
+        const res = await fetch(`${baseUrl}/api/status`);
         expect(res.status).toBe(403);
     });
 
     it("should not issue a browser session to an unauthenticated local process", async () => {
-        const res = await fetch(`${BASE_URL}/`, { redirect: "manual" });
+        const res = await fetch(`${baseUrl}/`, { redirect: "manual" });
         expect(res.status).toBe(401);
         expect(res.headers.get("set-cookie")).toBeNull();
     });
 
     it("should reject non-browser mutations without an Origin header", async () => {
-        const res = await fetch(`${BASE_URL}/api/pause`, {
+        const res = await fetch(`${baseUrl}/api/pause`, {
             method: "POST",
             headers: {
                 Cookie: sessionCookie,
@@ -542,10 +542,10 @@ describe("Dashboard API", () => {
     });
 
     it("should authorize same-origin API requests with cookie and CSRF token", async () => {
-        const res = await fetch(`${BASE_URL}/api/pause`, {
+        const res = await fetch(`${baseUrl}/api/pause`, {
             method: "POST",
             headers: {
-                Origin: BASE_URL,
+                Origin: baseUrl,
                 Cookie: sessionCookie,
                 "X-CSRF-Token": csrfToken,
             },

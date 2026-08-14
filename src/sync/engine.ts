@@ -168,6 +168,7 @@ export class SyncEngine extends EventEmitter {
   /** Ignore matcher — enforces built-in defaults and user .protonignore rules. */
   private ignoreMatcher!: IgnoreMatcher;
   private eventsProvider?: EventsProvider;
+  private clientUid: string = "";
 
   constructor(
     db: SyncDatabase,
@@ -175,6 +176,7 @@ export class SyncEngine extends EventEmitter {
     auth: any,
     logger: any,
     eventsProvider?: EventsProvider,
+    clientUid: string = "",
   ) {
     super();
     this.db = db;
@@ -182,6 +184,7 @@ export class SyncEngine extends EventEmitter {
     this.auth = auth;
     this.logger = logger;
     this.eventsProvider = eventsProvider;
+    this.clientUid = clientUid;
 
     const oldSyncPath = this.db.getConfig("local_sync_path", "");
     const oldMode = this.db.getConfig("sync_mode", "");
@@ -3295,15 +3298,54 @@ export class SyncEngine extends EventEmitter {
                     return await controller.completion();
                   };
 
+                  const uploadRevisionWithDraftRecovery = async (nodeUidToUpload: string) => {
+                    let recoveredDraft = false;
+                    while (true) {
+                      try {
+                        const uploader = await this.sdk.getFileRevisionUploader(
+                          nodeUidToUpload,
+                          metadata,
+                        );
+                        return await uploadFromSnapshot(uploader);
+                      } catch (err: any) {
+                        const draftRevisionUid = err?.details?.ConflictDraftRevisionID;
+                        const conflictClientUid = err?.details?.ConflictDraftClientUID;
+                        const isOwnDraft =
+                          typeof draftRevisionUid === "string" &&
+                          Boolean(this.clientUid) &&
+                          conflictClientUid === this.clientUid;
+                        if (
+                          !recoveredDraft &&
+                          isOwnDraft &&
+                          typeof (this.sdk as any).deleteRevision === "function"
+                        ) {
+                          recoveredDraft = true;
+                          this.logger.warn(
+                            `Removing stale local-client draft revision for ${relativePath} and retrying upload`,
+                          );
+                          try {
+                            await (this.sdk as any).deleteRevision(
+                              `${nodeUidToUpload}~${draftRevisionUid}`,
+                            );
+                          } catch (deleteError) {
+                            this.logger.error(
+                              `Failed to remove stale draft revision for ${relativePath}:`,
+                              deleteError,
+                            );
+                            throw err;
+                          }
+                          continue;
+                        }
+                        throw err;
+                      }
+                    }
+                  };
+
                   if (mapped) {
                     this.logger.info(
                       `Uploading file revision for ${relativePath} (${mapped.node_uid})`,
                     );
-                    const uploader = await this.sdk.getFileRevisionUploader(
-                      mapped.node_uid,
-                      metadata,
-                    );
-                    return await uploadFromSnapshot(uploader);
+                    return await uploadRevisionWithDraftRecovery(mapped.node_uid);
                   } else {
                     // Upload new file: ensure remote parent directory exists first
                     const parts = relativePath.split("/");
@@ -3332,12 +3374,7 @@ export class SyncEngine extends EventEmitter {
                       this.logger.warn(
                         `Remote name conflict for ${relativePath} (uid ${err.existingNodeUid}). Uploading as new revision.`,
                       );
-                      const revisionUploader =
-                        await this.sdk.getFileRevisionUploader(
-                          err.existingNodeUid,
-                          metadata,
-                        );
-                      return await uploadFromSnapshot(revisionUploader);
+                      return await uploadRevisionWithDraftRecovery(err.existingNodeUid);
                     }
                   }
                 },

@@ -72,14 +72,14 @@ export async function runSync(port: number = 8085) {
 
         if (requestedMode === 'fuse') {
             fuseEngine = new ProtonFuseEngine(db, session.sdk, session.auth, logger, undefined, session.clientUid);
-            engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+            engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider, session.clientUid);
             engine.setFodMetadataSync(async () => {
                 await fuseEngine!.scanRemoteTree();
                 const error = fuseEngine!.getLastError();
                 if (error) throw new Error(error);
             });
         } else {
-            engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+            engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider, session.clientUid);
             if (process.env.PROTON_SYNC_ONCE === 'true') {
                 if (!session.auth.isLoggedIn()) {
                     logger.error('User is not logged in! One-time sync requires authentication.');
@@ -181,7 +181,7 @@ export async function runSync(port: number = 8085) {
                         undefined,
                         session.clientUid,
                     );
-                    engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+                    engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider, session.clientUid);
                     engine.setFodMetadataSync(async () => {
                         await fuseEngine!.scanRemoteTree();
                         const error = fuseEngine!.getLastError();
@@ -197,7 +197,7 @@ export async function runSync(port: number = 8085) {
                         db.log('system', 'system', 'failed', 'Authentication required. Please open the dashboard to sign in.');
                     }
                 } else {
-                    engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider);
+                    engine = new SyncEngine(db, session.sdk, session.auth, logger, session.eventsProvider, session.clientUid);
                     server.updateContext(engine, session);
                     if (session.auth.isLoggedIn()) {
                         await engine.start().catch((err) => {

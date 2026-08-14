@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http';
 
 export interface FetchServer {
-    stop(force?: boolean): void;
+    stop(force?: boolean): Promise<void> | void;
+    port: number;
 }
 
 export function serveFetch(options: {
@@ -63,6 +64,7 @@ export function serveFetch(options: {
             }
             const reader = response.body.getReader();
             incoming.once('aborted', () => void reader.cancel());
+            outgoing.once('close', () => void reader.cancel());
             while (true) {
                 const { done, value } = await reader.read();
                 if (done || outgoing.destroyed) break;
@@ -80,10 +82,20 @@ export function serveFetch(options: {
     server.headersTimeout = 15_000;
     server.keepAliveTimeout = 5_000;
     server.listen(options.port, options.hostname ?? '127.0.0.1');
+
+    const address = server.address();
+    const actualPort = typeof address === 'object' && address ? address.port : options.port;
+
     return {
+        port: actualPort,
         stop(_force?: boolean) {
-            server.close();
             server.closeIdleConnections();
+            if (typeof server.closeAllConnections === 'function') {
+                server.closeAllConnections();
+            }
+            return new Promise<void>((resolve) => {
+                server.close(() => resolve());
+            });
         },
     };
 }
